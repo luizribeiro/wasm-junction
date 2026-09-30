@@ -492,3 +492,97 @@ impl Display for BuildError {
 }
 
 impl Error for BuildError {}
+
+#[cfg(test)]
+mod tests {
+    use std::future::Future;
+    use std::task::{Context, Poll, Waker};
+
+    use super::*;
+    use crate::Val;
+
+    const HOST: &str = "example:test/host@0.1.0";
+    const EXPORT: &str = "example:test/guest@0.1.0";
+
+    struct Marker(u32);
+    struct TestProvider;
+
+    impl Provider for TestProvider {
+        fn call<'a>(
+            &'a self,
+            cx: &'a CallContext,
+            _call: Call,
+        ) -> BoxFuture<'a, Result<Vals, Trap>> {
+            Box::pin(async move {
+                let marker = cx
+                    .extensions()
+                    .get::<Marker>()
+                    .ok_or_else(|| Trap::new("missing invocation data"))?;
+                Ok(vec![Val::U32(marker.0)])
+            })
+        }
+    }
+
+    struct TestCompiled;
+
+    impl CompiledComponent for TestCompiled {
+        fn call(
+            &self,
+            imports: Arc<dyn ImportDispatcher>,
+            context: InvocationContext,
+            component: String,
+            _interface: &'static str,
+            _function: &'static str,
+            args: Vals,
+        ) -> BoxFuture<'_, Result<Vals, Trap>> {
+            Box::pin(async move { imports.call(context, component, HOST, "read", args).await })
+        }
+    }
+
+    struct TestEngine;
+
+    impl Engine for TestEngine {
+        fn compile(
+            &self,
+            _bytes: Arc<[u8]>,
+        ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, Trap>> {
+            Box::pin(async { Ok(Arc::new(TestCompiled) as Arc<dyn CompiledComponent>) })
+        }
+    }
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let mut future = std::pin::pin!(future);
+        let mut context = Context::from_waker(Waker::noop());
+        loop {
+            if let Poll::Ready(output) = future.as_mut().poll(&mut context) {
+                return output;
+            }
+        }
+    }
+
+    #[test]
+    fn invocation_data_reaches_the_imported_provider() {
+        let app = App::builder()
+            .engine(TestEngine)
+            .provide(Provided::new(HOST, TestProvider))
+            .build()
+            .unwrap();
+        app.lock_components().insert(
+            String::from("guest"),
+            LoadedComponent {
+                exports: vec![String::from(EXPORT)],
+                compiled: Arc::new(TestCompiled),
+            },
+        );
+
+        let values = block_on(app.call_with_context(
+            "guest",
+            EXPORT,
+            "run",
+            Vec::new(),
+            InvocationContext::with(Marker(42)),
+        ))
+        .unwrap();
+        assert_eq!(values, [Val::U32(42)]);
+    }
+}

@@ -19,6 +19,24 @@ pub struct Extensions {
 }
 
 impl Extensions {
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(
+        dead_code,
+        reason = "the public attachment API is added with typed handles"
+    )]
+    pub(crate) fn insert<T: Any + Send + Sync>(&mut self, value: T) {
+        self.values.insert(TypeId::of::<T>(), Box::new(value));
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[allow(
+        dead_code,
+        reason = "the public attachment API is added with typed handles"
+    )]
+    pub(crate) fn insert<T: Any>(&mut self, value: T) {
+        self.values.insert(TypeId::of::<T>(), Box::new(value));
+    }
+
     /// Returns the attached value of type `T`, if that type is present.
     #[cfg(not(target_arch = "wasm32"))]
     #[must_use]
@@ -39,6 +57,28 @@ impl Extensions {
 pub struct InvocationContext(Arc<Extensions>);
 
 impl InvocationContext {
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(
+        dead_code,
+        reason = "the public attachment API is added with typed handles"
+    )]
+    pub(crate) fn with<T: Any + Send + Sync>(value: T) -> Self {
+        let mut extensions = Extensions::default();
+        extensions.insert(value);
+        Self(Arc::new(extensions))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[allow(
+        dead_code,
+        reason = "the public attachment API is added with typed handles"
+    )]
+    pub(crate) fn with<T: Any>(value: T) -> Self {
+        let mut extensions = Extensions::default();
+        extensions.insert(value);
+        Self(Arc::new(extensions))
+    }
+
     /// Returns data attached to this invocation.
     #[must_use]
     pub fn extensions(&self) -> &Extensions {
