@@ -8,3 +8,7 @@
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+
+mod values;
+
+pub use values::{TypeError, Val, Vals};
