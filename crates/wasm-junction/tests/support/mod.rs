@@ -6,9 +6,26 @@
 )]
 
 use wasm_junction::{Call, Caller, TypeError, TypedCall, Val, Vals};
+use wit_component::{ComponentEncoder, StringEncoding, dummy_module, embed_component_metadata};
+use wit_parser::{ManglingAndAbi, Resolve};
 
 /// The interface implemented by the handwritten notes fixtures.
 pub const NOTES: &str = "example:journal/notes@0.1.0";
+
+/// Builds a real component from inline WIT and a matching dummy core module.
+pub fn component_bytes(wit: &str, world_name: &str) -> Vec<u8> {
+    let mut resolve = Resolve::default();
+    let package = resolve.push_str("fixture.wit", wit).unwrap();
+    let world = resolve.select_world(&[package], Some(world_name)).unwrap();
+    let mut module = dummy_module(&resolve, world, ManglingAndAbi::Standard32);
+    embed_component_metadata(&mut module, &resolve, world, StringEncoding::UTF8).unwrap();
+    ComponentEncoder::default()
+        .module(&module)
+        .unwrap()
+        .validate(true)
+        .encode()
+        .unwrap()
+}
 
 /// Typed arguments for the notes `read` function.
 #[derive(Clone, Debug, PartialEq, Eq)]

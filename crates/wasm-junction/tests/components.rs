@@ -1,31 +1,19 @@
 //! Component inspection tests.
 
+mod support;
+
 use wasm_junction::{Component, ComponentError};
-use wit_component::{ComponentEncoder, StringEncoding, dummy_module, embed_component_metadata};
-use wit_parser::{ManglingAndAbi, Resolve};
 
 fn component_bytes() -> Vec<u8> {
-    let mut resolve = Resolve::default();
-    let package = resolve
-        .push_str(
-            "journal.wit",
-            r"
+    support::component_bytes(
+        r"
                 package example:journal@0.1.0;
                 interface notes { read: func(name: string) -> string; }
                 interface summaries { summarize: func(text: string) -> string; }
                 world plugin { import notes; export summaries; }
             ",
-        )
-        .unwrap();
-    let world = resolve.select_world(&[package], Some("plugin")).unwrap();
-    let mut module = dummy_module(&resolve, world, ManglingAndAbi::Standard32);
-    embed_component_metadata(&mut module, &resolve, world, StringEncoding::UTF8).unwrap();
-    ComponentEncoder::default()
-        .module(&module)
-        .unwrap()
-        .validate(true)
-        .encode()
-        .unwrap()
+        "plugin",
+    )
 }
 
 fn with_custom_section(mut bytes: Vec<u8>, name: &str, data: &[u8]) -> Vec<u8> {
