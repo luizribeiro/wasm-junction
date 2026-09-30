@@ -1,5 +1,7 @@
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{self, Display};
+use std::ops::Range;
 use std::sync::Arc;
 
 use wasmparser::{ComponentExternalKind, ComponentTypeRef, Encoding, Parser, Payload};
@@ -7,11 +9,11 @@ use wasmparser::{ComponentExternalKind, ComponentTypeRef, Encoding, Parser, Payl
 /// Component bytes and engine-independent interface metadata.
 #[derive(Clone, Debug)]
 pub struct Component {
-    #[allow(dead_code, reason = "engines compile retained bytes after loading")]
     bytes: Arc<[u8]>,
     name: Option<String>,
     imports: Vec<String>,
     exports: Vec<String>,
+    sections: HashMap<String, Range<usize>>,
 }
 
 impl Component {
@@ -22,12 +24,13 @@ impl Component {
     /// Returns [`ComponentError`] if the bytes are malformed or encode a core module.
     pub fn from_bytes(bytes: impl Into<Arc<[u8]>>) -> Result<Self, ComponentError> {
         let bytes = bytes.into();
-        let (imports, exports) = inspect(&bytes)?;
+        let metadata = inspect(&bytes)?;
         Ok(Self {
             bytes,
             name: None,
-            imports,
-            exports,
+            imports: metadata.imports,
+            exports: metadata.exports,
+            sections: metadata.sections,
         })
     }
 
@@ -55,11 +58,27 @@ impl Component {
     pub fn exports(&self) -> &[String] {
         &self.exports
     }
+
+    /// Returns the raw contents of the first custom section named `name`.
+    #[must_use]
+    pub fn section(&self, name: &str) -> Option<&[u8]> {
+        let range = self.sections.get(name)?;
+        self.bytes.get(range.clone())
+    }
 }
 
-fn inspect(bytes: &[u8]) -> Result<(Vec<String>, Vec<String>), ComponentError> {
-    let mut imports = Vec::new();
-    let mut exports = Vec::new();
+struct Metadata {
+    imports: Vec<String>,
+    exports: Vec<String>,
+    sections: HashMap<String, Range<usize>>,
+}
+
+fn inspect(bytes: &[u8]) -> Result<Metadata, ComponentError> {
+    let mut metadata = Metadata {
+        imports: Vec::new(),
+        exports: Vec::new(),
+        sections: HashMap::new(),
+    };
     let mut depth = 0_u32;
     let mut saw_header = false;
     for payload in Parser::new(0).parse_all(bytes) {
@@ -76,7 +95,7 @@ fn inspect(bytes: &[u8]) -> Result<(Vec<String>, Vec<String>), ComponentError> {
                 for import in reader {
                     let import = import.map_err(ComponentError::Parse)?;
                     if matches!(import.ty, ComponentTypeRef::Instance(_)) {
-                        imports.push(import.name.name.to_owned());
+                        metadata.imports.push(import.name.name.to_owned());
                     }
                 }
             }
@@ -84,14 +103,25 @@ fn inspect(bytes: &[u8]) -> Result<(Vec<String>, Vec<String>), ComponentError> {
                 for export in reader {
                     let export = export.map_err(ComponentError::Parse)?;
                     if export.kind == ComponentExternalKind::Instance {
-                        exports.push(export.name.name.to_owned());
+                        metadata.exports.push(export.name.name.to_owned());
                     }
                 }
+            }
+            Payload::CustomSection(section) if depth == 0 => {
+                let range = section.data_range();
+                let start =
+                    usize::try_from(range.start).map_err(|_| ComponentError::ComponentTooLarge)?;
+                let end =
+                    usize::try_from(range.end).map_err(|_| ComponentError::ComponentTooLarge)?;
+                metadata
+                    .sections
+                    .entry(section.name().to_owned())
+                    .or_insert(start..end);
             }
             _ => {}
         }
     }
-    Ok((imports, exports))
+    Ok(metadata)
 }
 
 /// A failure to inspect a [`Component`].
@@ -102,6 +132,8 @@ pub enum ComponentError {
     Parse(wasmparser::BinaryReaderError),
     /// The binary encodes a core WebAssembly module instead of a component.
     CoreModule,
+    /// A section offset cannot be represented on this target.
+    ComponentTooLarge,
 }
 
 impl Display for ComponentError {
@@ -111,6 +143,9 @@ impl Display for ComponentError {
             Self::CoreModule => {
                 formatter.write_str("expected a WebAssembly component, found a core module")
             }
+            Self::ComponentTooLarge => {
+                formatter.write_str("component is too large for this target")
+            }
         }
     }
 }
@@ -119,7 +154,7 @@ impl Error for ComponentError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Parse(error) => Some(error),
-            Self::CoreModule => None,
+            Self::CoreModule | Self::ComponentTooLarge => None,
         }
     }
 }

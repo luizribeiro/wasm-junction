@@ -28,15 +28,32 @@ fn component_bytes() -> Vec<u8> {
         .unwrap()
 }
 
+fn with_custom_section(mut bytes: Vec<u8>, name: &str, data: &[u8]) -> Vec<u8> {
+    let payload_len = 1 + name.len() + data.len();
+    assert!(payload_len < 128);
+    bytes.extend([
+        0,
+        u8::try_from(payload_len).unwrap(),
+        u8::try_from(name.len()).unwrap(),
+    ]);
+    bytes.extend(name.as_bytes());
+    bytes.extend(data);
+    bytes
+}
+
 #[test]
 fn bytes_expose_versioned_interfaces_without_an_engine() {
-    let component = Component::from_bytes(component_bytes())
-        .unwrap()
-        .named("summarizer");
+    let bytes = with_custom_section(component_bytes(), "journal:needs", b"notes");
+    let component = Component::from_bytes(bytes).unwrap().named("summarizer");
 
     assert_eq!(component.name(), Some("summarizer"));
     assert_eq!(component.imports(), ["example:journal/notes@0.1.0"]);
     assert_eq!(component.exports(), ["example:journal/summaries@0.1.0"]);
+    assert_eq!(
+        component.section("journal:needs"),
+        Some(b"notes".as_slice())
+    );
+    assert_eq!(component.section("missing"), None);
 }
 
 #[test]
