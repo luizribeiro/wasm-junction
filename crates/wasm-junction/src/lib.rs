@@ -16,5 +16,5 @@ mod values;
 
 pub use call::{Call, Caller, Trap, TypedCall};
 pub use context::{CallContext, Extensions};
-pub use provider::{BoxFuture, HostBound, MaybeSend};
+pub use provider::{BoxFuture, HostBound, MaybeSend, Provided, Provider};
 pub use values::{TypeError, Val, Vals};
