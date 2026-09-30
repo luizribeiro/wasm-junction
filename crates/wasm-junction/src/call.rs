@@ -23,8 +23,8 @@ impl Display for Caller {
 
 /// One engine-neutral interface invocation.
 ///
-/// Middleware uses the routing fields to identify a call and can inspect or replace [`Call::args`]
-/// when it does not know the generated binding for a function.
+/// Middleware uses the routing fields to identify a call and [`Call::view`] when it knows the
+/// generated binding for a function. Unknown middleware can inspect or replace [`Call::args`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Call {
     /// The host or component that initiated the call.
@@ -60,6 +60,30 @@ impl Call {
             function,
             args,
         }
+    }
+
+    /// Decodes this call as `T`, or returns `None` when it names another function.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TypeError`] when the call names `T` but its arguments have the wrong structure.
+    pub fn view<T: TypedCall>(&self) -> Result<Option<T>, TypeError> {
+        (self.interface == T::INTERFACE && self.function == T::FUNCTION)
+            .then(|| T::from_vals(&self.args))
+            .transpose()
+    }
+
+    /// Replaces this call's arguments with a typed view.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TypeError`] without changing the call when `T` names another function.
+    pub fn set_view<T: TypedCall>(&mut self, view: T) -> Result<(), TypeError> {
+        if self.interface != T::INTERFACE || self.function != T::FUNCTION {
+            return Err(TypeError::new("typed view does not match the call"));
+        }
+        self.args = view.into_vals();
+        Ok(())
     }
 }
 
