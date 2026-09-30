@@ -145,6 +145,47 @@ impl TryFrom<Val> for Format {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Permissions {
+    read: bool,
+    summarize: bool,
+}
+
+impl From<Permissions> for Val {
+    fn from(permissions: Permissions) -> Self {
+        let mut flags = Vec::new();
+        if permissions.read {
+            flags.push("read");
+        }
+        if permissions.summarize {
+            flags.push("summarize");
+        }
+        Self::Flags(flags)
+    }
+}
+
+impl TryFrom<Val> for Permissions {
+    type Error = TypeError;
+
+    fn try_from(value: Val) -> Result<Self, Self::Error> {
+        let Val::Flags(flags) = value else {
+            return Err(TypeError::new("expected permissions flags"));
+        };
+        let mut permissions = Self {
+            read: false,
+            summarize: false,
+        };
+        for flag in flags {
+            match flag {
+                "read" => permissions.read = true,
+                "summarize" => permissions.summarize = true,
+                flag => return Err(TypeError::new(format!("unknown flag `{flag}`"))),
+            }
+        }
+        Ok(permissions)
+    }
+}
+
 #[test]
 fn primitive_shapes_round_trip() {
     macro_rules! round_trip {
@@ -221,4 +262,54 @@ fn enum_and_variant_cases_are_checked() {
         })
         .is_err()
     );
+}
+
+#[test]
+fn flags_option_and_result_shapes_round_trip() {
+    for permissions in [
+        Permissions {
+            read: true,
+            summarize: true,
+        },
+        Permissions {
+            read: false,
+            summarize: false,
+        },
+    ] {
+        assert_eq!(
+            Permissions::try_from(Val::from(permissions)).unwrap(),
+            permissions
+        );
+    }
+
+    for option in [Some(String::from("draft")), None] {
+        let value = Val::Option(option.clone().map(|value| Box::new(value.into())));
+        let Val::Option(value) = value else {
+            unreachable!();
+        };
+        let decoded = value.map(|value| String::try_from(*value).unwrap());
+        assert_eq!(decoded, option);
+    }
+
+    let outcomes = [Ok(3_u32), Err(String::from("not found"))];
+    for outcome in outcomes {
+        let value = Val::Result(match outcome.clone() {
+            Ok(value) => Ok(Some(Box::new(value.into()))),
+            Err(error) => Err(Some(Box::new(error.into()))),
+        });
+        let Val::Result(value) = value else {
+            unreachable!();
+        };
+        let decoded = match value {
+            Ok(Some(value)) => Ok(u32::try_from(*value).unwrap()),
+            Err(Some(error)) => Err(String::try_from(*error).unwrap()),
+            _ => unreachable!(),
+        };
+        assert_eq!(decoded, outcome);
+    }
+}
+
+#[test]
+fn flag_names_are_checked() {
+    assert!(Permissions::try_from(Val::Flags(vec!["delete"])).is_err());
 }

@@ -49,6 +49,12 @@ pub enum Val {
     },
     /// A WIT `enum` case name.
     Enum(&'static str),
+    /// The active names in a WIT `flags` value.
+    Flags(Vec<&'static str>),
+    /// A WIT `option` payload.
+    Option(Option<Box<Self>>),
+    /// A WIT `result`, whose success and error payloads may each be absent.
+    Result(Result<Option<Box<Self>>, Option<Box<Self>>>),
 }
 
 /// A sequence of engine-neutral WIT values used for call arguments and results.
