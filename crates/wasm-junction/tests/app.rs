@@ -8,8 +8,9 @@ use support::{
     FakeEngine, NOTES, Read, UnusedProvider, block_on, component_bytes, component_bytes_from,
 };
 use wasm_junction::{
-    App, BoxFuture, Call, CallContext, Caller, Component, GetError, InterfaceHandle, LoadError,
-    Middleware, Next, Provided, Provider, Trap, TypedCall, Vals,
+    App, BoxFuture, Call, CallContext, Caller, CompiledComponent, Component, Engine, EngineError,
+    GetError, InterfaceHandle, LoadError, Middleware, Next, Provided, Provider, Trap, TypedCall,
+    Vals,
 };
 
 const CLOCK: &str = "example:journal/clock@0.1.0";
@@ -82,6 +83,17 @@ impl Provider for NotesProvider {
                 .ok_or_else(|| Trap::new("unknown notes function"))?;
             Ok(Read::output(format!("contents of {}", read.name)))
         })
+    }
+}
+
+struct FailingEngine;
+
+impl Engine for FailingEngine {
+    fn compile(
+        &self,
+        _bytes: Arc<[u8]>,
+    ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
+        Box::pin(async { Err(EngineError::new("invalid adapter")) })
     }
 }
 
@@ -213,4 +225,19 @@ fn type_only_imports_do_not_require_providers() {
 
     let app = App::builder().engine(FakeEngine).build().unwrap();
     block_on(app.load(component)).unwrap();
+}
+
+#[test]
+fn engine_compilation_errors_are_distinct_from_call_traps() {
+    let app = App::builder()
+        .engine(FailingEngine)
+        .provide(Provided::new(NOTES, UnusedProvider))
+        .provide(Provided::new(CLOCK, UnusedProvider))
+        .build()
+        .unwrap();
+
+    assert!(matches!(
+        block_on(app.load(component("broken"))),
+        Err(LoadError::Compile(error)) if error.to_string() == "invalid adapter"
+    ));
 }

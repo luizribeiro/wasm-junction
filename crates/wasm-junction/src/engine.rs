@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::{error::Error, fmt};
 
 use crate::{BoxFuture, HostBound, InvocationContext, Trap, Vals};
 
@@ -36,5 +37,28 @@ pub trait ImportDispatcher: HostBound {
 /// Engines live in separate crates so applications choose their runtime explicitly.
 pub trait Engine: HostBound {
     /// Compiles component bytes into a reusable execution plan.
-    fn compile(&self, bytes: Arc<[u8]>) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, Trap>>;
+    fn compile(
+        &self,
+        bytes: Arc<[u8]>,
+    ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>>;
 }
+
+/// A failure to compile component bytes for an engine.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EngineError(String);
+
+impl EngineError {
+    /// Creates a compilation error with an engine-provided diagnostic.
+    #[must_use]
+    pub fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+}
+
+impl fmt::Display for EngineError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl Error for EngineError {}

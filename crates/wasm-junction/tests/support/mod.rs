@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
 use wasm_junction::{
-    BoxFuture, Call, CallContext, Caller, CompiledComponent, Engine, ImportDispatcher,
+    BoxFuture, Call, CallContext, Caller, CompiledComponent, Engine, EngineError, ImportDispatcher,
     InvocationContext, Provider, Trap, TypeError, TypedCall, Val, Vals,
 };
 use wit_component::{ComponentEncoder, StringEncoding, dummy_module, embed_component_metadata};
@@ -60,7 +60,7 @@ impl Engine for FakeEngine {
     fn compile(
         &self,
         _bytes: Arc<[u8]>,
-    ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, Trap>> {
+    ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
         Box::pin(async { Ok(Arc::new(UnusedComponent) as Arc<dyn CompiledComponent>) })
     }
 }

@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use support::NOTES;
 use wasm_junction::{
-    App, BoxFuture, Call, CallContext, CompiledComponent, Engine, ImportDispatcher, Provided,
-    Provider, Trap, Vals,
+    App, BoxFuture, Call, CallContext, CompiledComponent, Engine, EngineError, ImportDispatcher,
+    Provided, Provider, Trap, Vals,
 };
 
 struct UnusedProvider;
@@ -24,8 +24,8 @@ impl Engine for FakeEngine {
     fn compile(
         &self,
         _bytes: Arc<[u8]>,
-    ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, Trap>> {
-        Box::pin(async { Err(Trap::new("unused engine")) })
+    ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
+        Box::pin(async { Err(EngineError::new("unused engine")) })
     }
 }
 

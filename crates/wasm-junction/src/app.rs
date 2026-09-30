@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::middleware::{CallTarget, ErasedMiddleware};
 use crate::{
-    BoxFuture, Call, CallContext, Caller, CompiledComponent, Component, Engine, Event,
+    BoxFuture, Call, CallContext, Caller, CompiledComponent, Component, Engine, EngineError, Event,
     ImportDispatcher, InvocationContext, Middleware, Provided, Provider, Trap, Vals,
 };
 
@@ -350,7 +350,7 @@ pub enum LoadError {
     /// One or more imported interfaces have no host provider.
     MissingImports(MissingImports),
     /// The selected engine could not compile the component.
-    Compile(Trap),
+    Compile(EngineError),
 }
 
 impl Display for LoadError {
@@ -481,6 +481,7 @@ impl AppBuilder {
 }
 
 /// A configuration error found while building an [`App`].
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BuildError {
     /// No engine was selected.
@@ -598,7 +599,7 @@ mod tests {
         fn compile(
             &self,
             _bytes: Arc<[u8]>,
-        ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, Trap>> {
+        ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
             Box::pin(async { Ok(Arc::new(TestCompiled) as Arc<dyn CompiledComponent>) })
         }
     }
