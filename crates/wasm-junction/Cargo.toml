@@ -12,7 +12,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-wasmparser = { version = "=0.259.0", default-features = false, features = ["component-model", "std"] }
+wasmparser = { version = "=0.259.0", default-features = false, features = ["component-model", "std", "validate"] }
 
 [dev-dependencies]
 wit-component = { version = "=0.259.0", default-features = false, features = ["dummy-module"] }

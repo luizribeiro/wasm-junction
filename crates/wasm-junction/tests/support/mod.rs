@@ -21,9 +21,17 @@ pub const NOTES: &str = "example:journal/notes@0.1.0";
 
 /// Builds a real component from inline WIT and a matching dummy core module.
 pub fn component_bytes(wit: &str, world_name: &str) -> Vec<u8> {
+    component_bytes_from(&[("fixture.wit", wit)], world_name)
+}
+
+/// Builds a component from multiple WIT packages.
+pub fn component_bytes_from(packages: &[(&str, &str)], world_name: &str) -> Vec<u8> {
     let mut resolve = Resolve::default();
-    let package = resolve.push_str("fixture.wit", wit).unwrap();
-    let world = resolve.select_world(&[package], Some(world_name)).unwrap();
+    let packages = packages
+        .iter()
+        .map(|(name, wit)| resolve.push_str(name, wit).unwrap())
+        .collect::<Vec<_>>();
+    let world = resolve.select_world(&packages, Some(world_name)).unwrap();
     let mut module = dummy_module(&resolve, world, ManglingAndAbi::Standard32);
     embed_component_metadata(&mut module, &resolve, world, StringEncoding::UTF8).unwrap();
     ComponentEncoder::default()

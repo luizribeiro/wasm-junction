@@ -5,7 +5,8 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use wasmparser::{ComponentExternalKind, ComponentTypeRef, Encoding, Parser, Payload};
+use wasmparser::component_types::{ComponentAnyTypeId, ComponentEntityType};
+use wasmparser::{ComponentExternalKind, ComponentTypeRef, Encoding, Parser, Payload, Validator};
 
 /// Component bytes and engine-independent interface metadata.
 #[derive(Clone, Debug)]
@@ -13,6 +14,7 @@ pub struct Component {
     bytes: Arc<[u8]>,
     name: Option<String>,
     imports: Vec<String>,
+    type_imports: Vec<String>,
     exports: Vec<String>,
     sections: HashMap<String, Range<usize>>,
 }
@@ -30,6 +32,7 @@ impl Component {
             bytes,
             name: None,
             imports: metadata.imports,
+            type_imports: metadata.type_imports,
             exports: metadata.exports,
             sections: metadata.sections,
         })
@@ -72,6 +75,12 @@ impl Component {
         &self.imports
     }
 
+    /// Returns imported interfaces that contain types but no routable functions.
+    #[must_use]
+    pub fn type_imports(&self) -> &[String] {
+        &self.type_imports
+    }
+
     /// Returns the versioned names of exported interfaces.
     #[must_use]
     pub fn exports(&self) -> &[String] {
@@ -91,13 +100,18 @@ impl Component {
 
 struct Metadata {
     imports: Vec<String>,
+    type_imports: Vec<String>,
     exports: Vec<String>,
     sections: HashMap<String, Range<usize>>,
 }
 
 fn inspect(bytes: &[u8]) -> Result<Metadata, ComponentError> {
+    let types = Validator::new()
+        .validate_all(bytes)
+        .map_err(ComponentError::Parse)?;
     let mut metadata = Metadata {
         imports: Vec::new(),
+        type_imports: Vec::new(),
         exports: Vec::new(),
         sections: HashMap::new(),
     };
@@ -116,8 +130,22 @@ fn inspect(bytes: &[u8]) -> Result<Metadata, ComponentError> {
             Payload::ComponentImportSection(reader) if depth == 0 => {
                 for import in reader {
                     let import = import.map_err(ComponentError::Parse)?;
-                    if matches!(import.ty, ComponentTypeRef::Instance(_)) {
-                        metadata.imports.push(import.name.name.to_owned());
+                    if let ComponentTypeRef::Instance(index) = import.ty {
+                        let ComponentAnyTypeId::Instance(id) =
+                            types.as_ref().component_any_type_at(index)
+                        else {
+                            continue;
+                        };
+                        let routable = types[id]
+                            .exports
+                            .values()
+                            .any(|item| matches!(item.ty, ComponentEntityType::Func(_)));
+                        let destination = if routable {
+                            &mut metadata.imports
+                        } else {
+                            &mut metadata.type_imports
+                        };
+                        destination.push(import.name.name.to_owned());
                     }
                 }
             }

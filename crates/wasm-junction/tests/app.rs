@@ -4,7 +4,9 @@ mod support;
 
 use std::sync::{Arc, Mutex};
 
-use support::{FakeEngine, NOTES, Read, UnusedProvider, block_on, component_bytes};
+use support::{
+    FakeEngine, NOTES, Read, UnusedProvider, block_on, component_bytes, component_bytes_from,
+};
 use wasm_junction::{
     App, BoxFuture, Call, CallContext, Caller, Component, GetError, InterfaceHandle, LoadError,
     Middleware, Next, Provided, Provider, Trap, TypedCall, Vals,
@@ -18,6 +20,18 @@ const PLUGIN_WIT: &str = r"
     interface clock { now: func() -> u64; }
     interface summaries { summarize: func(note: string) -> string; }
     world plugin { import notes; import clock; export summaries; }
+";
+const TYPES_WIT: &str = r"
+    package example:shared@0.1.0;
+    interface types { record note { text: string } }
+";
+const TYPES_PLUGIN_WIT: &str = r"
+    package example:typed@0.1.0;
+    interface summaries {
+        use example:shared/types@0.1.0.{note};
+        summarize: func(note: note) -> string;
+    }
+    world plugin { export summaries; }
 ";
 
 fn component(name: &str) -> Component {
@@ -167,4 +181,18 @@ fn export_and_guest_import_calls_share_the_middleware_dispatcher() {
         *callers.lock().unwrap(),
         [Caller::Component(String::from("summarizer"))]
     );
+}
+
+#[test]
+fn type_only_imports_do_not_require_providers() {
+    let bytes = component_bytes_from(
+        &[("types.wit", TYPES_WIT), ("plugin.wit", TYPES_PLUGIN_WIT)],
+        "example:typed/plugin@0.1.0",
+    );
+    let component = Component::from_bytes(bytes).unwrap().named("typed");
+    assert!(component.imports().is_empty());
+    assert_eq!(component.type_imports(), ["example:shared/types@0.1.0"]);
+
+    let app = App::builder().engine(FakeEngine).build().unwrap();
+    block_on(app.load(component)).unwrap();
 }
