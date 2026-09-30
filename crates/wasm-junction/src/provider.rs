@@ -83,6 +83,10 @@ impl Provided {
             provider: Arc::new(provider),
         }
     }
+
+    pub(crate) fn into_parts(self) -> (&'static str, Arc<dyn Provider>) {
+        (self.interface, self.provider)
+    }
 }
 
 impl std::fmt::Debug for Provided {
