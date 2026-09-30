@@ -20,10 +20,15 @@ pub(crate) struct AppInner {
 }
 
 struct LoadedComponent {
-    #[allow(dead_code, reason = "typed handles validate exports after loading")]
     exports: Vec<String>,
     #[allow(dead_code, reason = "export calls use the compiled component")]
     compiled: Arc<dyn CompiledComponent>,
+}
+
+impl LoadedComponent {
+    fn exports_interface(&self, interface: &str) -> bool {
+        self.exports.iter().any(|export| export == interface)
+    }
 }
 
 impl App {
@@ -67,6 +72,43 @@ impl App {
         }
         components.insert(name, LoadedComponent { exports, compiled });
         Ok(())
+    }
+
+    /// Returns a generated handle for one component interface.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GetError`] if the component is unknown or does not export the interface.
+    pub fn get<I: InterfaceHandle>(&self, name: &str) -> Result<I, GetError> {
+        let components = self.lock_components();
+        let component = components
+            .get(name)
+            .ok_or_else(|| GetError::UnknownComponent(name.to_owned()))?;
+        if !component.exports_interface(I::INTERFACE) {
+            return Err(GetError::MissingExport {
+                component: name.to_owned(),
+                interface: I::INTERFACE,
+            });
+        }
+        Ok(I::from_app(self.clone(), name.to_owned()))
+    }
+
+    /// Returns generated handles for every component exporting `I`.
+    #[must_use]
+    pub fn all<I: InterfaceHandle>(&self) -> Vec<(String, I)> {
+        self.lock_components()
+            .iter()
+            .filter(|(_, component)| component.exports_interface(I::INTERFACE))
+            .map(|(name, _)| (name.clone(), I::from_app(self.clone(), name.clone())))
+            .collect()
+    }
+
+    /// Reports whether a named component exports `I`.
+    #[must_use]
+    pub fn has<I: InterfaceHandle>(&self, name: &str) -> bool {
+        self.lock_components()
+            .get(name)
+            .is_some_and(|component| component.exports_interface(I::INTERFACE))
     }
 
     fn find_provider(&self, requested: &str) -> Option<Arc<dyn Provider>> {
@@ -150,6 +192,38 @@ impl Error for LoadError {
         }
     }
 }
+
+/// A failure to obtain a typed interface handle.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GetError {
+    /// No component is loaded under this name.
+    UnknownComponent(String),
+    /// The named component does not export the requested interface.
+    MissingExport {
+        /// The application component name.
+        component: String,
+        /// The requested interface.
+        interface: &'static str,
+    },
+}
+
+impl Display for GetError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownComponent(name) => write!(formatter, "component `{name}` is not loaded"),
+            Self::MissingExport {
+                component,
+                interface,
+            } => write!(
+                formatter,
+                "component `{component}` does not export `{interface}`"
+            ),
+        }
+    }
+}
+
+impl Error for GetError {}
 
 struct ProviderRegistration {
     provided: Provided,
