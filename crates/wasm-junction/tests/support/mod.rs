@@ -73,11 +73,14 @@ impl CompiledComponent for UnusedComponent {
         imports: Arc<dyn ImportDispatcher>,
         context: InvocationContext,
         component: Arc<str>,
-        _interface: Arc<str>,
+        interface: Arc<str>,
         function: Arc<str>,
         args: Vals,
     ) -> BoxFuture<'_, Result<Vals, Trap>> {
         Box::pin(async move {
+            if interface.as_ref() != "example:journal/summaries@0.1.0" {
+                return Err(Trap::new("engine received an unresolved export"));
+            }
             if function.as_ref() != "summarize" {
                 return Err(Trap::new("engine received the wrong function"));
             }

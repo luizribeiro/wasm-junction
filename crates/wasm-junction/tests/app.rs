@@ -13,7 +13,7 @@ use wasm_junction::{
 };
 
 const CLOCK: &str = "example:journal/clock@0.1.0";
-const SUMMARIES: &str = "example:journal/summaries@0.1.0";
+const SUMMARIES: &str = "example:journal/summaries@0.1.9";
 const PLUGIN_WIT: &str = r"
     package example:journal@0.1.0;
     interface notes { read: func(name: string) -> string; }
@@ -173,6 +173,10 @@ fn export_and_guest_import_calls_share_the_middleware_dispatcher() {
     let calls = trace.lock().unwrap();
     assert_eq!(calls.len(), 2);
     assert_eq!(calls[0].caller, Caller::Host);
+    assert_eq!(
+        calls[0].interface.as_ref(),
+        "example:journal/summaries@0.1.0"
+    );
     assert_eq!(calls[1].caller, Caller::Component(Arc::from("summarizer")));
     assert_eq!(
         *callers.lock().unwrap(),

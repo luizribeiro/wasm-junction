@@ -32,7 +32,7 @@ impl LoadedComponent {
     fn export_name(&self, interface: &str) -> Option<Arc<str>> {
         self.exports
             .iter()
-            .find(|export| export.as_ref() == interface)
+            .find(|export| interfaces_compatible(interface, export))
             .cloned()
     }
 
@@ -234,7 +234,8 @@ impl App {
     fn find_provider(&self, requested: &str) -> Option<(&'static str, Arc<dyn Provider>)> {
         self.0
             .providers
-            .get_key_value(requested)
+            .iter()
+            .find(|(provided, _)| interfaces_compatible(requested, provided))
             .map(|(interface, provider)| (*interface, provider.clone()))
     }
 
@@ -513,6 +514,34 @@ impl Display for BuildError {
 
 impl Error for BuildError {}
 
+fn interfaces_compatible(requested: &str, provided: &str) -> bool {
+    if requested == provided {
+        return true;
+    }
+    let (Some((requested_name, requested_version)), Some((provided_name, provided_version))) =
+        (requested.rsplit_once('@'), provided.rsplit_once('@'))
+    else {
+        return false;
+    };
+    if requested_name != provided_name {
+        return false;
+    }
+    let parse = |version: &str| {
+        let mut pieces = version.split('.');
+        let version = (
+            pieces.next()?.parse::<u64>().ok()?,
+            pieces.next()?.parse::<u64>().ok()?,
+            pieces.next()?.parse::<u64>().ok()?,
+        );
+        pieces.next().is_none().then_some(version)
+    };
+    let (Some(requested), Some(provided)) = (parse(requested_version), parse(provided_version))
+    else {
+        return false;
+    };
+    requested.0 == provided.0 && (requested.0 != 0 || requested.1 == provided.1)
+}
+
 #[cfg(test)]
 mod tests {
     use std::future::Future;
@@ -609,5 +638,15 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(values, [Val::U32(42)]);
+    }
+
+    #[test]
+    fn interface_compatibility_follows_semver_tracks() {
+        assert!(interfaces_compatible("a:b/c@1.2.3", "a:b/c@1.2.3"));
+        assert!(interfaces_compatible("a:b/c@1.2.3", "a:b/c@1.8.0"));
+        assert!(interfaces_compatible("a:b/c@1.8.0", "a:b/c@1.2.3"));
+        assert!(!interfaces_compatible("a:b/c@1.0.0", "a:b/c@2.0.0"));
+        assert!(!interfaces_compatible("a:b/c@0.4.0", "a:b/c@0.5.0"));
+        assert!(!interfaces_compatible("a:b/c@bad", "a:b/c@worse"));
     }
 }
