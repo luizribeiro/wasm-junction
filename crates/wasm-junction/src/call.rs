@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt::{self, Display};
 
-use crate::{TypeError, Vals};
+use crate::{TypeError, Val, Vals};
 
 /// The origin of an invocation.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -71,6 +71,37 @@ impl Display for Call {
             self.caller, self.callee, self.interface, self.function
         )
     }
+}
+
+/// The conversion contract implemented by each generated function view.
+pub trait TypedCall: Sized {
+    /// The function's typed return value.
+    type Output;
+
+    /// The fully qualified WIT interface name.
+    const INTERFACE: &'static str;
+    /// The WIT function name.
+    const FUNCTION: &'static str;
+
+    /// Decodes function arguments from engine-neutral values.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TypeError`] when the arguments have the wrong arity or structure.
+    fn from_vals(values: &[Val]) -> Result<Self, TypeError>;
+
+    /// Encodes this typed view as function arguments.
+    fn into_vals(self) -> Vals;
+
+    /// Encodes a typed function return value.
+    fn output(value: Self::Output) -> Vals;
+
+    /// Decodes a typed function return value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TypeError`] when the results have the wrong arity or structure.
+    fn decode_output(values: &[Val]) -> Result<Self::Output, TypeError>;
 }
 
 /// A failure that crosses a component call boundary.

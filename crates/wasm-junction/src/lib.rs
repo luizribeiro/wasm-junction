@@ -12,5 +12,5 @@
 mod call;
 mod values;
 
-pub use call::{Call, Caller, Trap};
+pub use call::{Call, Caller, Trap, TypedCall};
 pub use values::{TypeError, Val, Vals};
