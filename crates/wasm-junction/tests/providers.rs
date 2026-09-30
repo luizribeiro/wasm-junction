@@ -3,10 +3,8 @@
 mod support;
 
 use std::collections::HashMap;
-use std::future::Future;
-use std::task::{Context, Poll, Waker};
 
-use support::{NOTES, Read, read_call};
+use support::{NOTES, Read, block_on, read_call};
 use wasm_junction::{
     BoxFuture, Call, CallContext, Caller, Provided, Provider, Trap, TypedCall, Vals,
 };
@@ -36,17 +34,6 @@ impl Provider for NotesProvider {
 fn provider() -> NotesProvider {
     NotesProvider {
         notes: HashMap::from([(String::from("daily"), String::from("buy tea"))]),
-    }
-}
-
-fn block_on<F: Future>(future: F) -> F::Output {
-    let mut future = std::pin::pin!(future);
-    let mut context = Context::from_waker(Waker::noop());
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::hint::spin_loop(),
-        }
     }
 }
 

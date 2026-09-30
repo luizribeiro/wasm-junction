@@ -5,7 +5,14 @@
     reason = "each integration test uses a different subset of the shared bindings"
 )]
 
-use wasm_junction::{Call, Caller, TypeError, TypedCall, Val, Vals};
+use std::future::Future;
+use std::sync::Arc;
+use std::task::{Context, Poll, Waker};
+
+use wasm_junction::{
+    BoxFuture, Call, CallContext, Caller, CompiledComponent, Engine, ImportDispatcher, Provider,
+    Trap, TypeError, TypedCall, Val, Vals,
+};
 use wit_component::{ComponentEncoder, StringEncoding, dummy_module, embed_component_metadata};
 use wit_parser::{ManglingAndAbi, Resolve};
 
@@ -25,6 +32,53 @@ pub fn component_bytes(wit: &str, world_name: &str) -> Vec<u8> {
         .validate(true)
         .encode()
         .unwrap()
+}
+
+/// Drives a fixture future that does not depend on an executor.
+pub fn block_on<F: Future>(future: F) -> F::Output {
+    let mut future = std::pin::pin!(future);
+    let mut context = Context::from_waker(Waker::noop());
+    loop {
+        if let Poll::Ready(output) = future.as_mut().poll(&mut context) {
+            return output;
+        }
+    }
+}
+
+/// An engine that compiles to an export which is never called.
+pub struct FakeEngine;
+
+impl Engine for FakeEngine {
+    fn compile(
+        &self,
+        _bytes: Arc<[u8]>,
+    ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, Trap>> {
+        Box::pin(async { Ok(Arc::new(UnusedComponent) as Arc<dyn CompiledComponent>) })
+    }
+}
+
+struct UnusedComponent;
+
+impl CompiledComponent for UnusedComponent {
+    fn call(
+        &self,
+        _imports: Arc<dyn ImportDispatcher>,
+        _component: String,
+        _interface: &'static str,
+        _function: &'static str,
+        _args: Vals,
+    ) -> BoxFuture<'_, Result<Vals, Trap>> {
+        Box::pin(async { Err(Trap::new("unused export")) })
+    }
+}
+
+/// A provider used only to satisfy a component import.
+pub struct UnusedProvider;
+
+impl Provider for UnusedProvider {
+    fn call<'a>(&'a self, _cx: &'a CallContext, _call: Call) -> BoxFuture<'a, Result<Vals, Trap>> {
+        Box::pin(async { Err(Trap::new("unused provider")) })
+    }
 }
 
 /// Typed arguments for the notes `read` function.
