@@ -4,10 +4,10 @@ mod support;
 
 use std::sync::{Arc, Mutex};
 
-use support::{FakeEngine, NOTES, UnusedProvider, block_on, component_bytes};
+use support::{FakeEngine, NOTES, Read, UnusedProvider, block_on, component_bytes};
 use wasm_junction::{
-    App, Call, Component, GetError, InterfaceHandle, LoadError, Middleware, Next, Provided, Trap,
-    Vals,
+    App, BoxFuture, Call, CallContext, Caller, Component, GetError, InterfaceHandle, LoadError,
+    Middleware, Next, Provided, Provider, Trap, TypedCall, Vals,
 };
 
 const CLOCK: &str = "example:journal/clock@0.1.0";
@@ -54,6 +54,20 @@ impl Middleware for Trace {
     async fn call(&self, call: Call, next: Next) -> Result<Vals, Trap> {
         self.0.lock().unwrap().push(call.clone());
         next.run(call).await
+    }
+}
+
+struct NotesProvider(Arc<Mutex<Vec<Caller>>>);
+
+impl Provider for NotesProvider {
+    fn call<'a>(&'a self, cx: &'a CallContext, call: Call) -> BoxFuture<'a, Result<Vals, Trap>> {
+        Box::pin(async move {
+            self.0.lock().unwrap().push(cx.caller().clone());
+            let read = call
+                .view::<Read>()?
+                .ok_or_else(|| Trap::new("unknown notes function"))?;
+            Ok(Read::output(format!("contents of {}", read.name)))
+        })
     }
 }
 
@@ -125,11 +139,12 @@ fn typed_handle_queries_report_names_and_export_mismatches() {
 }
 
 #[test]
-fn export_calls_run_through_middleware() {
+fn export_and_guest_import_calls_share_the_middleware_dispatcher() {
     let trace = Arc::new(Mutex::new(Vec::new()));
+    let callers = Arc::new(Mutex::new(Vec::new()));
     let app = App::builder()
         .engine(FakeEngine)
-        .provide(Provided::new(NOTES, UnusedProvider))
+        .provide(Provided::new(NOTES, NotesProvider(callers.clone())))
         .provide(Provided::new(CLOCK, UnusedProvider))
         .middleware(Trace(trace.clone()))
         .build()
@@ -139,7 +154,17 @@ fn export_calls_run_through_middleware() {
     let summaries = app.get::<Summaries>("summarizer").unwrap();
     assert_eq!(
         block_on(summaries.summarize("daily")).unwrap(),
-        [wasm_junction::Val::from("daily")]
+        [wasm_junction::Val::from("contents of daily")]
     );
-    assert_eq!(trace.lock().unwrap().len(), 1);
+    let calls = trace.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].caller, Caller::Host);
+    assert_eq!(
+        calls[1].caller,
+        Caller::Component(String::from("summarizer"))
+    );
+    assert_eq!(
+        *callers.lock().unwrap(),
+        [Caller::Component(String::from("summarizer"))]
+    );
 }

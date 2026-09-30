@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::middleware::{CallTarget, ErasedMiddleware};
 use crate::{
-    BoxFuture, Call, Caller, CompiledComponent, Component, Engine, Event, ImportDispatcher,
-    Middleware, Provided, Provider, Trap, Vals,
+    BoxFuture, Call, CallContext, Caller, CompiledComponent, Component, Engine, Event,
+    ImportDispatcher, Middleware, Provided, Provider, Trap, Vals,
 };
 
 /// An application assembled from host providers, middleware, and WebAssembly components.
@@ -149,6 +149,29 @@ impl App {
         .await
     }
 
+    async fn call_import(
+        &self,
+        caller: String,
+        interface: &'static str,
+        function: &'static str,
+        args: Vals,
+    ) -> Result<Vals, Trap> {
+        let (provided_interface, provider) = self
+            .find_provider(interface)
+            .ok_or_else(|| Trap::new(format!("no provider for `{interface}`")))?;
+        self.dispatch(
+            Arc::new(HostTarget { provider }),
+            Call::new(
+                Caller::Component(caller),
+                "host",
+                provided_interface,
+                function,
+                args,
+            ),
+        )
+        .await
+    }
+
     async fn dispatch(&self, target: Arc<dyn CallTarget>, call: Call) -> Result<Vals, Trap> {
         self.emit(&Event::InvocationStart {
             component: call.callee.clone(),
@@ -168,8 +191,11 @@ impl App {
         }
     }
 
-    fn find_provider(&self, requested: &str) -> Option<Arc<dyn Provider>> {
-        self.0.providers.get(requested).cloned()
+    fn find_provider(&self, requested: &str) -> Option<(&'static str, Arc<dyn Provider>)> {
+        self.0
+            .providers
+            .get_key_value(requested)
+            .map(|(interface, provider)| (*interface, provider.clone()))
     }
 
     fn lock_components(&self) -> MutexGuard<'_, BTreeMap<String, LoadedComponent>> {
@@ -183,12 +209,26 @@ impl App {
 impl ImportDispatcher for App {
     fn call(
         &self,
-        _caller: String,
-        _interface: &'static str,
-        _function: &'static str,
-        _args: Vals,
+        caller: String,
+        interface: &'static str,
+        function: &'static str,
+        args: Vals,
     ) -> BoxFuture<'_, Result<Vals, Trap>> {
-        Box::pin(async { Err(Trap::new("guest imports are not available")) })
+        Box::pin(self.call_import(caller, interface, function, args))
+    }
+}
+
+struct HostTarget {
+    provider: Arc<dyn Provider>,
+}
+
+impl CallTarget for HostTarget {
+    fn call(&self, call: Call) -> BoxFuture<'static, Result<Vals, Trap>> {
+        let provider = self.provider.clone();
+        Box::pin(async move {
+            let context = CallContext::new(call.caller.clone());
+            provider.call(&context, call).await
+        })
     }
 }
 

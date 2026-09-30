@@ -62,13 +62,13 @@ struct UnusedComponent;
 impl CompiledComponent for UnusedComponent {
     fn call(
         &self,
-        _imports: Arc<dyn ImportDispatcher>,
-        _component: String,
+        imports: Arc<dyn ImportDispatcher>,
+        component: String,
         _interface: &'static str,
         _function: &'static str,
         args: Vals,
     ) -> BoxFuture<'_, Result<Vals, Trap>> {
-        Box::pin(async move { Ok(args) })
+        Box::pin(async move { imports.call(component, NOTES, "read", args).await })
     }
 }
 

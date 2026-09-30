@@ -40,13 +40,17 @@ pub struct CallContext {
 }
 
 impl CallContext {
+    pub(crate) fn new(caller: Caller) -> Self {
+        Self {
+            caller,
+            extensions: Extensions::default(),
+        }
+    }
+
     /// Creates an empty context for directly testing a provider as the named component.
     #[must_use]
     pub fn for_test(name: impl Into<String>) -> Self {
-        Self {
-            caller: Caller::Component(name.into()),
-            extensions: Extensions::default(),
-        }
+        Self::new(Caller::Component(name.into()))
     }
 
     /// Returns the host or named component that made the call.
