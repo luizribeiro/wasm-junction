@@ -4,8 +4,11 @@ use std::fmt::{self, Display};
 use std::panic::Location;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use crate::middleware::ErasedMiddleware;
-use crate::{CompiledComponent, Component, Engine, Middleware, Provided, Provider, Trap};
+use crate::middleware::{CallTarget, ErasedMiddleware};
+use crate::{
+    BoxFuture, Call, Caller, CompiledComponent, Component, Engine, Event, ImportDispatcher,
+    Middleware, Provided, Provider, Trap, Vals,
+};
 
 /// An application assembled from host providers, middleware, and WebAssembly components.
 #[derive(Clone)]
@@ -21,7 +24,6 @@ pub(crate) struct AppInner {
 
 struct LoadedComponent {
     exports: Vec<String>,
-    #[allow(dead_code, reason = "export calls use the compiled component")]
     compiled: Arc<dyn CompiledComponent>,
 }
 
@@ -111,6 +113,61 @@ impl App {
             .is_some_and(|component| component.exports_interface(I::INTERFACE))
     }
 
+    /// Calls an exported function through the application dispatcher.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Trap`] if the component or export is unavailable, middleware refuses the call,
+    /// or the engine reports a failure.
+    pub async fn call(
+        &self,
+        component: &str,
+        interface: &'static str,
+        function: &'static str,
+        args: Vals,
+    ) -> Result<Vals, Trap> {
+        let compiled = {
+            let components = self.lock_components();
+            let loaded = components
+                .get(component)
+                .ok_or_else(|| Trap::new(format!("component `{component}` is not loaded")))?;
+            if !loaded.exports_interface(interface) {
+                return Err(Trap::new(format!(
+                    "component `{component}` does not export `{interface}`"
+                )));
+            }
+            loaded.compiled.clone()
+        };
+        self.dispatch(
+            Arc::new(ComponentTarget {
+                compiled,
+                imports: Arc::new(self.clone()),
+                component: component.to_owned(),
+            }),
+            Call::new(Caller::Host, component, interface, function, args),
+        )
+        .await
+    }
+
+    async fn dispatch(&self, target: Arc<dyn CallTarget>, call: Call) -> Result<Vals, Trap> {
+        self.emit(&Event::InvocationStart {
+            component: call.callee.clone(),
+        });
+        let result = crate::Next::new(self.0.middleware.clone(), target)
+            .run(call.clone())
+            .await;
+        self.emit(&Event::InvocationEnd {
+            component: call.callee,
+        });
+        result
+    }
+
+    fn emit(&self, event: &Event) {
+        for middleware in self.0.middleware.iter() {
+            middleware.event(event);
+        }
+    }
+
     fn find_provider(&self, requested: &str) -> Option<Arc<dyn Provider>> {
         self.0.providers.get(requested).cloned()
     }
@@ -120,6 +177,37 @@ impl App {
             Ok(components) => components,
             Err(poisoned) => poisoned.into_inner(),
         }
+    }
+}
+
+impl ImportDispatcher for App {
+    fn call(
+        &self,
+        _caller: String,
+        _interface: &'static str,
+        _function: &'static str,
+        _args: Vals,
+    ) -> BoxFuture<'_, Result<Vals, Trap>> {
+        Box::pin(async { Err(Trap::new("guest imports are not available")) })
+    }
+}
+
+struct ComponentTarget {
+    compiled: Arc<dyn CompiledComponent>,
+    imports: Arc<dyn ImportDispatcher>,
+    component: String,
+}
+
+impl CallTarget for ComponentTarget {
+    fn call(&self, call: Call) -> BoxFuture<'static, Result<Vals, Trap>> {
+        let compiled = self.compiled.clone();
+        let imports = self.imports.clone();
+        let component = self.component.clone();
+        Box::pin(async move {
+            compiled
+                .call(imports, component, call.interface, call.function, call.args)
+                .await
+        })
     }
 }
 

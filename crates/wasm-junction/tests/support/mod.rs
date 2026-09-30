@@ -66,9 +66,9 @@ impl CompiledComponent for UnusedComponent {
         _component: String,
         _interface: &'static str,
         _function: &'static str,
-        _args: Vals,
+        args: Vals,
     ) -> BoxFuture<'_, Result<Vals, Trap>> {
-        Box::pin(async { Err(Trap::new("unused export")) })
+        Box::pin(async move { Ok(args) })
     }
 }
 

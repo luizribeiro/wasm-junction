@@ -30,7 +30,6 @@ pub trait Middleware: HostBound {
 
 pub(crate) trait ErasedMiddleware: HostBound {
     fn call(&self, call: Call, next: Next) -> BoxFuture<'_, Result<Vals, Trap>>;
-    #[allow(dead_code, reason = "the app dispatcher emits lifecycle events")]
     fn event(&self, event: &Event);
 }
 
@@ -59,7 +58,6 @@ pub struct Next {
 }
 
 impl Next {
-    #[allow(dead_code, reason = "the app dispatcher constructs middleware chains")]
     pub(crate) fn new(
         middleware: Arc<[Arc<dyn ErasedMiddleware>]>,
         target: Arc<dyn CallTarget>,

@@ -2,8 +2,13 @@
 
 mod support;
 
+use std::sync::{Arc, Mutex};
+
 use support::{FakeEngine, NOTES, UnusedProvider, block_on, component_bytes};
-use wasm_junction::{App, Component, GetError, InterfaceHandle, LoadError, Provided};
+use wasm_junction::{
+    App, Call, Component, GetError, InterfaceHandle, LoadError, Middleware, Next, Provided, Trap,
+    Vals,
+};
 
 const CLOCK: &str = "example:journal/clock@0.1.0";
 const SUMMARIES: &str = "example:journal/summaries@0.1.0";
@@ -21,13 +26,34 @@ fn component(name: &str) -> Component {
         .named(name)
 }
 
-struct Summaries;
+#[derive(Clone)]
+struct Summaries {
+    app: App,
+    component: String,
+}
 
 impl InterfaceHandle for Summaries {
     const INTERFACE: &'static str = SUMMARIES;
 
-    fn from_app(_app: App, _component: String) -> Self {
-        Self
+    fn from_app(app: App, component: String) -> Self {
+        Self { app, component }
+    }
+}
+
+impl Summaries {
+    async fn summarize(&self, note: &str) -> Result<Vals, Trap> {
+        self.app
+            .call(&self.component, SUMMARIES, "summarize", vec![note.into()])
+            .await
+    }
+}
+
+struct Trace(Arc<Mutex<Vec<Call>>>);
+
+impl Middleware for Trace {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, Trap> {
+        self.0.lock().unwrap().push(call.clone());
+        next.run(call).await
     }
 }
 
@@ -96,4 +122,24 @@ fn typed_handle_queries_report_names_and_export_mismatches() {
         Err(GetError::MissingExport { component, interface })
             if component == "work" && interface == NOTES
     ));
+}
+
+#[test]
+fn export_calls_run_through_middleware() {
+    let trace = Arc::new(Mutex::new(Vec::new()));
+    let app = App::builder()
+        .engine(FakeEngine)
+        .provide(Provided::new(NOTES, UnusedProvider))
+        .provide(Provided::new(CLOCK, UnusedProvider))
+        .middleware(Trace(trace.clone()))
+        .build()
+        .unwrap();
+    block_on(app.load(component("summarizer"))).unwrap();
+
+    let summaries = app.get::<Summaries>("summarizer").unwrap();
+    assert_eq!(
+        block_on(summaries.summarize("daily")).unwrap(),
+        [wasm_junction::Val::from("daily")]
+    );
+    assert_eq!(trace.lock().unwrap().len(), 1);
 }
