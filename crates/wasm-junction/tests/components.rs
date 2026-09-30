@@ -64,3 +64,19 @@ fn core_modules_and_malformed_bytes_are_rejected() {
     let malformed = Component::from_bytes(b"not wasm".as_slice()).unwrap_err();
     assert!(matches!(malformed, ComponentError::Parse(_)));
 }
+
+#[test]
+fn file_stem_supplies_the_default_component_name() {
+    let mut path = std::env::temp_dir();
+    path.push(format!(
+        "wasm-junction-notebook-{}.wasm",
+        std::process::id()
+    ));
+    std::fs::write(&path, component_bytes()).unwrap();
+
+    let component = Component::from_file(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+
+    assert_eq!(component.name(), path.file_stem().unwrap().to_str());
+    assert_eq!(component.exports(), ["example:journal/summaries@0.1.0"]);
+}

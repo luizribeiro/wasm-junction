@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{self, Display};
 use std::ops::Range;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use wasmparser::{ComponentExternalKind, ComponentTypeRef, Encoding, Parser, Payload};
@@ -32,6 +33,24 @@ impl Component {
             exports: metadata.exports,
             sections: metadata.sections,
         })
+    }
+
+    /// Reads and inspects a component from a file, using its file stem as the name.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ComponentError`] if the file cannot be read, has no file stem, or is not a
+    /// well-formed component.
+    pub fn from_file(path: impl AsRef<Path>) -> Result<Self, ComponentError> {
+        let path = path.as_ref();
+        let name = path
+            .file_stem()
+            .ok_or_else(|| ComponentError::MissingFileStem(path.to_owned()))?
+            .to_string_lossy()
+            .into_owned();
+        let mut component = Self::from_bytes(std::fs::read(path).map_err(ComponentError::Io)?)?;
+        component.name = Some(name);
+        Ok(component)
     }
 
     /// Replaces the application name used when this component is loaded.
@@ -128,23 +147,35 @@ fn inspect(bytes: &[u8]) -> Result<Metadata, ComponentError> {
 #[non_exhaustive]
 #[derive(Debug)]
 pub enum ComponentError {
+    /// The component file could not be read.
+    Io(std::io::Error),
     /// The binary is malformed.
     Parse(wasmparser::BinaryReaderError),
     /// The binary encodes a core WebAssembly module instead of a component.
     CoreModule,
     /// A section offset cannot be represented on this target.
     ComponentTooLarge,
+    /// A file path did not contain a usable file stem.
+    MissingFileStem(PathBuf),
 }
 
 impl Display for ComponentError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Io(error) => write!(formatter, "could not read component: {error}"),
             Self::Parse(error) => write!(formatter, "could not parse component: {error}"),
             Self::CoreModule => {
                 formatter.write_str("expected a WebAssembly component, found a core module")
             }
             Self::ComponentTooLarge => {
                 formatter.write_str("component is too large for this target")
+            }
+            Self::MissingFileStem(path) => {
+                write!(
+                    formatter,
+                    "component path `{}` has no file stem",
+                    path.display()
+                )
             }
         }
     }
@@ -153,8 +184,9 @@ impl Display for ComponentError {
 impl Error for ComponentError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::Io(error) => Some(error),
             Self::Parse(error) => Some(error),
-            Self::CoreModule | Self::ComponentTooLarge => None,
+            Self::CoreModule | Self::ComponentTooLarge | Self::MissingFileStem(_) => None,
         }
     }
 }
