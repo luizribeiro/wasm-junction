@@ -1,22 +1,29 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{self, Display};
 use std::panic::Location;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::middleware::ErasedMiddleware;
-use crate::{Engine, Middleware, Provided, Provider};
+use crate::{CompiledComponent, Component, Engine, Middleware, Provided, Provider, Trap};
 
 /// An application assembled from host providers, middleware, and WebAssembly components.
-pub struct App(#[allow(dead_code)] pub(crate) Arc<AppInner>);
+#[derive(Clone)]
+pub struct App(pub(crate) Arc<AppInner>);
 
 pub(crate) struct AppInner {
-    #[allow(dead_code)]
-    pub(crate) engine: Arc<dyn Engine>,
-    #[allow(dead_code)]
-    pub(crate) providers: HashMap<&'static str, Arc<dyn Provider>>,
-    #[allow(dead_code)]
-    pub(crate) middleware: Arc<[Arc<dyn ErasedMiddleware>]>,
+    engine: Arc<dyn Engine>,
+    providers: HashMap<&'static str, Arc<dyn Provider>>,
+    #[allow(dead_code, reason = "export dispatch runs the middleware chain")]
+    middleware: Arc<[Arc<dyn ErasedMiddleware>]>,
+    components: Mutex<BTreeMap<String, LoadedComponent>>,
+}
+
+struct LoadedComponent {
+    #[allow(dead_code, reason = "typed handles validate exports after loading")]
+    exports: Vec<String>,
+    #[allow(dead_code, reason = "export calls use the compiled component")]
+    compiled: Arc<dyn CompiledComponent>,
 }
 
 impl App {
@@ -24,6 +31,123 @@ impl App {
     #[must_use]
     pub fn builder() -> AppBuilder {
         AppBuilder::default()
+    }
+
+    /// Compiles and loads a named component.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LoadError`] if the component is unnamed, its name is already loaded, an import
+    /// is missing, or the engine cannot compile it.
+    pub async fn load(&self, component: Component) -> Result<(), LoadError> {
+        let (bytes, name, imports, exports) = component.into_parts();
+        let name = name.ok_or(LoadError::UnnamedComponent)?;
+        if self.lock_components().contains_key(&name) {
+            return Err(LoadError::DuplicateName(name));
+        }
+        let mut missing = imports
+            .iter()
+            .filter(|import| self.find_provider(import).is_none())
+            .cloned()
+            .collect::<Vec<_>>();
+        missing.sort();
+        missing.dedup();
+        if !missing.is_empty() {
+            return Err(LoadError::MissingImports(MissingImports::new(missing)));
+        }
+        let compiled = self
+            .0
+            .engine
+            .compile(bytes)
+            .await
+            .map_err(LoadError::Compile)?;
+        let mut components = self.lock_components();
+        if components.contains_key(&name) {
+            return Err(LoadError::DuplicateName(name));
+        }
+        components.insert(name, LoadedComponent { exports, compiled });
+        Ok(())
+    }
+
+    fn find_provider(&self, requested: &str) -> Option<Arc<dyn Provider>> {
+        self.0.providers.get(requested).cloned()
+    }
+
+    fn lock_components(&self) -> MutexGuard<'_, BTreeMap<String, LoadedComponent>> {
+        match self.0.components.lock() {
+            Ok(components) => components,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+}
+
+/// The construction contract implemented by each generated interface handle.
+pub trait InterfaceHandle: Sized {
+    /// The fully qualified WIT interface name.
+    const INTERFACE: &'static str;
+
+    /// Creates a handle that routes calls to `component` through `app`.
+    fn from_app(app: App, component: String) -> Self;
+}
+
+/// Missing host interfaces found while loading a component.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MissingImports {
+    interfaces: Vec<String>,
+}
+
+impl MissingImports {
+    fn new(interfaces: Vec<String>) -> Self {
+        Self { interfaces }
+    }
+
+    /// Returns the missing versioned interface names.
+    #[must_use]
+    pub fn interfaces(&self) -> &[String] {
+        &self.interfaces
+    }
+}
+
+impl Display for MissingImports {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "missing imports: {}", self.interfaces.join(", "))
+    }
+}
+
+impl Error for MissingImports {}
+
+/// A failure to load a component.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LoadError {
+    /// Components created from bytes must be named before loading.
+    UnnamedComponent,
+    /// Another component is already loaded under this name.
+    DuplicateName(String),
+    /// One or more imported interfaces have no host provider.
+    MissingImports(MissingImports),
+    /// The selected engine could not compile the component.
+    Compile(Trap),
+}
+
+impl Display for LoadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnnamedComponent => formatter.write_str("component has no application name"),
+            Self::DuplicateName(name) => write!(formatter, "component `{name}` is already loaded"),
+            Self::MissingImports(error) => Display::fmt(error, formatter),
+            Self::Compile(error) => write!(formatter, "component compilation failed: {error}"),
+        }
+    }
+}
+
+impl Error for LoadError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::MissingImports(error) => Some(error),
+            Self::Compile(error) => Some(error),
+            Self::UnnamedComponent | Self::DuplicateName(_) => None,
+        }
     }
 }
 
@@ -96,6 +220,7 @@ impl AppBuilder {
             engine,
             providers,
             middleware: self.middleware.into(),
+            components: Mutex::new(BTreeMap::new()),
         })))
     }
 }

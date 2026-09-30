@@ -84,6 +84,9 @@ impl Component {
         let range = self.sections.get(name)?;
         self.bytes.get(range.clone())
     }
+    pub(crate) fn into_parts(self) -> (Arc<[u8]>, Option<String>, Vec<String>, Vec<String>) {
+        (self.bytes, self.name, self.imports, self.exports)
+    }
 }
 
 struct Metadata {

@@ -18,7 +18,7 @@ mod middleware;
 mod provider;
 mod values;
 
-pub use app::{App, AppBuilder, BuildError};
+pub use app::{App, AppBuilder, BuildError, InterfaceHandle, LoadError, MissingImports};
 pub use call::{Call, Caller, Trap, TypedCall};
 pub use component::{Component, ComponentError};
 pub use context::{CallContext, Extensions};
