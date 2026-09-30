@@ -9,6 +9,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod call;
 mod values;
 
+pub use call::{Call, Caller, Trap};
 pub use values::{TypeError, Val, Vals};
