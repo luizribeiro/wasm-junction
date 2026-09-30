@@ -10,7 +10,9 @@
 #![warn(missing_docs)]
 
 mod call;
+mod context;
 mod values;
 
 pub use call::{Call, Caller, Trap, TypedCall};
+pub use context::{CallContext, Extensions};
 pub use values::{TypeError, Val, Vals};
