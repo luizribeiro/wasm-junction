@@ -10,12 +10,12 @@ pub enum Event {
     /// An invocation of the named component is beginning.
     InvocationStart {
         /// The application name of the invoked component.
-        component: String,
+        component: Arc<str>,
     },
     /// An invocation of the named component has ended.
     InvocationEnd {
         /// The application name of the invoked component.
-        component: String,
+        component: Arc<str>,
     },
 }
 

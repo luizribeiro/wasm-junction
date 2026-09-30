@@ -100,7 +100,10 @@ impl CallContext {
     /// Creates an empty context for directly testing a provider as the named component.
     #[must_use]
     pub fn for_test(name: impl Into<String>) -> Self {
-        Self::new(Caller::Component(name.into()), InvocationContext::default())
+        Self::new(
+            Caller::Component(Arc::from(name.into())),
+            InvocationContext::default(),
+        )
     }
 
     /// Returns the host or named component that made the call.

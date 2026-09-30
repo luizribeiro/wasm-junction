@@ -1,5 +1,7 @@
 //! Call context tests.
 
+use std::sync::Arc;
+
 use wasm_junction::{CallContext, Caller};
 
 #[test]
@@ -8,7 +10,7 @@ fn test_context_names_a_component_and_starts_empty() {
 
     assert_eq!(
         context.caller(),
-        &Caller::Component(String::from("summarizer"))
+        &Caller::Component(Arc::from("summarizer"))
     );
     assert!(context.extensions().get::<String>().is_none());
 }

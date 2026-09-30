@@ -72,12 +72,25 @@ impl CompiledComponent for UnusedComponent {
         &self,
         imports: Arc<dyn ImportDispatcher>,
         context: InvocationContext,
-        component: String,
-        _interface: &'static str,
-        _function: &'static str,
+        component: Arc<str>,
+        _interface: Arc<str>,
+        function: Arc<str>,
         args: Vals,
     ) -> BoxFuture<'_, Result<Vals, Trap>> {
-        Box::pin(async move { imports.call(context, component, NOTES, "read", args).await })
+        Box::pin(async move {
+            if function.as_ref() != "summarize" {
+                return Err(Trap::new("engine received the wrong function"));
+            }
+            imports
+                .call(
+                    context,
+                    component,
+                    Arc::from(NOTES),
+                    Arc::from("read"),
+                    args,
+                )
+                .await
+        })
     }
 }
 
@@ -166,7 +179,7 @@ impl TypedCall for Delete {
 /// Builds a notes `read` invocation from the summarizer component.
 pub fn read_call(name: &str) -> Call {
     Call::new(
-        Caller::Component(String::from("summarizer")),
+        Caller::Component(Arc::from("summarizer")),
         "notebook",
         NOTES,
         "read",

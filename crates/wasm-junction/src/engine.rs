@@ -11,9 +11,9 @@ pub trait CompiledComponent: HostBound {
         &self,
         imports: Arc<dyn ImportDispatcher>,
         context: InvocationContext,
-        component: String,
-        interface: &'static str,
-        function: &'static str,
+        component: Arc<str>,
+        interface: Arc<str>,
+        function: Arc<str>,
         args: Vals,
     ) -> BoxFuture<'_, Result<Vals, Trap>>;
 }
@@ -24,9 +24,9 @@ pub trait ImportDispatcher: HostBound {
     fn call(
         &self,
         context: InvocationContext,
-        caller: String,
-        interface: &'static str,
-        function: &'static str,
+        caller: Arc<str>,
+        interface: Arc<str>,
+        function: Arc<str>,
         args: Vals,
     ) -> BoxFuture<'_, Result<Vals, Trap>>;
 }

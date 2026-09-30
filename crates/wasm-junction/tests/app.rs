@@ -43,13 +43,13 @@ fn component(name: &str) -> Component {
 #[derive(Clone)]
 struct Summaries {
     app: App,
-    component: String,
+    component: Arc<str>,
 }
 
 impl InterfaceHandle for Summaries {
     const INTERFACE: &'static str = SUMMARIES;
 
-    fn from_app(app: App, component: String) -> Self {
+    fn from_app(app: App, component: Arc<str>) -> Self {
         Self { app, component }
     }
 }
@@ -90,7 +90,7 @@ struct Notes;
 impl InterfaceHandle for Notes {
     const INTERFACE: &'static str = NOTES;
 
-    fn from_app(_app: App, _component: String) -> Self {
+    fn from_app(_app: App, _component: Arc<str>) -> Self {
         Self
     }
 }
@@ -173,13 +173,27 @@ fn export_and_guest_import_calls_share_the_middleware_dispatcher() {
     let calls = trace.lock().unwrap();
     assert_eq!(calls.len(), 2);
     assert_eq!(calls[0].caller, Caller::Host);
-    assert_eq!(
-        calls[1].caller,
-        Caller::Component(String::from("summarizer"))
-    );
+    assert_eq!(calls[1].caller, Caller::Component(Arc::from("summarizer")));
     assert_eq!(
         *callers.lock().unwrap(),
-        [Caller::Component(String::from("summarizer"))]
+        [Caller::Component(Arc::from("summarizer"))]
+    );
+}
+
+#[test]
+fn raw_calls_accept_function_names_built_at_runtime() {
+    let app = App::builder()
+        .engine(FakeEngine)
+        .provide(Provided::new(NOTES, NotesProvider(Arc::default())))
+        .provide(Provided::new(CLOCK, UnusedProvider))
+        .build()
+        .unwrap();
+    block_on(app.load(component("summarizer"))).unwrap();
+
+    let function = String::from("summarize");
+    assert_eq!(
+        block_on(app.call("summarizer", SUMMARIES, function, vec!["daily".into()])).unwrap(),
+        [wasm_junction::Val::from("contents of daily")]
     );
 }
 

@@ -23,13 +23,21 @@ pub(crate) struct AppInner {
 }
 
 struct LoadedComponent {
-    exports: Vec<String>,
+    name: Arc<str>,
+    exports: Vec<Arc<str>>,
     compiled: Arc<dyn CompiledComponent>,
 }
 
 impl LoadedComponent {
+    fn export_name(&self, interface: &str) -> Option<Arc<str>> {
+        self.exports
+            .iter()
+            .find(|export| export.as_ref() == interface)
+            .cloned()
+    }
+
     fn exports_interface(&self, interface: &str) -> bool {
-        self.exports.iter().any(|export| export == interface)
+        self.export_name(interface).is_some()
     }
 }
 
@@ -72,7 +80,14 @@ impl App {
         if components.contains_key(&name) {
             return Err(LoadError::DuplicateName(name));
         }
-        components.insert(name, LoadedComponent { exports, compiled });
+        components.insert(
+            name.clone(),
+            LoadedComponent {
+                name: Arc::from(name),
+                exports: exports.into_iter().map(Arc::from).collect(),
+                compiled,
+            },
+        );
         Ok(())
     }
 
@@ -92,7 +107,7 @@ impl App {
                 interface: I::INTERFACE,
             });
         }
-        Ok(I::from_app(self.clone(), name.to_owned()))
+        Ok(I::from_app(self.clone(), component.name.clone()))
     }
 
     /// Returns generated handles for every component exporting `I`.
@@ -101,7 +116,12 @@ impl App {
         self.lock_components()
             .iter()
             .filter(|(_, component)| component.exports_interface(I::INTERFACE))
-            .map(|(name, _)| (name.clone(), I::from_app(self.clone(), name.clone())))
+            .map(|(name, component)| {
+                (
+                    name.clone(),
+                    I::from_app(self.clone(), component.name.clone()),
+                )
+            })
             .collect()
     }
 
@@ -122,14 +142,14 @@ impl App {
     pub async fn call(
         &self,
         component: &str,
-        interface: &'static str,
-        function: &'static str,
+        interface: &str,
+        function: impl Into<Arc<str>>,
         args: Vals,
     ) -> Result<Vals, Trap> {
         self.call_with_context(
             component,
             interface,
-            function,
+            function.into(),
             args,
             InvocationContext::default(),
         )
@@ -139,31 +159,31 @@ impl App {
     async fn call_with_context(
         &self,
         component: &str,
-        interface: &'static str,
-        function: &'static str,
+        interface: &str,
+        function: Arc<str>,
         args: Vals,
         context: InvocationContext,
     ) -> Result<Vals, Trap> {
-        let compiled = {
+        let (compiled, component_name, interface) = {
             let components = self.lock_components();
             let loaded = components
                 .get(component)
                 .ok_or_else(|| Trap::new(format!("component `{component}` is not loaded")))?;
-            if !loaded.exports_interface(interface) {
-                return Err(Trap::new(format!(
+            let resolved = loaded.export_name(interface).ok_or_else(|| {
+                Trap::new(format!(
                     "component `{component}` does not export `{interface}`"
-                )));
-            }
-            loaded.compiled.clone()
+                ))
+            })?;
+            (loaded.compiled.clone(), loaded.name.clone(), resolved)
         };
         self.dispatch(
             Arc::new(ComponentTarget {
                 compiled,
                 imports: Arc::new(self.clone()),
                 context,
-                component: component.to_owned(),
+                component: component_name.clone(),
             }),
-            Call::new(Caller::Host, component, interface, function, args),
+            Call::new(Caller::Host, component_name, interface, function, args),
         )
         .await
     }
@@ -171,13 +191,13 @@ impl App {
     async fn call_import(
         &self,
         context: InvocationContext,
-        caller: String,
-        interface: &'static str,
-        function: &'static str,
+        caller: Arc<str>,
+        interface: Arc<str>,
+        function: Arc<str>,
         args: Vals,
     ) -> Result<Vals, Trap> {
         let (provided_interface, provider) = self
-            .find_provider(interface)
+            .find_provider(&interface)
             .ok_or_else(|| Trap::new(format!("no provider for `{interface}`")))?;
         self.dispatch(
             Arc::new(HostTarget { provider, context }),
@@ -230,9 +250,9 @@ impl ImportDispatcher for App {
     fn call(
         &self,
         context: InvocationContext,
-        caller: String,
-        interface: &'static str,
-        function: &'static str,
+        caller: Arc<str>,
+        interface: Arc<str>,
+        function: Arc<str>,
         args: Vals,
     ) -> BoxFuture<'_, Result<Vals, Trap>> {
         Box::pin(self.call_import(context, caller, interface, function, args))
@@ -259,7 +279,7 @@ struct ComponentTarget {
     compiled: Arc<dyn CompiledComponent>,
     imports: Arc<dyn ImportDispatcher>,
     context: InvocationContext,
-    component: String,
+    component: Arc<str>,
 }
 
 impl CallTarget for ComponentTarget {
@@ -289,7 +309,7 @@ pub trait InterfaceHandle: Sized {
     const INTERFACE: &'static str;
 
     /// Creates a handle that routes calls to `component` through `app`.
-    fn from_app(app: App, component: String) -> Self;
+    fn from_app(app: App, component: Arc<str>) -> Self;
 }
 
 /// Missing host interfaces found while loading a component.
@@ -530,12 +550,16 @@ mod tests {
             &self,
             imports: Arc<dyn ImportDispatcher>,
             context: InvocationContext,
-            component: String,
-            _interface: &'static str,
-            _function: &'static str,
+            component: Arc<str>,
+            _interface: Arc<str>,
+            _function: Arc<str>,
             args: Vals,
         ) -> BoxFuture<'_, Result<Vals, Trap>> {
-            Box::pin(async move { imports.call(context, component, HOST, "read", args).await })
+            Box::pin(async move {
+                imports
+                    .call(context, component, Arc::from(HOST), Arc::from("read"), args)
+                    .await
+            })
         }
     }
 
@@ -570,7 +594,8 @@ mod tests {
         app.lock_components().insert(
             String::from("guest"),
             LoadedComponent {
-                exports: vec![String::from(EXPORT)],
+                name: Arc::from("guest"),
+                exports: vec![Arc::from(EXPORT)],
                 compiled: Arc::new(TestCompiled),
             },
         );
@@ -578,7 +603,7 @@ mod tests {
         let values = block_on(app.call_with_context(
             "guest",
             EXPORT,
-            "run",
+            Arc::from("run"),
             Vec::new(),
             InvocationContext::with(Marker(42)),
         ))

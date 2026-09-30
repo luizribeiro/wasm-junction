@@ -1,5 +1,6 @@
 use std::error::Error;
 use std::fmt::{self, Display};
+use std::sync::Arc;
 
 use crate::{TypeError, Val, Vals};
 
@@ -9,7 +10,7 @@ pub enum Caller {
     /// A call made directly by the host application.
     Host,
     /// A call made by a loaded component with the given application name.
-    Component(String),
+    Component(Arc<str>),
 }
 
 impl Display for Caller {
@@ -31,11 +32,11 @@ pub struct Call {
     /// The host or component that initiated the call.
     pub caller: Caller,
     /// The application name of the component receiving the call.
-    pub callee: String,
+    pub callee: Arc<str>,
     /// The fully qualified WIT interface name.
-    pub interface: &'static str,
+    pub interface: Arc<str>,
     /// The WIT function name.
-    pub function: &'static str,
+    pub function: Arc<str>,
     /// The function arguments in declaration order.
     pub args: Vals,
 }
@@ -49,16 +50,16 @@ impl Call {
     )]
     pub fn new(
         caller: Caller,
-        callee: impl Into<String>,
-        interface: &'static str,
-        function: &'static str,
+        callee: impl Into<Arc<str>>,
+        interface: impl Into<Arc<str>>,
+        function: impl Into<Arc<str>>,
         args: Vals,
     ) -> Self {
         Self {
             caller,
             callee: callee.into(),
-            interface,
-            function,
+            interface: interface.into(),
+            function: function.into(),
             args,
         }
     }
@@ -69,7 +70,7 @@ impl Call {
     ///
     /// Returns [`TypeError`] when the call names `T` but its arguments have the wrong structure.
     pub fn view<T: TypedCall>(&self) -> Result<Option<T>, TypeError> {
-        (self.interface == T::INTERFACE && self.function == T::FUNCTION)
+        (self.interface.as_ref() == T::INTERFACE && self.function.as_ref() == T::FUNCTION)
             .then(|| T::from_vals(&self.args))
             .transpose()
     }
@@ -80,7 +81,7 @@ impl Call {
     ///
     /// Returns [`TypeError`] without changing the call when `T` names another function.
     pub fn set_view<T: TypedCall>(&mut self, view: T) -> Result<(), TypeError> {
-        if self.interface != T::INTERFACE || self.function != T::FUNCTION {
+        if self.interface.as_ref() != T::INTERFACE || self.function.as_ref() != T::FUNCTION {
             return Err(TypeError::new("typed view does not match the call"));
         }
         self.args = view.into_vals();

@@ -3,6 +3,7 @@
 mod support;
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use support::{NOTES, Read, block_on, read_call};
 use wasm_junction::{
@@ -16,7 +17,7 @@ struct NotesProvider {
 impl Provider for NotesProvider {
     fn call<'a>(&'a self, cx: &'a CallContext, call: Call) -> BoxFuture<'a, Result<Vals, Trap>> {
         Box::pin(async move {
-            if cx.caller() != &Caller::Component(String::from("summarizer")) {
+            if cx.caller() != &Caller::Component(Arc::from("summarizer")) {
                 return Err(Trap::new("caller may not read notes"));
             }
             let read = call
