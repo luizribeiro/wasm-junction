@@ -34,6 +34,12 @@ pub enum Val {
     Char(char),
     /// A WIT `string`.
     String(String),
+    /// A WIT `list`, in element order.
+    List(Vec<Self>),
+    /// A WIT `tuple`, in element order.
+    Tuple(Vec<Self>),
+    /// A WIT `record`, in field declaration order.
+    Record(Vec<(&'static str, Self)>),
 }
 
 /// A sequence of engine-neutral WIT values used for call arguments and results.
