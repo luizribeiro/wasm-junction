@@ -68,6 +68,83 @@ fn pair_from_val(value: Val) -> Result<(u32, String), TypeError> {
     Ok((number.try_into()?, text.try_into()?))
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Selection {
+    Text(String),
+    Line(u32),
+    All,
+}
+
+impl From<Selection> for Val {
+    fn from(selection: Selection) -> Self {
+        match selection {
+            Selection::Text(text) => Self::Variant {
+                case: "text",
+                value: Some(Box::new(text.into())),
+            },
+            Selection::Line(line) => Self::Variant {
+                case: "line",
+                value: Some(Box::new(line.into())),
+            },
+            Selection::All => Self::Variant {
+                case: "all",
+                value: None,
+            },
+        }
+    }
+}
+
+impl TryFrom<Val> for Selection {
+    type Error = TypeError;
+
+    fn try_from(value: Val) -> Result<Self, Self::Error> {
+        match value {
+            Val::Variant {
+                case: "text",
+                value: Some(value),
+            } => Ok(Self::Text((*value).try_into()?)),
+            Val::Variant {
+                case: "line",
+                value: Some(value),
+            } => Ok(Self::Line((*value).try_into()?)),
+            Val::Variant {
+                case: "all",
+                value: None,
+            } => Ok(Self::All),
+            Val::Variant { case, .. } => Err(TypeError::new(format!("unknown case `{case}`"))),
+            _ => Err(TypeError::new("expected selection variant")),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Format {
+    Plain,
+    Markdown,
+}
+
+impl From<Format> for Val {
+    fn from(format: Format) -> Self {
+        Self::Enum(match format {
+            Format::Plain => "plain",
+            Format::Markdown => "markdown",
+        })
+    }
+}
+
+impl TryFrom<Val> for Format {
+    type Error = TypeError;
+
+    fn try_from(value: Val) -> Result<Self, Self::Error> {
+        match value {
+            Val::Enum("plain") => Ok(Self::Plain),
+            Val::Enum("markdown") => Ok(Self::Markdown),
+            Val::Enum(case) => Err(TypeError::new(format!("unknown case `{case}`"))),
+            _ => Err(TypeError::new("expected format enum")),
+        }
+    }
+}
+
 #[test]
 fn primitive_shapes_round_trip() {
     macro_rules! round_trip {
@@ -115,4 +192,33 @@ fn record_fields_and_tuple_arity_are_checked() {
     assert!(pair_from_val(Val::Tuple(vec![1_u32.into()])).is_err());
     assert!(Note::try_from(Val::Record(vec![("subject", "news".into())])).is_err());
     assert!(Note::try_from(Val::Record(vec![("title", "News".into())])).is_err());
+}
+
+#[test]
+fn every_variant_and_enum_case_round_trips() {
+    for selection in [
+        Selection::Text(String::from("summary")),
+        Selection::Line(4),
+        Selection::All,
+    ] {
+        assert_eq!(
+            Selection::try_from(Val::from(selection.clone())).unwrap(),
+            selection
+        );
+    }
+    for format in [Format::Plain, Format::Markdown] {
+        assert_eq!(Format::try_from(Val::from(format)).unwrap(), format);
+    }
+}
+
+#[test]
+fn enum_and_variant_cases_are_checked() {
+    assert!(Format::try_from(Val::Enum("html")).is_err());
+    assert!(
+        Selection::try_from(Val::Variant {
+            case: "range",
+            value: None
+        })
+        .is_err()
+    );
 }
