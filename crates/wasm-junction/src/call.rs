@@ -26,6 +26,7 @@ impl Display for Caller {
 /// Middleware uses the routing fields to identify a call and [`Call::view`] when it knows the
 /// generated binding for a function. Unknown middleware can inspect or replace [`Call::args`].
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Call {
     /// The host or component that initiated the call.
     pub caller: Caller,

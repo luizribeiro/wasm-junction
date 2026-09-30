@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use crate::middleware::{CallTarget, ErasedMiddleware};
 use crate::{
     BoxFuture, Call, CallContext, Caller, CompiledComponent, Component, Engine, Event,
-    ImportDispatcher, Middleware, Provided, Provider, Trap, Vals,
+    ImportDispatcher, InvocationContext, Middleware, Provided, Provider, Trap, Vals,
 };
 
 /// An application assembled from host providers, middleware, and WebAssembly components.
@@ -126,6 +126,24 @@ impl App {
         function: &'static str,
         args: Vals,
     ) -> Result<Vals, Trap> {
+        self.call_with_context(
+            component,
+            interface,
+            function,
+            args,
+            InvocationContext::default(),
+        )
+        .await
+    }
+
+    async fn call_with_context(
+        &self,
+        component: &str,
+        interface: &'static str,
+        function: &'static str,
+        args: Vals,
+        context: InvocationContext,
+    ) -> Result<Vals, Trap> {
         let compiled = {
             let components = self.lock_components();
             let loaded = components
@@ -142,6 +160,7 @@ impl App {
             Arc::new(ComponentTarget {
                 compiled,
                 imports: Arc::new(self.clone()),
+                context,
                 component: component.to_owned(),
             }),
             Call::new(Caller::Host, component, interface, function, args),
@@ -151,6 +170,7 @@ impl App {
 
     async fn call_import(
         &self,
+        context: InvocationContext,
         caller: String,
         interface: &'static str,
         function: &'static str,
@@ -160,7 +180,7 @@ impl App {
             .find_provider(interface)
             .ok_or_else(|| Trap::new(format!("no provider for `{interface}`")))?;
         self.dispatch(
-            Arc::new(HostTarget { provider }),
+            Arc::new(HostTarget { provider, context }),
             Call::new(
                 Caller::Component(caller),
                 "host",
@@ -209,24 +229,27 @@ impl App {
 impl ImportDispatcher for App {
     fn call(
         &self,
+        context: InvocationContext,
         caller: String,
         interface: &'static str,
         function: &'static str,
         args: Vals,
     ) -> BoxFuture<'_, Result<Vals, Trap>> {
-        Box::pin(self.call_import(caller, interface, function, args))
+        Box::pin(self.call_import(context, caller, interface, function, args))
     }
 }
 
 struct HostTarget {
     provider: Arc<dyn Provider>,
+    context: InvocationContext,
 }
 
 impl CallTarget for HostTarget {
     fn call(&self, call: Call) -> BoxFuture<'static, Result<Vals, Trap>> {
         let provider = self.provider.clone();
+        let invocation = self.context.clone();
         Box::pin(async move {
-            let context = CallContext::new(call.caller.clone());
+            let context = CallContext::new(call.caller.clone(), invocation);
             provider.call(&context, call).await
         })
     }
@@ -235,6 +258,7 @@ impl CallTarget for HostTarget {
 struct ComponentTarget {
     compiled: Arc<dyn CompiledComponent>,
     imports: Arc<dyn ImportDispatcher>,
+    context: InvocationContext,
     component: String,
 }
 
@@ -242,10 +266,18 @@ impl CallTarget for ComponentTarget {
     fn call(&self, call: Call) -> BoxFuture<'static, Result<Vals, Trap>> {
         let compiled = self.compiled.clone();
         let imports = self.imports.clone();
+        let context = self.context.clone();
         let component = self.component.clone();
         Box::pin(async move {
             compiled
-                .call(imports, component, call.interface, call.function, call.args)
+                .call(
+                    imports,
+                    context,
+                    component,
+                    call.interface,
+                    call.function,
+                    call.args,
+                )
                 .await
         })
     }

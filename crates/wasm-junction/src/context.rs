@@ -1,5 +1,6 @@
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::Caller;
 
@@ -33,24 +34,33 @@ impl Extensions {
     }
 }
 
+/// Per-invocation data carried through an engine and its imported calls.
+#[derive(Clone, Default)]
+pub struct InvocationContext(Arc<Extensions>);
+
+impl InvocationContext {
+    /// Returns data attached to this invocation.
+    #[must_use]
+    pub fn extensions(&self) -> &Extensions {
+        &self.0
+    }
+}
+
 /// Information propagated through a call to a host provider.
 pub struct CallContext {
     caller: Caller,
-    extensions: Extensions,
+    invocation: InvocationContext,
 }
 
 impl CallContext {
-    pub(crate) fn new(caller: Caller) -> Self {
-        Self {
-            caller,
-            extensions: Extensions::default(),
-        }
+    pub(crate) fn new(caller: Caller, invocation: InvocationContext) -> Self {
+        Self { caller, invocation }
     }
 
     /// Creates an empty context for directly testing a provider as the named component.
     #[must_use]
     pub fn for_test(name: impl Into<String>) -> Self {
-        Self::new(Caller::Component(name.into()))
+        Self::new(Caller::Component(name.into()), InvocationContext::default())
     }
 
     /// Returns the host or named component that made the call.
@@ -61,7 +71,7 @@ impl CallContext {
 
     /// Returns the values attached to this call.
     #[must_use]
-    pub const fn extensions(&self) -> &Extensions {
-        &self.extensions
+    pub fn extensions(&self) -> &Extensions {
+        self.invocation.extensions()
     }
 }

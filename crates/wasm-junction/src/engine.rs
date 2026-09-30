@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{BoxFuture, HostBound, Trap, Vals};
+use crate::{BoxFuture, HostBound, InvocationContext, Trap, Vals};
 
 /// A compiled component whose exports can be invoked by an [`crate::App`].
 ///
@@ -10,6 +10,7 @@ pub trait CompiledComponent: HostBound {
     fn call(
         &self,
         imports: Arc<dyn ImportDispatcher>,
+        context: InvocationContext,
         component: String,
         interface: &'static str,
         function: &'static str,
@@ -22,6 +23,7 @@ pub trait ImportDispatcher: HostBound {
     /// Invokes one imported function on behalf of `caller`.
     fn call(
         &self,
+        context: InvocationContext,
         caller: String,
         interface: &'static str,
         function: &'static str,

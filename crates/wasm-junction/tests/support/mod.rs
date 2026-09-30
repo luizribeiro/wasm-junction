@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
 use wasm_junction::{
-    BoxFuture, Call, CallContext, Caller, CompiledComponent, Engine, ImportDispatcher, Provider,
-    Trap, TypeError, TypedCall, Val, Vals,
+    BoxFuture, Call, CallContext, Caller, CompiledComponent, Engine, ImportDispatcher,
+    InvocationContext, Provider, Trap, TypeError, TypedCall, Val, Vals,
 };
 use wit_component::{ComponentEncoder, StringEncoding, dummy_module, embed_component_metadata};
 use wit_parser::{ManglingAndAbi, Resolve};
@@ -71,12 +71,13 @@ impl CompiledComponent for UnusedComponent {
     fn call(
         &self,
         imports: Arc<dyn ImportDispatcher>,
+        context: InvocationContext,
         component: String,
         _interface: &'static str,
         _function: &'static str,
         args: Vals,
     ) -> BoxFuture<'_, Result<Vals, Trap>> {
-        Box::pin(async move { imports.call(component, NOTES, "read", args).await })
+        Box::pin(async move { imports.call(context, component, NOTES, "read", args).await })
     }
 }
 
