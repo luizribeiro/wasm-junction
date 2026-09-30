@@ -10,3 +10,10 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+wasmparser = { version = "=0.259.0", default-features = false, features = ["component-model", "std"] }
+
+[dev-dependencies]
+wit-component = { version = "=0.259.0", default-features = false, features = ["dummy-module"] }
+wit-parser = { version = "=0.259.0", default-features = false, features = ["std"] }
