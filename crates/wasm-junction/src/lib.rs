@@ -11,10 +11,12 @@
 
 mod call;
 mod context;
+mod middleware;
 mod provider;
 mod values;
 
 pub use call::{Call, Caller, Trap, TypedCall};
 pub use context::{CallContext, Extensions};
+pub use middleware::{Event, Middleware, Next};
 pub use provider::{BoxFuture, HostBound, MaybeSend, Provided, Provider};
 pub use values::{TypeError, Val, Vals};
