@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt::{self, Display};
 
-use crate::TypeError;
+use crate::{StreamError, TypeError};
 
 /// A failure that crosses a component call boundary.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,5 +67,31 @@ impl Error for CallError {}
 impl From<TypeError> for CallError {
     fn from(error: TypeError) -> Self {
         Self::trap(error.to_string())
+    }
+}
+
+impl From<StreamError> for CallError {
+    fn from(error: StreamError) -> Self {
+        Self::trap(error.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{InputStream, OutputStream, Val};
+
+    use super::*;
+
+    #[test]
+    fn stream_errors_become_call_traps() {
+        let value = Val::from(OutputStream::from_bytes(b"contents"));
+        let _reader = InputStream::try_from(value.clone()).unwrap();
+        let Err(stream_error) = InputStream::try_from(value) else {
+            panic!("stream unexpectedly gained another reader");
+        };
+
+        let call_error = CallError::from(stream_error);
+        assert_eq!(call_error.kind(), CallErrorKind::Trap);
+        assert_eq!(call_error.to_string(), "stream already has a reader");
     }
 }
