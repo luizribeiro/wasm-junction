@@ -182,6 +182,7 @@ impl Generator<'_> {
                     ))
                 }
             }
+            TypeDefKind::Result(result) => self.map_result(result.ok, result.err, name),
             _ => Ok((quote!(), quote!(#name))),
         }
     }
@@ -225,6 +226,84 @@ impl Generator<'_> {
                 }))
             }
             _ => Ok(None),
+        }
+    }
+
+    fn map_result(
+        &self,
+        ok: Option<Type>,
+        err: Option<Type>,
+        name: &proc_macro2::Ident,
+    ) -> syn::Result<(TokenStream, TokenStream)> {
+        let ok = ok.map(|ty| self.direct_resource(ty)).transpose()?.flatten();
+        let err = err
+            .map(|ty| self.direct_resource(ty))
+            .transpose()?
+            .flatten();
+        let ok_store = Self::borrowed_result(ok.as_ref(), name, "ok")?;
+        let err_store = Self::borrowed_result(err.as_ref(), name, "err")?;
+        let preparations = [&ok_store, &err_store]
+            .into_iter()
+            .filter_map(|value| value.as_ref().map(|(_, tokens)| tokens));
+        let ok_arm = Self::result_arm(ok.as_ref(), ok_store.as_ref(), true)?;
+        let err_arm = Self::result_arm(err.as_ref(), err_store.as_ref(), false)?;
+        Ok((
+            quote!(#(#preparations)*),
+            quote!(match #name { #ok_arm, #err_arm }),
+        ))
+    }
+
+    fn borrowed_result(
+        resource: Option<&ResourceUse>,
+        name: &proc_macro2::Ident,
+        side: &str,
+    ) -> syn::Result<Option<(proc_macro2::Ident, TokenStream)>> {
+        let Some(resource) = resource.filter(|resource| resource.borrowed) else {
+            return Ok(None);
+        };
+        let storage = super::rust_ident(&format!("__wasm_junction_{name}_{side}_borrow"))?;
+        let table = &resource.table;
+        let pattern = if side == "ok" {
+            quote!(Ok)
+        } else {
+            quote!(Err)
+        };
+        Ok(Some((
+            storage.clone(),
+            quote! {
+                let #storage = match &#name {
+                    #pattern(value) => Some(self.#table.borrow(value)?),
+                    _ => None,
+                };
+            },
+        )))
+    }
+
+    fn result_arm(
+        resource: Option<&ResourceUse>,
+        storage: Option<&(proc_macro2::Ident, TokenStream)>,
+        ok: bool,
+    ) -> syn::Result<TokenStream> {
+        let constructor = if ok { quote!(Ok) } else { quote!(Err) };
+        let Some(resource) = resource else {
+            return Ok(quote!(#constructor(value) => #constructor(value)));
+        };
+        if resource.borrowed {
+            let (storage, _) = storage
+                .ok_or_else(|| Self::unsupported("result", "missing resource borrow storage"))?;
+            Ok(quote! {
+                #constructor(_) => {
+                    let Some(value) = #storage.as_deref() else {
+                        return Err(::wasm_junction::CallError::trap(
+                            "resource result borrow was not prepared",
+                        ));
+                    };
+                    #constructor(value)
+                }
+            })
+        } else {
+            let table = &resource.table;
+            Ok(quote!(#constructor(value) => #constructor(self.#table.take(&value)?)))
         }
     }
 }
@@ -277,5 +356,7 @@ mod tests {
         assert!(tokens.contains("self . session . borrow"), "{tokens}");
         assert!(tokens.contains("self . session . take"), "{tokens}");
         assert!(tokens.contains("as_deref"), "{tokens}");
+        assert!(tokens.contains("value_ok_borrow"), "{tokens}");
+        assert!(tokens.contains("match value"), "{tokens}");
     }
 }
