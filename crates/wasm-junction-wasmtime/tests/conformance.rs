@@ -15,8 +15,8 @@ use wasm_junction::{
 use wasm_junction_conformance::{
     CYCLE_A, Fixture, FixtureHost, RESOURCE_CLIENT, RESOURCE_HOST, ResourceHost, RoutedFixture,
     RoutedHost, SUMMARIZER, WRITER, component, cycle_a_component, cycle_b_component,
-    resource_component, run, run_resources, run_routed, sample_note, translator_component,
-    writer_component,
+    resource_component, run, run_reload, run_resources, run_routed, sample_note,
+    translator_component, writer_component,
 };
 use wasm_junction_wasmtime::WasmtimeEngine;
 
@@ -87,6 +87,23 @@ fn successful_scenario_matches_the_engine_neutral_trace() {
 #[test]
 fn routed_scenario_matches_the_engine_neutral_trace() {
     block_on(run_routed(WasmtimeEngine::new().unwrap())).unwrap();
+}
+
+#[test]
+fn reload_scenario_progresses_on_a_current_thread_runtime() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let engine = WasmtimeEngine::new().unwrap();
+    let (sender, receiver) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        sender.send(runtime.block_on(run_reload(engine))).unwrap();
+    });
+    receiver
+        .recv_timeout(Duration::from_secs(30))
+        .expect("reload scenario deadlocked")
+        .unwrap();
+    worker.join().unwrap();
 }
 
 #[test]

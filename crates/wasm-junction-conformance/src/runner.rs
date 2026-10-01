@@ -1,6 +1,8 @@
 use std::error::Error;
 use std::fmt::{self, Display};
+use std::future::{Future, poll_fn};
 use std::sync::Arc;
+use std::task::Poll;
 
 use wasm_junction::{
     App, CallError, CallErrorKind, Component, Engine, ImportDispatcher, InvocationContext,
@@ -10,9 +12,11 @@ use wasm_junction::{
 use crate::host::summary;
 use crate::{
     EXPECTED_RESOURCE_TRACE, EXPECTED_ROUTED_TRACE, EXPECTED_STREAM_TRACE, EXPECTED_TRACE,
-    FixtureHost, RESOURCE_CLIENT, RESOURCE_HOST, ResourceHost, RoutedHost, STREAM_PROBE,
-    SUMMARIZER, SessionId, StreamHost, Trace, component, resource_component, stream_component,
-    summarizer, translator_component, writer, writer_component,
+    FixtureHost, RELOAD_GREETER, RELOAD_WRITER, RESOURCE_CLIENT, RESOURCE_HOST, ReloadGreeter,
+    ReloadHost, ResourceHost, RoutedHost, STREAM_PROBE, SUMMARIZER, SessionId, StreamHost, Trace,
+    component, reload_breaking_component, reload_v1_component, reload_v2_component,
+    reload_writer_component, resource_component, stream_component, summarizer,
+    translator_component, writer, writer_component,
 };
 
 /// A loaded conformance fixture available for additional engine assertions.
@@ -402,6 +406,125 @@ pub async fn run_streams(engine: impl Engine + 'static) -> Result<StreamFixture,
         )));
     }
     Ok(fixture)
+}
+
+/// Runs pinned, switched, refused, and forced reload calls with an exact lifecycle trace.
+///
+/// # Errors
+///
+/// Returns [`FixtureError`] when setup, reload behavior, output, or tracing differs.
+pub async fn run_reload(engine: impl Engine + 'static) -> Result<(), FixtureError> {
+    let host = ReloadHost::default();
+    let trace = Trace::with_lifecycle();
+    let app = App::builder()
+        .engine(engine)
+        .provide(host.clone().provided())
+        .middleware(trace.clone())
+        .build()
+        .map_err(FixtureError::source)?;
+    app.load(reload_component(reload_v1_component(), "greeter")?)
+        .await
+        .map_err(FixtureError::source)?;
+    app.load(reload_component(reload_writer_component(), "writer")?)
+        .await
+        .map_err(FixtureError::source)?;
+    app.link("writer", RELOAD_GREETER, "greeter")
+        .map_err(FixtureError::source)?;
+    let greeter = app
+        .get::<ReloadGreeter>("greeter")
+        .map_err(FixtureError::source)?;
+
+    let slow = greeter.greet_slow("Ada");
+    let mut slow = std::pin::pin!(slow);
+    poll_fn(|context| match slow.as_mut().poll(context) {
+        Poll::Pending if host.entered() => Poll::Ready(Ok(())),
+        Poll::Pending => Poll::Pending,
+        Poll::Ready(result) => Poll::Ready(Err(FixtureError::new(format!(
+            "slow call completed before reload: {result:?}"
+        )))),
+    })
+    .await?;
+
+    app.reload(
+        "greeter",
+        reload_component(reload_v2_component(), "unused")?,
+    )
+    .await
+    .map_err(FixtureError::source)?;
+    expect_call(
+        &app,
+        "greeter",
+        RELOAD_GREETER,
+        "greet",
+        "Bob",
+        "v2: hello, Bob",
+    )
+    .await?;
+    expect_call(
+        &app,
+        "writer",
+        RELOAD_WRITER,
+        "write",
+        "Lin",
+        "v2: hello, Lin",
+    )
+    .await?;
+    host.release();
+    if slow.await.map_err(FixtureError::source)? != "v1: hello, Ada" {
+        return Err(FixtureError::new("slow call did not finish on v1"));
+    }
+
+    let breaking = reload_component(reload_breaking_component(), "unused")?;
+    let Err(error) = app.reload("greeter", breaking.clone()).await else {
+        return Err(FixtureError::new("breaking reload unexpectedly succeeded"));
+    };
+    let message = error.to_string();
+    if !message.contains("writer links") || !message.contains("host handle") {
+        return Err(FixtureError::new(format!("unnamed dependents: {error}")));
+    }
+    app.reload_force("greeter", breaking)
+        .await
+        .map_err(FixtureError::source)?;
+    let Err(error) = app
+        .call("writer", RELOAD_WRITER, "write", vec![Val::from("Eve")])
+        .await
+    else {
+        return Err(FixtureError::new("dependent call unexpectedly succeeded"));
+    };
+    if error.kind() != CallErrorKind::Unavailable || !error.to_string().contains("greeter") {
+        return Err(FixtureError::new(format!(
+            "unclear dependent error: {error}"
+        )));
+    }
+    app.unload_force("greeter")
+        .await
+        .map_err(FixtureError::source)?;
+    Ok(())
+}
+
+fn reload_component(bytes: &'static [u8], name: &str) -> Result<Component, FixtureError> {
+    Component::from_bytes(bytes)
+        .map(|component| component.named(name))
+        .map_err(FixtureError::source)
+}
+
+async fn expect_call(
+    app: &App,
+    component: &str,
+    interface: &str,
+    function: &str,
+    input: &str,
+    expected: &str,
+) -> Result<(), FixtureError> {
+    let output = app
+        .call(component, interface, function, vec![Val::from(input)])
+        .await
+        .map_err(FixtureError::source)?;
+    if output == [Val::from(expected)] {
+        Ok(())
+    } else {
+        Err(FixtureError::new(format!("unexpected output: {output:?}")))
+    }
 }
 
 /// A failure while constructing or running the conformance fixture.
