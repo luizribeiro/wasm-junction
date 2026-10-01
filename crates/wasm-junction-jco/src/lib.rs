@@ -64,8 +64,14 @@ fn transpile_component(bytes: &[u8]) -> Result<TranspiledComponent, String> {
         .ok_or_else(|| "jco did not generate a JavaScript module".to_owned())
 }
 
+#[cfg(target_family = "wasm")]
+mod browser;
+#[cfg(not(target_family = "wasm"))]
 mod native;
 
+#[cfg(target_family = "wasm")]
+pub use browser::JcoEngine;
+#[cfg(not(target_family = "wasm"))]
 pub use native::JcoEngine;
 
 #[cfg(all(test, not(target_family = "wasm")))]
