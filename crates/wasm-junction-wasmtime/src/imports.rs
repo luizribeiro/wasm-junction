@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use wasm_junction_core::{CallError, ImportDispatcher, InvocationContext, Resource, Vals};
+use wasm_junction_core::{CallError, ImportDispatcher, InvocationContext, Resource, Val, Vals};
 use wasmtime::AsContextMut;
 use wasmtime::bail;
 use wasmtime::component::types::ComponentItem;
@@ -140,8 +140,10 @@ fn define_concurrent(
                 )
             });
             let values = call(imports, context, component, interface, function, args).await?;
-            set_results(results, values, &result_types, &mut |resource, expected| {
-                accessor.with(|store| lower_resource(&resource, expected, store))
+            set_results(results, values, &result_types, &mut |value, expected| {
+                to_wasmtime(value, expected, &mut |resource, expected| {
+                    accessor.with(|store| lower_resource(&resource, expected, store))
+                })
             })
         })
     })
@@ -172,8 +174,10 @@ fn define_plain(
                 )
             };
             let values = call(imports, context, component, interface, function, args).await?;
-            set_results(results, values, &result_types, &mut |resource, expected| {
-                lower_resource(&resource, expected, store.as_context_mut())
+            set_results(results, values, &result_types, &mut |value, expected| {
+                to_wasmtime(value, expected, &mut |resource, expected| {
+                    lower_resource(&resource, expected, store.as_context_mut())
+                })
             })
         })
     })
@@ -208,10 +212,7 @@ fn set_results(
     results: &mut [WasmtimeVal],
     values: Vals,
     result_types: &[Type],
-    resource: &mut impl FnMut(
-        Resource,
-        Option<crate::values::ExpectedResource>,
-    ) -> Result<ResourceAny, wasmtime::Error>,
+    convert: &mut impl FnMut(Val, Option<&Type>) -> Result<WasmtimeVal, wasmtime::Error>,
 ) -> Result<(), wasmtime::Error> {
     if results.len() != values.len() {
         bail!(
@@ -221,7 +222,7 @@ fn set_results(
         );
     }
     for (index, (result, value)) in results.iter_mut().zip(values).enumerate() {
-        *result = to_wasmtime(value, result_types.get(index), resource)?;
+        *result = convert(value, result_types.get(index))?;
     }
     Ok(())
 }
