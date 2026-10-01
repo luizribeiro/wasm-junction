@@ -2,9 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use super::{
-    App, Candidate, Generation, LoadedComponent, MissingImports, ReloadError, ResolutionIssue,
-    UnloadError, interfaces_compatible, lock_or_recover, resolution_candidates_excluding,
-    sorted_resource_exports,
+    App, Candidate, Generation, LoadedComponent, MissingImports, ProspectiveComponent, ReloadError,
+    UnloadError, interfaces_compatible, lock_or_recover, prospective_components,
+    resolution_candidates_excluding, sorted_resource_exports,
 };
 use crate::Component;
 use crate::component::ComponentParts;
@@ -46,10 +46,11 @@ impl App {
         }
         if !force {
             let handles = lock_or_recover(&self.0.handle_counts);
+            let prospective = prospective_components(&components);
             let dependents = breaking_dependents(
                 &self.0.providers,
                 &components,
-                &components,
+                &prospective,
                 &handles,
                 name,
                 &[],
@@ -159,7 +160,7 @@ impl App {
             let loaded = components
                 .get_mut(&replacement.name)
                 .ok_or_else(|| ReloadError::UnknownComponent(replacement.name.clone()))?;
-            loaded.links = retained_links(loaded, &replacement.imports);
+            loaded.links = retained_links(&loaded.links, &replacement.imports);
             let old_exports = loaded.generation.exports.clone();
             let new_exports = replacement
                 .exports
@@ -192,7 +193,7 @@ impl App {
         components: &std::collections::BTreeMap<String, LoadedComponent>,
     ) -> Result<(), ReloadError> {
         let handles = lock_or_recover(&self.0.handle_counts);
-        let mut prospective = components.clone();
+        let mut prospective = prospective_components(components);
         for replacement in pending {
             let loaded = components
                 .get(&replacement.name)
@@ -200,12 +201,9 @@ impl App {
             let next = prospective
                 .get_mut(&replacement.name)
                 .ok_or_else(|| ReloadError::UnknownComponent(replacement.name.clone()))?;
-            next.links = retained_links(loaded, &replacement.imports);
-            next.generation = Arc::new(Generation {
-                imports: replacement.imports.iter().cloned().map(Arc::from).collect(),
-                exports: replacement.exports.iter().cloned().map(Arc::from).collect(),
-                compiled: loaded.generation.compiled.clone(),
-            });
+            next.links = retained_links(&loaded.links, &replacement.imports);
+            next.imports.clone_from(&replacement.imports);
+            next.exports.clone_from(&replacement.exports);
         }
         if !force {
             for replacement in pending {
@@ -225,60 +223,20 @@ impl App {
                 }
             }
         }
-        let mut missing = Vec::new();
-        let mut issues = Vec::new();
-        for replacement in pending {
-            for import in &replacement.imports {
-                let candidates = if self.0.engine.supports_import(import) {
-                    vec![Candidate::Host]
-                } else {
-                    prospective_candidates(
-                        &self.0.providers,
-                        &prospective,
-                        &replacement.name,
-                        import,
-                    )
-                };
-                match candidates.len() {
-                    0 => missing.push(import.clone()),
-                    1 => {}
-                    _ => issues.push(ResolutionIssue::ambiguous(
-                        replacement.name.clone(),
-                        import.clone(),
-                        candidates,
-                    )),
-                }
-            }
+        let required = pending
+            .iter()
+            .map(|replacement| replacement.name.clone())
+            .collect();
+        let problems = self.resolve_prospective(&prospective, &required);
+        if !problems.missing.is_empty() {
+            return Err(ReloadError::MissingImports(MissingImports::new(
+                problems.missing,
+            )));
         }
-        for (consumer, component) in &prospective {
-            for import in &component.generation.imports {
-                if component.links.contains_key(import.as_ref()) {
-                    continue;
-                }
-                let candidates = if self.0.engine.supports_import(import) {
-                    vec![Candidate::Host]
-                } else {
-                    prospective_candidates(&self.0.providers, &prospective, consumer, import)
-                };
-                if candidates.len() > 1 {
-                    issues.push(ResolutionIssue::ambiguous(
-                        consumer.clone(),
-                        import.to_string(),
-                        candidates,
-                    ));
-                }
-            }
-        }
-        missing.sort();
-        missing.dedup();
-        issues.sort_by(|left, right| {
-            (&left.component, &left.interface).cmp(&(&right.component, &right.interface))
-        });
-        if !missing.is_empty() {
-            return Err(ReloadError::MissingImports(MissingImports::new(missing)));
-        }
-        if !issues.is_empty() {
-            return Err(ReloadError::WouldMakeAmbiguous { issues });
+        if !problems.ambiguous.is_empty() {
+            return Err(ReloadError::WouldMakeAmbiguous {
+                issues: problems.ambiguous,
+            });
         }
         Ok(())
     }
@@ -307,7 +265,7 @@ fn pending_reload(name: String, component: Component) -> Result<PendingReload, R
 fn breaking_dependents(
     providers: &HashMap<&'static str, Arc<dyn crate::Provider>>,
     components: &std::collections::BTreeMap<String, LoadedComponent>,
-    consumers: &std::collections::BTreeMap<String, LoadedComponent>,
+    consumers: &std::collections::BTreeMap<String, ProspectiveComponent>,
     handles: &HashMap<(String, &'static str), usize>,
     name: &str,
     exports: &[String],
@@ -326,8 +284,8 @@ fn breaking_dependents(
                 dependents.push(format!("{consumer} links `{interface}`"));
             }
         }
-        for interface in &component.generation.imports {
-            if component.links.contains_key(interface.as_ref()) {
+        for interface in &component.imports {
+            if component.links.contains_key(interface) {
                 continue;
             }
             let candidates =
@@ -359,30 +317,11 @@ fn breaking_dependents(
     dependents
 }
 
-fn prospective_candidates(
-    providers: &HashMap<&'static str, Arc<dyn crate::Provider>>,
-    components: &std::collections::BTreeMap<String, LoadedComponent>,
-    consumer: &str,
-    requested: &str,
-) -> Vec<Candidate> {
-    if let Some(provider) = components
-        .get(consumer)
-        .and_then(|component| component.links.get(requested))
-    {
-        return components
-            .get(provider)
-            .filter(|component| component.exports_interface(requested))
-            .map_or_else(Vec::new, |_| vec![Candidate::Component(provider.clone())]);
-    }
-    resolution_candidates_excluding(providers, components, requested, Some(consumer))
-}
-
-fn retained_links(component: &LoadedComponent, imports: &[String]) -> HashMap<String, String> {
+fn retained_links(links: &HashMap<String, String>, imports: &[String]) -> HashMap<String, String> {
     imports
         .iter()
         .filter_map(|import| {
-            component
-                .links
+            links
                 .iter()
                 .find(|(linked, _)| interfaces_compatible(import, linked))
                 .map(|(_, provider)| (import.clone(), provider.clone()))

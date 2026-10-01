@@ -54,6 +54,18 @@ struct PendingComponent {
     exports: Vec<String>,
 }
 
+#[derive(Clone)]
+struct ProspectiveComponent {
+    imports: Vec<String>,
+    exports: Vec<String>,
+    links: HashMap<String, String>,
+}
+
+struct ResolutionProblems {
+    missing: Vec<String>,
+    ambiguous: Vec<ResolutionIssue>,
+}
+
 impl LoadedComponent {
     fn export_name(&self, interface: &str) -> Option<Arc<str>> {
         self.generation
@@ -325,6 +337,40 @@ impl App {
             }
         }
         load_resolution_result(missing, issues)
+    }
+
+    fn resolve_prospective(
+        &self,
+        components: &BTreeMap<String, ProspectiveComponent>,
+        required: &HashSet<String>,
+    ) -> ResolutionProblems {
+        let mut missing = Vec::new();
+        let mut ambiguous = Vec::new();
+        for (consumer, component) in components {
+            for import in &component.imports {
+                let candidates = if self.0.engine.supports_import(import) {
+                    vec![Candidate::Host]
+                } else {
+                    prospective_candidates(&self.0.providers, components, consumer, import)
+                };
+                match candidates.len() {
+                    0 if required.contains(consumer) => missing.push(import.clone()),
+                    0 | 1 => {}
+                    _ => ambiguous.push(ResolutionIssue::ambiguous(
+                        consumer.clone(),
+                        import.clone(),
+                        candidates,
+                    )),
+                }
+            }
+        }
+        missing.sort();
+        missing.dedup();
+        ambiguous.sort_by(|left, right| {
+            (&left.component, &left.interface).cmp(&(&right.component, &right.interface))
+        });
+        ambiguous.dedup();
+        ResolutionProblems { missing, ambiguous }
     }
 
     /// Returns a generated handle for one component interface.
@@ -1634,6 +1680,73 @@ fn resolution_candidates_excluding(
                 .filter(|component| excluded.is_none_or(|name| component.name.as_ref() != name))
                 .filter(|component| component.exports_interface(requested))
                 .map(|component| Candidate::Component(component.name.to_string())),
+        )
+        .collect()
+}
+
+fn prospective_components(
+    components: &BTreeMap<String, LoadedComponent>,
+) -> BTreeMap<String, ProspectiveComponent> {
+    components
+        .iter()
+        .map(|(name, component)| {
+            (
+                name.clone(),
+                ProspectiveComponent {
+                    imports: component
+                        .generation
+                        .imports
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect(),
+                    exports: component
+                        .generation
+                        .exports
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect(),
+                    links: component.links.clone(),
+                },
+            )
+        })
+        .collect()
+}
+
+fn prospective_candidates(
+    providers: &HashMap<&'static str, Arc<dyn Provider>>,
+    components: &BTreeMap<String, ProspectiveComponent>,
+    consumer: &str,
+    requested: &str,
+) -> Vec<Candidate> {
+    if let Some(provider) = components
+        .get(consumer)
+        .and_then(|component| component.links.get(requested))
+    {
+        return components
+            .get(provider)
+            .filter(|component| {
+                component
+                    .exports
+                    .iter()
+                    .any(|export| interfaces_compatible(requested, export))
+            })
+            .map_or_else(Vec::new, |_| vec![Candidate::Component(provider.clone())]);
+    }
+    providers
+        .keys()
+        .filter(|provided| interfaces_compatible(requested, provided))
+        .map(|_| Candidate::Host)
+        .chain(
+            components
+                .iter()
+                .filter(|(name, _)| name.as_str() != consumer)
+                .filter(|(_, component)| {
+                    component
+                        .exports
+                        .iter()
+                        .any(|export| interfaces_compatible(requested, export))
+                })
+                .map(|(name, _)| Candidate::Component(name.clone())),
         )
         .collect()
 }
