@@ -9,6 +9,7 @@ components. It is early in development and its API is not yet stable.
 - [`examples/clock`](examples/clock) intercepts WASI clock calls with middleware.
 - [`examples/translate`](examples/translate) routes calls from one component to either of two
   component providers.
+- [`examples/audit`](examples/audit) combines host resources, byte streams, and per-call data.
 
 Run all checks with:
 
