@@ -269,9 +269,10 @@ impl App {
                         "no provider for `{interface}`"
                     )));
                 }
-                Err(ResolveError::Ambiguous) => {
+                Err(ResolveError::Ambiguous { candidates }) => {
                     return Err(CallError::refused(format!(
-                        "more than one provider for `{interface}`"
+                        "more than one provider for `{interface}`: {}",
+                        display_candidates(&candidates)
                     )));
                 }
             };
@@ -362,12 +363,13 @@ impl App {
                 })
             })
             .collect::<Vec<_>>();
-        let mut candidates = hosts.chain(component_candidates);
-        let candidate = candidates.next().ok_or(ResolveError::Missing)?;
-        if candidates.next().is_some() {
-            Err(ResolveError::Ambiguous)
-        } else {
-            Ok(candidate)
+        let mut matches = hosts.chain(component_candidates).collect::<Vec<_>>();
+        match matches.len() {
+            0 => Err(ResolveError::Missing),
+            1 => Ok(matches.remove(0)),
+            _ => Err(ResolveError::Ambiguous {
+                candidates: matches.iter().map(ResolvedImport::candidate).collect(),
+            }),
         }
     }
 
@@ -381,7 +383,7 @@ impl App {
 
 enum ResolveError {
     Missing,
-    Ambiguous,
+    Ambiguous { candidates: Vec<Candidate> },
 }
 
 enum ResolvedImport {
@@ -394,6 +396,15 @@ enum ResolvedImport {
         interface: Arc<str>,
         compiled: Arc<dyn CompiledComponent>,
     },
+}
+
+impl ResolvedImport {
+    fn candidate(&self) -> Candidate {
+        match self {
+            Self::Host { .. } => Candidate::Host,
+            Self::Component { name, .. } => Candidate::Component(name.to_string()),
+        }
+    }
 }
 
 impl ImportDispatcher for App {
@@ -654,6 +665,27 @@ impl Display for LinkError {
 }
 
 impl Error for LinkError {}
+
+/// A provider considered while resolving a component import.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Candidate {
+    /// A provider registered by the host application.
+    Host,
+    /// A loaded component with the given application name.
+    Component(String),
+}
+
+fn display_candidates(candidates: &[Candidate]) -> String {
+    candidates
+        .iter()
+        .map(|candidate| match candidate {
+            Candidate::Host => String::from("`host`"),
+            Candidate::Component(name) => format!("`{name}`"),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 struct ProviderRegistration {
     provided: Provided,
