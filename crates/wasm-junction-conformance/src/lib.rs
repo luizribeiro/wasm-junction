@@ -6,6 +6,7 @@
 mod host;
 mod resources;
 mod runner;
+mod stream_host;
 mod trace;
 
 wasm_junction::bindgen!({ path: "wit" });
@@ -15,6 +16,7 @@ pub use resources::ResourceHost;
 pub use runner::{
     Fixture, FixtureError, ResourceFixture, RoutedFixture, run, run_resources, run_routed,
 };
+pub use stream_host::StreamHost;
 pub use trace::{EXPECTED_RESOURCE_TRACE, EXPECTED_ROUTED_TRACE, EXPECTED_TRACE, Trace};
 
 /// The fixture's types-only interface.
