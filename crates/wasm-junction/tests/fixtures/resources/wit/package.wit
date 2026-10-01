@@ -16,4 +16,5 @@ interface resources {
   consume: func(value: session) -> string;
   maybe: func(value: option<session>) -> option<session>;
   choose: func(value: result<session, string>) -> result<session, string>;
+  make-host: func() -> host;
 }

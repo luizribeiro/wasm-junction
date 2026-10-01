@@ -4,6 +4,7 @@
 
 mod support;
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use wasm_junction::{
@@ -16,7 +17,7 @@ wasm_junction::bindgen!({ path: "tests/fixtures/resources/wit" });
 const PLUGIN_WIT: &str = r"
     package test:resource-plugin@1.0.0;
     interface client {
-      use test:resources/resources@1.0.0.{session};
+      use test:resources/resources@1.0.0.{host, session};
       open: func(user: string) -> session;
       profile: func(value: borrow<session>) -> string;
       new: func(value: borrow<session>) -> string;
@@ -24,6 +25,7 @@ const PLUGIN_WIT: &str = r"
       consume: func(value: session) -> string;
       maybe: func(value: option<session>) -> option<session>;
       choose: func(value: result<session, string>) -> result<session, string>;
+      make-host: func() -> host;
     }
     world plugin { import test:resources/resources@1.0.0; export client; }
 ";
@@ -31,14 +33,23 @@ const PLUGIN_WIT: &str = r"
 #[derive(Debug, PartialEq, Eq)]
 struct SessionState(String);
 
+struct DropProbe(Arc<AtomicUsize>);
+
+impl Drop for DropProbe {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 #[derive(Default)]
 struct ResourceHost {
     dropped: Mutex<Vec<String>>,
+    default_drops: Arc<AtomicUsize>,
 }
 
 impl resources::Host for ResourceHost {
     type Session = SessionState;
-    type Host_ = ();
+    type Host_ = DropProbe;
     type Provider = ();
 
     fn session_new(&self, _cx: &CallContext, user: String) -> SessionState {
@@ -72,6 +83,10 @@ impl resources::Host for ResourceHost {
         value: Result<SessionState, String>,
     ) -> Result<SessionState, String> {
         value
+    }
+
+    fn make_host(&self, _cx: &CallContext) -> DropProbe {
+        DropProbe(self.default_drops.clone())
     }
 
     fn drop_session(&self, _cx: &CallContext, value: SessionState) {
@@ -165,6 +180,16 @@ fn app_dispatch_maps_resource_values_and_stale_ids() {
     let error = call("profile", vec![Val::Resource(stale)]).unwrap_err();
     assert_eq!(error.kind(), CallErrorKind::Trap);
     assert!(error.to_string().contains("unknown resource"));
+
+    let host_resource = one_resource(&call("make-host", Vec::new()).unwrap());
+    support::block_on(ImportDispatcher::drop_resource(
+        &app,
+        InvocationContext::default(),
+        Arc::from("plugin"),
+        host_resource,
+    ))
+    .unwrap();
+    assert_eq!(host.default_drops.load(Ordering::Relaxed), 1);
 }
 
 #[test]

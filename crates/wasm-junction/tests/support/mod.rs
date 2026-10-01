@@ -203,7 +203,7 @@ fn resource_import(function: &str) -> Result<&str, CallError> {
         "profile" => Ok("[method]session.profile"),
         "new" => Ok("[method]session.new"),
         "lookup" => Ok("[static]session.lookup"),
-        "consume" | "maybe" | "choose" => Ok(function),
+        "consume" | "maybe" | "choose" | "make-host" => Ok(function),
         _ => Err(CallError::trap("unknown resource fixture function")),
     }
 }
