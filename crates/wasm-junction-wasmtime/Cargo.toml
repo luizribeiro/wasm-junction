@@ -30,3 +30,7 @@ harness = false
 [[bench]]
 name = "wasi"
 harness = false
+
+[[bench]]
+name = "reload"
+harness = false
