@@ -42,10 +42,19 @@ fn engine_and_builder_transform_are_accepted() {
     App::builder().apply(add_engine).build().unwrap();
 }
 
+#[cfg(not(all(feature = "wasmtime", not(target_family = "wasm"))))]
 #[test]
-fn build_requires_an_engine() {
+fn build_reports_when_the_target_has_no_default_engine() {
     let error = App::builder().build().err().unwrap();
-    assert_eq!(error.to_string(), "an engine is required");
+    let message = error.to_string();
+    assert!(message.contains(env!("WASM_JUNCTION_TARGET")));
+    assert!(message.contains("call `.engine(…)`"));
+}
+
+#[cfg(all(feature = "wasmtime", not(target_family = "wasm")))]
+#[test]
+fn build_uses_the_native_default_engine() {
+    App::builder().build().unwrap();
 }
 
 #[test]

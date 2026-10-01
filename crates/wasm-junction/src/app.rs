@@ -455,9 +455,16 @@ impl AppBuilder {
     ///
     /// # Errors
     ///
-    /// Returns [`BuildError`] if no engine was selected or an interface has multiple providers.
+    /// Returns [`BuildError`] if no engine is available or an interface has multiple providers.
     pub fn build(self) -> Result<App, BuildError> {
-        let engine = self.engine.ok_or(BuildError::MissingEngine)?;
+        self.build_with(default_engine)
+    }
+
+    fn build_with(
+        self,
+        default: impl FnOnce() -> Result<Arc<dyn Engine>, BuildError>,
+    ) -> Result<App, BuildError> {
+        let engine = self.engine.map_or_else(default, Ok)?;
         let mut providers = HashMap::new();
         let mut locations = HashMap::new();
         for registration in self.providers {
@@ -484,8 +491,10 @@ impl AppBuilder {
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BuildError {
-    /// No engine was selected.
+    /// No engine was selected and this target has no enabled default.
     MissingEngine,
+    /// The target's default engine could not be initialized.
+    DefaultEngine(EngineError),
     /// More than one provider was registered for an interface.
     DuplicateProvider {
         /// The duplicated interface.
@@ -500,7 +509,12 @@ pub enum BuildError {
 impl Display for BuildError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MissingEngine => formatter.write_str("an engine is required"),
+            Self::MissingEngine => write!(
+                formatter,
+                "no default engine is available for target `{}`; call `.engine(…)`",
+                env!("WASM_JUNCTION_TARGET")
+            ),
+            Self::DefaultEngine(error) => write!(formatter, "default engine failed: {error}"),
             Self::DuplicateProvider {
                 interface,
                 first,
@@ -513,7 +527,26 @@ impl Display for BuildError {
     }
 }
 
-impl Error for BuildError {}
+impl Error for BuildError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::DefaultEngine(error) => Some(error),
+            Self::MissingEngine | Self::DuplicateProvider { .. } => None,
+        }
+    }
+}
+
+#[cfg(all(feature = "wasmtime", not(target_family = "wasm")))]
+fn default_engine() -> Result<Arc<dyn Engine>, BuildError> {
+    wasm_junction_wasmtime::WasmtimeEngine::new()
+        .map(|engine| Arc::new(engine) as Arc<dyn Engine>)
+        .map_err(|error| BuildError::DefaultEngine(EngineError::new(error.to_string())))
+}
+
+#[cfg(not(all(feature = "wasmtime", not(target_family = "wasm"))))]
+fn default_engine() -> Result<Arc<dyn Engine>, BuildError> {
+    Err(BuildError::MissingEngine)
+}
 
 fn interfaces_compatible(requested: &str, provided: &str) -> bool {
     if requested == provided {
@@ -545,7 +578,34 @@ fn interfaces_compatible(requested: &str, provided: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use super::*;
+
+    struct ExplicitEngine;
+
+    impl Engine for ExplicitEngine {
+        fn compile(
+            &self,
+            _bytes: Arc<[u8]>,
+        ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
+            Box::pin(async { Err(EngineError::new("unused engine")) })
+        }
+    }
+
+    #[test]
+    fn explicit_engine_skips_the_default_factory() {
+        let default_calls = Cell::new(0);
+        App::builder()
+            .engine(ExplicitEngine)
+            .build_with(|| {
+                default_calls.set(default_calls.get() + 1);
+                Err(BuildError::MissingEngine)
+            })
+            .unwrap();
+
+        assert_eq!(default_calls.get(), 0);
+    }
 
     #[test]
     fn interface_compatibility_follows_semver_tracks() {

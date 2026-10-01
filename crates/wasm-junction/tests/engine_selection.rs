@@ -1,0 +1,59 @@
+//! Default engine dependency selection tests.
+
+use std::process::Command;
+
+const WASM_TARGETS: [&str; 2] = ["wasm32-unknown-unknown", "wasm32-wasip2"];
+
+fn tree(target: &str, no_default_features: bool) -> String {
+    let manifest = format!("{}/Cargo.toml", env!("CARGO_MANIFEST_DIR"));
+    let mut command = Command::new(env!("CARGO"));
+    command.args([
+        "tree",
+        "--manifest-path",
+        &manifest,
+        "--package",
+        env!("CARGO_PKG_NAME"),
+        "--target",
+        target,
+        "--edges",
+        "normal",
+        "--prefix",
+        "none",
+    ]);
+    if no_default_features {
+        command.arg("--no-default-features");
+    }
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "cargo tree failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+fn contains_wasmtime(tree: &str) -> bool {
+    tree.lines()
+        .any(|line| line.split_whitespace().next() == Some("wasm-junction-wasmtime"))
+}
+
+#[test]
+fn disabled_defaults_select_no_engine_on_any_target() {
+    for target in [env!("WASM_JUNCTION_TARGET")]
+        .into_iter()
+        .chain(WASM_TARGETS)
+    {
+        assert!(!contains_wasmtime(&tree(target, true)), "{target}");
+    }
+}
+
+#[test]
+fn defaults_select_wasmtime_only_on_native_targets() {
+    assert!(contains_wasmtime(&tree(
+        env!("WASM_JUNCTION_TARGET"),
+        false
+    )));
+    for target in WASM_TARGETS {
+        assert!(!contains_wasmtime(&tree(target, false)), "{target}");
+    }
+}

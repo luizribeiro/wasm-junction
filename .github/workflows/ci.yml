@@ -25,5 +25,7 @@ jobs:
         run: nix develop -c pre-commit run --all-files --show-diff-on-failure
       - name: Run pre-push hooks
         run: nix develop -c pre-commit run --all-files --hook-stage pre-push --show-diff-on-failure
+      - name: Test without the default engine
+        run: nix develop -c cargo nextest run -p wasm-junction --no-default-features --locked
       - name: Check dependency advisories
         run: nix develop -c cargo deny check advisories

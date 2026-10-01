@@ -80,7 +80,10 @@
           cargo-nextest = cargoHook {
             name = "cargo-nextest-hook";
             runtimeInputs = [ pkgs.cargo-nextest ];
-            text = "cargo nextest run --workspace --locked --no-tests fail";
+            text = ''
+              cargo nextest run --workspace --locked --no-tests fail
+              cargo nextest run -p wasm-junction --no-default-features --locked
+            '';
             stages = [ "pre-push" ];
           };
           doctests = cargoHook {
