@@ -1,4 +1,4 @@
-use wasm_junction::Val;
+use wasm_junction_core::Val;
 use wasmtime::component::Val as WasmtimeVal;
 
 pub(crate) fn from_wasmtime(value: WasmtimeVal) -> Result<Val, wasmtime::Error> {

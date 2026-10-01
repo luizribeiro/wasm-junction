@@ -13,16 +13,16 @@ mod app;
 mod call;
 mod component;
 mod context;
-mod engine;
 mod middleware;
 mod provider;
-mod values;
 
 pub use app::{App, AppBuilder, BuildError, GetError, InterfaceHandle, LoadError, MissingImports};
-pub use call::{Call, CallError, CallErrorKind, Caller, TypedCall};
+pub use call::{Call, Caller, TypedCall};
 pub use component::{Component, ComponentError};
-pub use context::{CallContext, Extensions, InvocationContext};
-pub use engine::{CompiledComponent, Engine, EngineError, ImportDispatcher};
+pub use context::CallContext;
 pub use middleware::{Event, Middleware, Next};
-pub use provider::{BoxFuture, HostBound, MaybeSend, Provided, Provider};
-pub use values::{TypeError, Val, Vals};
+pub use provider::{Provided, Provider};
+pub use wasm_junction_core::{
+    BoxFuture, CallError, CallErrorKind, CompiledComponent, Engine, EngineError, Extensions,
+    HostBound, ImportDispatcher, InvocationContext, MaybeSend, TypeError, Val, Vals,
+};

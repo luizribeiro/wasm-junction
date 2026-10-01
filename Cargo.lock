@@ -915,6 +915,7 @@ dependencies = [
 name = "wasm-junction"
 version = "0.0.0"
 dependencies = [
+ "wasm-junction-core",
  "wasmparser 0.259.0",
  "wit-component 0.259.0",
  "wit-parser 0.259.0",
@@ -927,6 +928,10 @@ dependencies = [
  "wasm-junction",
  "wasm-junction-guest-build",
 ]
+
+[[package]]
+name = "wasm-junction-core"
+version = "0.0.0"
 
 [[package]]
 name = "wasm-junction-example-greeter"
@@ -947,6 +952,7 @@ version = "0.0.0"
 dependencies = [
  "wasm-junction",
  "wasm-junction-conformance",
+ "wasm-junction-core",
  "wasm-junction-guest-build",
  "wasmtime",
 ]

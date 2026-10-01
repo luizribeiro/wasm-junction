@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use wasm_junction::{CallError, ImportDispatcher, Vals};
+use wasm_junction_core::{CallError, ImportDispatcher, InvocationContext, Vals};
 use wasmtime::AsContextMut;
 use wasmtime::bail;
 use wasmtime::component::types::ComponentItem;
@@ -98,7 +98,7 @@ fn convert_params(params: &[WasmtimeVal]) -> Result<Vals, wasmtime::Error> {
 
 async fn call(
     imports: Arc<dyn ImportDispatcher>,
-    context: wasm_junction::InvocationContext,
+    context: InvocationContext,
     component: Arc<str>,
     interface: Arc<str>,
     function: Arc<str>,

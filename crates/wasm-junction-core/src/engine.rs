@@ -3,7 +3,7 @@ use std::{error::Error, fmt};
 
 use crate::{BoxFuture, CallError, HostBound, InvocationContext, Vals};
 
-/// A compiled component whose exports can be invoked by an [`crate::App`].
+/// A compiled component whose exports can be invoked by an application dispatcher.
 ///
 /// Implement this in an engine crate. Each call must run in a fresh component instance.
 pub trait CompiledComponent: HostBound {
@@ -19,7 +19,7 @@ pub trait CompiledComponent: HostBound {
     ) -> BoxFuture<'_, Result<Vals, CallError>>;
 }
 
-/// The engine-facing route from a guest import back into an [`crate::App`].
+/// The engine-facing route from a guest import back into an application dispatcher.
 pub trait ImportDispatcher: HostBound {
     /// Invokes one imported function on behalf of `caller`.
     fn call(
@@ -32,7 +32,7 @@ pub trait ImportDispatcher: HostBound {
     ) -> BoxFuture<'_, Result<Vals, CallError>>;
 }
 
-/// Compiles WebAssembly components for an [`crate::App`].
+/// Compiles WebAssembly components for an application dispatcher.
 ///
 /// Engines live in separate crates so applications choose their runtime explicitly.
 pub trait Engine: HostBound {
