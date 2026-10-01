@@ -341,6 +341,9 @@ impl App {
 
     /// Directs one component import to a named component provider.
     ///
+    /// Reloading the consumer retains the link while its replacement still imports a compatible
+    /// interface, and discards the link when that import is removed.
+    ///
     /// # Errors
     ///
     /// Returns [`LinkError`] when either component is unknown or the provider does not export a
