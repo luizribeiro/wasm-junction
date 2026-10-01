@@ -4,8 +4,10 @@
 #![warn(missing_docs)]
 
 mod host;
+mod trace;
 
 pub use host::{FixtureHost, sample_note, sample_summary};
+pub use trace::Trace;
 
 /// The fixture's types-only interface.
 pub const TYPES: &str = "example:notes/types@0.1.0";
