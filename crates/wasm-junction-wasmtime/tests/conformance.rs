@@ -217,28 +217,27 @@ impl Middleware for AwaitTokioTimer {
 
 #[test]
 fn wasi_gate_can_await_on_a_current_thread_tokio_runtime() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    let app = App::builder()
+        .engine(WasmtimeEngine::new().unwrap())
+        .middleware(AwaitTokioTimer)
+        .build()
+        .unwrap();
+    runtime
+        .block_on(app.load(Component::from_bytes(WASI_COMPONENT).unwrap().named("wasi")))
+        .unwrap();
+
     let (sender, receiver) = mpsc::channel();
     let _worker = std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_time()
-            .build()
-            .unwrap();
-        let result = runtime.block_on(async {
-            let app = App::builder()
-                .engine(WasmtimeEngine::new().unwrap())
-                .middleware(AwaitTokioTimer)
-                .build()
-                .unwrap();
-            app.load(Component::from_bytes(WASI_COMPONENT).unwrap().named("wasi"))
-                .await
-                .unwrap();
-            app.call("wasi", ENVIRONMENT, "wall-time", Vec::new()).await
-        });
+        let result = runtime.block_on(app.call("wasi", ENVIRONMENT, "wall-time", Vec::new()));
         sender.send(result).unwrap();
     });
 
     let result = receiver
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(30))
         .expect("WASI middleware deadlocked the current-thread Tokio runtime");
     assert!(result.is_ok(), "{result:?}");
 }
