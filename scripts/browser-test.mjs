@@ -121,15 +121,7 @@ try {
     server,
     delay(600_000).then(() => { throw new Error("timed out waiting for the test server"); }),
   ]);
-  try {
-    browser = await browserType.launch({ headless: true });
-  } catch (error) {
-    reportBrowserDiagnostics = true;
-    throw error;
-  }
-  browser.on("disconnected", () => {
-    if (!resultArrived && !stopping) reportBrowserDiagnostics = true;
-  });
+  browser = await browserType.launch({ headless: true });
   console.log(`${browserName} ${browser.version()} (Playwright 1.63.0)`);
   const page = await browser.newPage();
   page.on("console", (message) => console.log(message.text()));
@@ -147,7 +139,7 @@ try {
   if (!summary) throw new Error(`${browserName} tests did not report a passing result`);
   if (Number(summary[1]) === 0) throw new Error(`${browserName} ran zero tests`);
 } catch (error) {
-  if (browser && !resultArrived && !browser.isConnected()) reportBrowserDiagnostics = true;
+  reportBrowserDiagnostics = !resultArrived;
   throw error;
 } finally {
   try {
