@@ -69,6 +69,7 @@
             name = "clippy-hook";
             text = ''
               cargo clippy --workspace --all-targets --locked -- -W clippy::pedantic -D warnings
+              cargo check -p wasm-junction-core --target wasm32-unknown-unknown --locked
               cargo check -p wasm-junction --target wasm32-unknown-unknown --locked
             '';
           };
