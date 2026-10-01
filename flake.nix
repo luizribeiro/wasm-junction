@@ -73,6 +73,7 @@
               cargo clippy --workspace --all-targets --locked -- -W clippy::pedantic -D warnings
               cargo check -p wasm-junction-core --target wasm32-unknown-unknown --locked
               cargo check -p wasm-junction --target wasm32-unknown-unknown --locked
+              cargo check -p wasm-junction --test bindgen_calls --target wasm32-unknown-unknown --no-default-features --locked
             '';
           };
           cargo-deny = cargoHook {
