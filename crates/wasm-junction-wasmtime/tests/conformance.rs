@@ -12,10 +12,10 @@ use wasm_junction::{
     Middleware, Next, Provided, Provider, Resource, Val, Vals, WasiConfig,
 };
 use wasm_junction_conformance::{
-    CYCLE_A, EXPECTED_RESOURCE_TRACE, Fixture, FixtureHost, RESOURCE_CLIENT, RESOURCE_HOST,
-    ResourceHost, RoutedFixture, RoutedHost, SUMMARIZER, Trace, WRITER, component,
-    cycle_a_component, cycle_b_component, resource_component, run, run_routed, sample_note,
-    translator_component, writer_component,
+    CYCLE_A, Fixture, FixtureHost, RESOURCE_CLIENT, RESOURCE_HOST, ResourceHost, RoutedFixture,
+    RoutedHost, SUMMARIZER, WRITER, component, cycle_a_component, cycle_b_component,
+    resource_component, run, run_resources, run_routed, sample_note, translator_component,
+    writer_component,
 };
 use wasm_junction_wasmtime::WasmtimeEngine;
 
@@ -61,39 +61,7 @@ fn routed_scenario_matches_the_engine_neutral_trace() {
 
 #[test]
 fn host_resource_calls_cross_middleware_and_the_engine() {
-    let trace = Trace::default();
-    let host = ResourceHost::default();
-    let app = App::builder()
-        .engine(WasmtimeEngine::new().unwrap())
-        .provide(host.clone().provided())
-        .middleware(trace.clone())
-        .build()
-        .unwrap();
-    let component = Component::from_bytes(resource_component())
-        .unwrap()
-        .named("resource-client");
-    block_on(app.load(component)).unwrap();
-    let result = block_on(app.call(
-        "resource-client",
-        RESOURCE_CLIENT,
-        "run",
-        vec![Val::Bool(false)],
-    ))
-    .unwrap();
-    assert_eq!(result, [Val::from("profile:Ada")]);
-    assert_eq!(host.active_resources(), 0);
-    assert!(host.profile(0).unwrap_err().to_string().contains("unknown"));
-    assert_eq!(trace.entries(), EXPECTED_RESOURCE_TRACE);
-
-    let error = block_on(app.call(
-        "resource-client",
-        RESOURCE_CLIENT,
-        "run",
-        vec![Val::Bool(true)],
-    ))
-    .unwrap_err();
-    assert_eq!(error.kind(), CallErrorKind::Trap);
-    assert_eq!(host.active_resources(), 0);
+    block_on(run_resources(WasmtimeEngine::new().unwrap())).unwrap();
 }
 
 #[test]

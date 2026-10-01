@@ -2,12 +2,13 @@ use std::error::Error;
 use std::fmt::{self, Display};
 use std::sync::Arc;
 
-use wasm_junction::{App, CallError, Component, Engine, Vals};
+use wasm_junction::{App, CallError, CallErrorKind, Component, Engine, Val, Vals};
 
 use crate::host::summary;
 use crate::{
-    EXPECTED_ROUTED_TRACE, EXPECTED_TRACE, FixtureHost, RoutedHost, SUMMARIZER, SessionId, Trace,
-    component, summarizer, translator_component, writer, writer_component,
+    EXPECTED_RESOURCE_TRACE, EXPECTED_ROUTED_TRACE, EXPECTED_TRACE, FixtureHost, RESOURCE_CLIENT,
+    ResourceHost, RoutedHost, SUMMARIZER, SessionId, Trace, component, resource_component,
+    summarizer, translator_component, writer, writer_component,
 };
 
 /// A loaded conformance fixture available for additional engine assertions.
@@ -22,6 +23,52 @@ pub struct RoutedFixture {
     writer: writer::Writer,
     host: RoutedHost,
     trace: Trace,
+}
+
+/// A loaded host-resource component and its provider.
+pub struct ResourceFixture {
+    app: App,
+    host: ResourceHost,
+    trace: Trace,
+}
+
+impl ResourceFixture {
+    /// Builds and loads the resource guest with its host and tracer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FixtureError`] if application construction, inspection, or loading fails.
+    pub async fn new(engine: impl Engine + 'static) -> Result<Self, FixtureError> {
+        let host = ResourceHost::default();
+        let trace = Trace::default();
+        let app = App::builder()
+            .engine(engine)
+            .provide(host.clone().provided())
+            .middleware(trace.clone())
+            .build()
+            .map_err(FixtureError::source)?;
+        let component = Component::from_bytes(resource_component())
+            .map_err(FixtureError::source)?
+            .named("resource-client");
+        app.load(component).await.map_err(FixtureError::source)?;
+        Ok(Self { app, host, trace })
+    }
+
+    /// Invokes the guest's resource lifecycle scenario.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CallError`] when middleware, the guest, or its host import traps.
+    pub async fn run(&self, trap: bool) -> Result<Vals, CallError> {
+        self.app
+            .call(
+                "resource-client",
+                RESOURCE_CLIENT,
+                "run",
+                vec![Val::Bool(trap)],
+            )
+            .await
+    }
 }
 
 impl RoutedFixture {
@@ -212,6 +259,49 @@ pub async fn run_routed(engine: impl Engine + 'static) -> Result<RoutedFixture, 
             "unexpected routed trace: {:#?}",
             fixture.trace.entries()
         )));
+    }
+    Ok(fixture)
+}
+
+/// Checks exact host-resource calls and drop events, then cleanup after a guest trap.
+///
+/// # Errors
+///
+/// Returns [`FixtureError`] if setup, invocation, tracing, or resource cleanup differs.
+pub async fn run_resources(engine: impl Engine + 'static) -> Result<ResourceFixture, FixtureError> {
+    let fixture = ResourceFixture::new(engine).await?;
+    let output = fixture.run(false).await.map_err(FixtureError::source)?;
+    if output != [Val::from("profile:Ada")] {
+        return Err(FixtureError::new(format!(
+            "unexpected resource output: {output:?}"
+        )));
+    }
+    if fixture.host.active_resources() != 0 || fixture.host.profile(0).is_ok() {
+        return Err(FixtureError::new("normal resource invocation leaked"));
+    }
+    if fixture.trace.entries() != EXPECTED_RESOURCE_TRACE {
+        return Err(FixtureError::new(format!(
+            "unexpected resource trace: {:#?}",
+            fixture.trace.entries()
+        )));
+    }
+
+    fixture.trace.clear();
+    let error = match fixture.run(true).await {
+        Ok(output) => {
+            return Err(FixtureError::new(format!(
+                "resource trap scenario returned {output:?}"
+            )));
+        }
+        Err(error) => error,
+    };
+    if error.kind() != CallErrorKind::Trap {
+        return Err(FixtureError::new(format!(
+            "unexpected resource failure: {error}"
+        )));
+    }
+    if fixture.host.active_resources() != 0 || fixture.host.profile(1).is_ok() {
+        return Err(FixtureError::new("trapped resource invocation leaked"));
     }
     Ok(fixture)
 }
