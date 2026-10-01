@@ -63,7 +63,11 @@ impl Generator<'_> {
                 } else {
                     let name = rust_ident(&export.to_upper_camel_case())?;
                     let target = self.named_type(*type_id)?;
-                    Ok(quote!(pub use #target as #name;))
+                    if definition.name.as_deref() == Some(export) {
+                        Ok(quote!(pub use #target;))
+                    } else {
+                        Ok(quote!(pub use #target as #name;))
+                    }
                 }
             })
             .collect::<syn::Result<Vec<_>>>()?;
@@ -80,6 +84,22 @@ impl Generator<'_> {
     fn type_definition(&self, name: &str, id: wit_parser::TypeId) -> syn::Result<TokenStream> {
         let ident = rust_ident(&name.to_upper_camel_case())?;
         let (definition, nominal) = match &self.resolve.types[id].kind {
+            wit_parser::TypeDefKind::Type(wit_parser::Type::Id(target))
+                if self.resolve.types[*target].owner != self.resolve.types[id].owner =>
+            {
+                let target_path = self.named_type(*target)?;
+                let target_name = self.resolve.types[*target]
+                    .name
+                    .as_deref()
+                    .ok_or_else(|| Self::unsupported(name, "anonymous imported type"))?;
+                let target_ident = rust_ident(&target_name.to_upper_camel_case())?;
+                let tokens = if ident == target_ident {
+                    quote!(pub use #target_path;)
+                } else {
+                    quote!(pub use #target_path as #ident;)
+                };
+                (tokens, false)
+            }
             wit_parser::TypeDefKind::Record(record) => (self.record(name, record)?, true),
             wit_parser::TypeDefKind::Enum(enum_) => (Self::enum_(name, enum_)?, true),
             wit_parser::TypeDefKind::Flags(flags) => (Self::flags(name, flags)?, true),
@@ -123,4 +143,28 @@ pub(crate) fn rust_ident(name: &str) -> syn::Result<Ident> {
     syn::parse_str(name)
         .or_else(|_| syn::parse_str(&format!("r#{name}")))
         .map_err(|_| syn::Error::new(Span::call_site(), format!("invalid Rust name `{name}`")))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use proc_macro2::Span;
+    use wit_parser::Resolve;
+
+    #[test]
+    fn unchanged_use_omits_redundant_alias() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../wasm-junction/tests/fixtures/dependencies/wit");
+        let mut resolve = Resolve::default();
+        let (package, _) = resolve.push_path(path).unwrap();
+        let tokens = super::generate(&resolve, package, Span::call_site())
+            .unwrap()
+            .to_string();
+        assert!(
+            tokens.contains("pub use super :: types :: Author ;"),
+            "{tokens}"
+        );
+        assert!(!tokens.contains("Author as Author"));
+    }
 }
