@@ -4,6 +4,7 @@
 #![warn(missing_docs)]
 
 mod host;
+mod reload;
 mod resources;
 mod runner;
 mod stream_host;
@@ -16,6 +17,7 @@ mod stream_bindings {
 }
 
 pub use host::{FixtureHost, RoutedHost, sample_note, sample_summary};
+pub use reload::{ReloadGreeter, ReloadHost};
 pub use resources::ResourceHost;
 pub use runner::{
     Fixture, FixtureError, ResourceFixture, RoutedFixture, StreamFixture, run, run_resources,

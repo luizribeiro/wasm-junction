@@ -15,9 +15,15 @@ struct TraceState {
 
 /// Middleware that records calls, returns, traps, and invocation boundaries.
 #[derive(Clone, Default)]
-pub struct Trace(Arc<Mutex<TraceState>>);
+pub struct Trace(Arc<Mutex<TraceState>>, bool);
 
 impl Trace {
+    /// Creates a tracer that also records component load, reload, and unload events.
+    #[must_use]
+    pub fn with_lifecycle() -> Self {
+        Self(Arc::default(), true)
+    }
+
     /// Returns a snapshot of the recorded entries.
     #[must_use]
     pub fn entries(&self) -> Vec<String> {
@@ -60,6 +66,21 @@ impl Middleware for Trace {
 
     fn event(&self, event: &Event) {
         match event {
+            Event::Load { component, exports } if self.1 => {
+                self.record(format!("load {component} [{}]", interfaces(exports)));
+            }
+            Event::Reload {
+                component,
+                old_exports,
+                new_exports,
+            } if self.1 => self.record(format!(
+                "reload {component} [{}] -> [{}]",
+                interfaces(old_exports),
+                interfaces(new_exports)
+            )),
+            Event::Unload { component } if self.1 => {
+                self.record(format!("unload {component}"));
+            }
             Event::InvocationStart { component } => {
                 self.record(format!("invocation start {component}"));
             }
@@ -80,6 +101,14 @@ impl Middleware for Trace {
             _ => {}
         }
     }
+}
+
+fn interfaces(values: &[Arc<str>]) -> String {
+    values
+        .iter()
+        .map(AsRef::as_ref)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 impl Trace {
