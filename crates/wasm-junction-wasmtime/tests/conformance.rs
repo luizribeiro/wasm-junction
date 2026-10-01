@@ -64,11 +64,11 @@ fn routed_calls_use_fresh_callee_instances() {
     let fixture = block_on(RoutedFixture::new(engine.clone())).unwrap();
     assert_eq!(
         block_on(fixture.write("write", "one")).unwrap(),
-        "host: one #1"
+        "host[session=42, hop=writer-to-translator]: one #1"
     );
     assert_eq!(
         block_on(fixture.write("write", "two")).unwrap(),
-        "host: two #1"
+        "host[session=42, hop=writer-to-translator]: two #1"
     );
     assert_eq!(engine.instantiations(), 4);
 }

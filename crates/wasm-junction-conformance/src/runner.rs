@@ -2,12 +2,12 @@ use std::error::Error;
 use std::fmt::{self, Display};
 use std::sync::Arc;
 
-use wasm_junction::{App, CallError, Component, Engine, TypedCall, Vals};
+use wasm_junction::{App, CallError, Component, Engine, Vals};
 
 use crate::host::summary;
 use crate::{
-    EXPECTED_ROUTED_TRACE, EXPECTED_TRACE, FixtureHost, RoutedHost, SUMMARIZER, Trace, component,
-    summarizer, translator_component, writer, writer_component,
+    EXPECTED_ROUTED_TRACE, EXPECTED_TRACE, FixtureHost, RoutedHost, SUMMARIZER, SessionId, Trace,
+    component, summarizer, translator_component, writer, writer_component,
 };
 
 /// A loaded conformance fixture available for additional engine assertions.
@@ -19,7 +19,7 @@ pub struct Fixture {
 
 /// A loaded pair of components for routed-call assertions.
 pub struct RoutedFixture {
-    app: App,
+    writer: writer::Writer,
     host: RoutedHost,
     trace: Trace,
 }
@@ -48,7 +48,14 @@ impl RoutedFixture {
         app.load_all([translator, writer])
             .await
             .map_err(FixtureError::source)?;
-        Ok(Self { app, host, trace })
+        let writer = app
+            .get::<writer::Writer>("writer")
+            .map_err(FixtureError::source)?;
+        Ok(Self {
+            writer,
+            host,
+            trace,
+        })
     }
 
     /// Invokes the writer's plain or async function.
@@ -57,11 +64,14 @@ impl RoutedFixture {
     ///
     /// Returns [`CallError`] when middleware or any hop fails.
     pub async fn write(&self, function: &str, text: &str) -> Result<String, CallError> {
-        let values = self
-            .app
-            .call("writer", crate::WRITER, function, vec![text.into()])
-            .await?;
-        writer::Write::decode_output(&values).map_err(CallError::from)
+        let writer = self.writer.with(SessionId(42));
+        match function {
+            "write" => writer.write(text).await,
+            "write-async" => writer.write_async(text).await,
+            _ => Err(CallError::unavailable(format!(
+                "writer has no `{function}` function"
+            ))),
+        }
     }
 
     /// Returns the host provider called by the translator.
@@ -168,8 +178,14 @@ pub async fn run(engine: impl Engine + 'static) -> Result<Fixture, FixtureError>
 pub async fn run_routed(engine: impl Engine + 'static) -> Result<RoutedFixture, FixtureError> {
     let fixture = RoutedFixture::new(engine).await?;
     for (function, expected) in [
-        ("write", "host: hello #1"),
-        ("write-async", "host: async #1"),
+        (
+            "write",
+            "host[session=42, hop=writer-to-translator]: hello #1",
+        ),
+        (
+            "write-async",
+            "host[session=42, hop=writer-to-translator]: async #1",
+        ),
     ] {
         let input = function.strip_prefix("write-").unwrap_or("hello");
         let output = fixture

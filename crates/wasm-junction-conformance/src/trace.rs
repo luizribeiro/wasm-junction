@@ -2,6 +2,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use wasm_junction::{Call, CallError, Event, Middleware, Next, Val, Vals};
 
+use crate::{SessionId, TranslatorHop};
+
 /// Middleware that records calls, returns, traps, and invocation boundaries.
 #[derive(Clone, Default)]
 pub struct Trace(Arc<Mutex<Vec<String>>>);
@@ -31,8 +33,13 @@ impl Trace {
 }
 
 impl Middleware for Trace {
-    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
-        let label = call.to_string();
+    async fn call(&self, mut call: Call, next: Next) -> Result<Vals, CallError> {
+        if matches!(&call.caller, wasm_junction::Caller::Component(name) if name.as_ref() == "writer")
+            && call.callee.as_ref() == "translator"
+        {
+            call.extensions_mut().insert(TranslatorHop);
+        }
+        let label = format!("{call}{}", call_data(&call));
         self.record(format!("call {label}({})", vals(&call.args)));
         let result = next.run(call).await;
         match &result {
@@ -52,6 +59,21 @@ impl Middleware for Trace {
             }
             _ => {}
         }
+    }
+}
+
+fn call_data(call: &Call) -> String {
+    let mut values = Vec::new();
+    if let Some(session) = call.extensions().get::<SessionId>() {
+        values.push(format!("session={}", session.0));
+    }
+    if call.extensions().get::<TranslatorHop>().is_some() {
+        values.push("hop=writer-to-translator".to_owned());
+    }
+    if values.is_empty() {
+        String::new()
+    } else {
+        format!(" [{}]", values.join(", "))
     }
 }
 
@@ -157,28 +179,28 @@ pub const EXPECTED_TRACE: &[&str] = &[
 /// Exact trace produced by the successful routed-call scenario.
 pub const EXPECTED_ROUTED_TRACE: &[&str] = &[
     "invocation start writer",
-    "call host → writer example:notes/writer@0.1.0.write(\"hello\")",
+    "call host → writer example:notes/writer@0.1.0.write [session=42](\"hello\")",
     "invocation start translator",
-    "call writer → translator example:notes/translator@0.1.0.translate(\"hello\")",
+    "call writer → translator example:notes/translator@0.1.0.translate [session=42, hop=writer-to-translator](\"hello\")",
     "invocation start host",
-    "call translator → host example:notes/decoration@0.1.0.decorate(\"hello\")",
-    "return translator → host example:notes/decoration@0.1.0.decorate(\"host: hello\")",
+    "call translator → host example:notes/decoration@0.1.0.decorate [session=42, hop=writer-to-translator](\"hello\")",
+    "return translator → host example:notes/decoration@0.1.0.decorate [session=42, hop=writer-to-translator](\"host[session=42, hop=writer-to-translator]: hello\")",
     "invocation end host",
-    "return writer → translator example:notes/translator@0.1.0.translate(\"host: hello #1\")",
+    "return writer → translator example:notes/translator@0.1.0.translate [session=42, hop=writer-to-translator](\"host[session=42, hop=writer-to-translator]: hello #1\")",
     "invocation end translator",
-    "return host → writer example:notes/writer@0.1.0.write(\"host: hello #1\")",
+    "return host → writer example:notes/writer@0.1.0.write [session=42](\"host[session=42, hop=writer-to-translator]: hello #1\")",
     "invocation end writer",
     "invocation start writer",
-    "call host → writer example:notes/writer@0.1.0.write-async(\"async\")",
+    "call host → writer example:notes/writer@0.1.0.write-async [session=42](\"async\")",
     "invocation start translator",
-    "call writer → translator example:notes/translator@0.1.0.translate-async(\"async\")",
+    "call writer → translator example:notes/translator@0.1.0.translate-async [session=42, hop=writer-to-translator](\"async\")",
     "invocation start host",
-    "call translator → host example:notes/decoration@0.1.0.decorate-async(\"async\")",
-    "return translator → host example:notes/decoration@0.1.0.decorate-async(\"host: async\")",
+    "call translator → host example:notes/decoration@0.1.0.decorate-async [session=42, hop=writer-to-translator](\"async\")",
+    "return translator → host example:notes/decoration@0.1.0.decorate-async [session=42, hop=writer-to-translator](\"host[session=42, hop=writer-to-translator]: async\")",
     "invocation end host",
-    "return writer → translator example:notes/translator@0.1.0.translate-async(\"host: async #1\")",
+    "return writer → translator example:notes/translator@0.1.0.translate-async [session=42, hop=writer-to-translator](\"host[session=42, hop=writer-to-translator]: async #1\")",
     "invocation end translator",
-    "return host → writer example:notes/writer@0.1.0.write-async(\"host: async #1\")",
+    "return host → writer example:notes/writer@0.1.0.write-async [session=42](\"host[session=42, hop=writer-to-translator]: async #1\")",
     "invocation end writer",
 ];
 

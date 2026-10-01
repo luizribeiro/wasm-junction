@@ -30,6 +30,9 @@ pub const CYCLE_A: &str = cycle_a::INTERFACE;
 /// The second exported interface in the cyclic fixture.
 pub const CYCLE_B: &str = cycle_b::INTERFACE;
 
+pub(crate) struct SessionId(pub u32);
+pub(crate) struct TranslatorHop;
+
 /// Returns the notes-summary fixture component.
 #[must_use]
 pub fn component() -> &'static [u8] {

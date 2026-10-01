@@ -3,7 +3,7 @@ use std::sync::{Arc, MutexGuard};
 
 use wasm_junction::{CallContext, Caller, Provided, Val};
 
-use crate::{decoration, notes, types};
+use crate::{SessionId, TranslatorHop, decoration, notes, types};
 
 /// The host implementation used by the notes-summary fixture.
 #[derive(Clone, Default)]
@@ -59,7 +59,20 @@ impl RoutedHost {
 
     fn decorate(&self, context: &CallContext, text: &str) -> String {
         self.lock().push(context.caller().clone());
-        format!("host: {text}")
+        let session = context.extensions().get::<SessionId>().map(|value| value.0);
+        let hop = if context.extensions().get::<TranslatorHop>().is_some() {
+            Some("writer-to-translator")
+        } else {
+            None
+        };
+        match (session, hop) {
+            (None, None) => format!("host: {text}"),
+            (session, hop) => format!(
+                "host[session={}, hop={}]: {text}",
+                session.map_or_else(|| "missing".to_owned(), |value| value.to_string()),
+                hop.unwrap_or("missing")
+            ),
+        }
     }
 
     fn lock(&self) -> MutexGuard<'_, Vec<Caller>> {
