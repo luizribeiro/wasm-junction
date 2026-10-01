@@ -4,8 +4,14 @@
 
 mod support;
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use support::{FakeEngine, block_on, component_bytes};
-use wasm_junction::{App, CallContext, Component, InterfaceHandle, TypedCall};
+
+use wasm_junction::{
+    App, Call, CallContext, CallError, Caller, Component, InterfaceHandle, Middleware, Next,
+    TypedCall, Vals,
+};
 
 wasm_junction::bindgen!({ path: "tests/fixtures/keywords/wit" });
 
@@ -48,6 +54,29 @@ struct ProviderNames;
 impl host_provider::Host for ProviderNames {
     fn ping(&self, _cx: &CallContext) -> String {
         "pong".to_owned()
+    }
+}
+
+#[derive(Clone, Default)]
+struct RecursiveHost(Arc<Mutex<Option<host::HostHandle>>>);
+
+impl host::Host for RecursiveHost {
+    fn host_handle(&self, cx: &CallContext, value: String) -> String {
+        let handle = self.0.lock().unwrap().clone().unwrap();
+        support::block_on(handle.within(cx).host_handle(&value))
+            .unwrap_or_else(|error| error.to_string())
+    }
+}
+
+struct CountHostCalls(Arc<AtomicUsize>);
+
+impl Middleware for CountHostCalls {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.callee.as_ref() == "plugin" {
+            assert_eq!(call.caller, Caller::Host);
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+        next.run(call).await
     }
 }
 
@@ -125,4 +154,26 @@ fn reserved_interface_names_generate_distinct_handles() {
 
     requires_handle::<host_provider::HostProviderHandle>();
     let _provided = host_provider::provider(ProviderNames);
+}
+
+#[test]
+fn host_mediated_cycles_keep_depth_and_host_callers() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider = RecursiveHost::default();
+    let app = App::builder()
+        .engine(FakeEngine)
+        .provide(host::provider(provider.clone()))
+        .middleware(CountHostCalls(calls.clone()))
+        .max_call_depth(3)
+        .build()
+        .unwrap();
+    let component = component_bytes(include_str!("fixtures/keywords/wit/package.wit"), "plugin");
+    block_on(app.load(Component::from_bytes(component).unwrap().named("plugin"))).unwrap();
+    let handle = app.get::<host::HostHandle>("plugin").unwrap();
+    *provider.0.lock().unwrap() = Some(handle.clone());
+
+    let result = block_on(handle.host_handle("cycle")).unwrap();
+
+    assert_eq!(result, "maximum call depth of 3 exceeded");
+    assert_eq!(calls.load(Ordering::Relaxed), 4);
 }

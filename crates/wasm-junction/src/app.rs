@@ -421,6 +421,7 @@ impl App {
         args: Vals,
         context: InvocationContext,
     ) -> Result<Vals, CallError> {
+        self.check_call_depth(&context)?;
         let (compiled, component_name, interface) = {
             let components = self.lock_components();
             let loaded = components.get(component).ok_or_else(|| {
@@ -483,12 +484,7 @@ impl App {
                     compiled,
                 }) => {
                     let context = context.descend();
-                    if context.call_depth() > self.0.max_call_depth {
-                        return Err(CallError::refused(format!(
-                            "maximum call depth of {} exceeded",
-                            self.0.max_call_depth
-                        )));
-                    }
+                    self.check_call_depth(&context)?;
                     (
                         name.clone(),
                         interface,
@@ -554,6 +550,17 @@ impl App {
             component: call.callee,
         });
         result
+    }
+
+    fn check_call_depth(&self, context: &InvocationContext) -> Result<(), CallError> {
+        if context.call_depth() > self.0.max_call_depth {
+            Err(CallError::refused(format!(
+                "maximum call depth of {} exceeded",
+                self.0.max_call_depth
+            )))
+        } else {
+            Ok(())
+        }
     }
 
     fn emit(&self, event: &Event) {
