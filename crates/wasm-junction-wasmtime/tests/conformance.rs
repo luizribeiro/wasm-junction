@@ -7,13 +7,15 @@ use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
 
 use wasm_junction::{
-    App, Call, CallError, CallErrorKind, Component, Engine, Middleware, Next, Val, Vals, WasiConfig,
+    App, Call, CallError, CallErrorKind, Caller, Component, Engine, Middleware, Next, Val, Vals,
+    WasiConfig,
 };
 use wasm_junction_conformance::{Fixture, FixtureHost, SUMMARIZER, component, run, sample_note};
 use wasm_junction_wasmtime::WasmtimeEngine;
 
 const WASI_COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wasi-test.wasm"));
 const ENVIRONMENT: &str = "test:wasi/environment@0.1.0";
+const WASI_ENVIRONMENT: &str = "wasi:cli/environment@0.2.12";
 
 struct ThreadWake(std::thread::Thread);
 
@@ -54,11 +56,39 @@ fn every_call_uses_a_fresh_store() {
     assert_eq!(fixture.host().normalizations(), 2);
 }
 
+struct EnvironmentBehavior(Arc<Mutex<Vec<Call>>>);
+
+impl Middleware for EnvironmentBehavior {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.interface.as_ref() != WASI_ENVIRONMENT {
+            return next.run(call).await;
+        }
+        let number = {
+            let mut calls = self.0.lock().unwrap();
+            calls.push(call.clone());
+            calls.len()
+        };
+        match number {
+            3 => Err(CallError::refused("environment refused")),
+            4 => {
+                next.run(call).await?;
+                Ok(vec![Val::List(vec![Val::Tuple(vec![
+                    Val::from("GREETING"),
+                    Val::from("fixed"),
+                ])])])
+            }
+            _ => next.run(call).await,
+        }
+    }
+}
+
 #[test]
-fn wasi_guest_reads_only_configured_environment() {
+fn environment_gate_traces_refuses_and_rewrites() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
     let app = App::builder()
         .engine(WasmtimeEngine::new().unwrap())
         .wasi(WasiConfig::new().env("GREETING", "hello from WASI"))
+        .middleware(EnvironmentBehavior(calls.clone()))
         .build()
         .unwrap();
     block_on(app.load(Component::from_bytes(WASI_COMPONENT).unwrap().named("wasi"))).unwrap();
@@ -66,12 +96,23 @@ fn wasi_guest_reads_only_configured_environment() {
     let configured =
         block_on(app.call("wasi", ENVIRONMENT, "read", vec![Val::from("GREETING")])).unwrap();
     let absent = block_on(app.call("wasi", ENVIRONMENT, "read", vec![Val::from("PATH")])).unwrap();
+    let refused =
+        block_on(app.call("wasi", ENVIRONMENT, "read", vec![Val::from("GREETING")])).unwrap_err();
+    let rewritten =
+        block_on(app.call("wasi", ENVIRONMENT, "read", vec![Val::from("GREETING")])).unwrap();
 
     assert_eq!(
         configured,
         [Val::Option(Some(Box::new(Val::from("hello from WASI"))))]
     );
     assert_eq!(absent, [Val::Option(None)]);
+    assert_eq!(refused.kind(), CallErrorKind::Refused);
+    assert_eq!(rewritten, [Val::Option(Some(Box::new(Val::from("fixed"))))]);
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls.len(), 4);
+    assert_eq!(calls[0].caller, Caller::Component(Arc::from("wasi")));
+    assert_eq!(calls[0].function.as_ref(), "get-environment");
+    assert!(calls[0].args.is_empty());
 }
 
 #[test]

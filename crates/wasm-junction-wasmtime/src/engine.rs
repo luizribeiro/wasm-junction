@@ -11,13 +11,14 @@ use wasmtime_wasi::{WasiCtxBuilder, WasiCtxView, WasiView};
 
 use crate::imports::define_imports;
 use crate::values::{from_wasmtime, to_wasmtime};
-use crate::wasi::WasiState;
+use crate::wasi::{WasiState, add_environment_gate};
 
 pub(crate) struct StoreData {
     pub(crate) imports: Arc<dyn ImportDispatcher>,
     pub(crate) context: InvocationContext,
     pub(crate) component: Arc<str>,
     wasi: WasiState,
+    pub(crate) gated_wasi: Arc<std::sync::Mutex<WasiState>>,
 }
 
 impl WasiView for StoreData {
@@ -76,6 +77,8 @@ impl Engine for WasmtimeEngine {
             let mut linker = Linker::new(&self.engine);
             wasmtime_wasi::p2::add_to_linker_async(&mut linker)
                 .map_err(|error| EngineError::new(error.to_string()))?;
+            add_environment_gate(&mut linker)
+                .map_err(|error| EngineError::new(error.to_string()))?;
             define_imports(&mut linker, &component)
                 .map_err(|error| EngineError::new(error.to_string()))?;
             let pre = linker
@@ -109,7 +112,12 @@ impl CompiledComponent for Compiled {
         Box::pin(async move {
             self.call_export(imports, context, component, &interface, &function, args)
                 .await
-                .map_err(|error| CallError::trap(error.to_string()))
+                .map_err(|error| {
+                    error
+                        .downcast_ref::<CallError>()
+                        .cloned()
+                        .unwrap_or_else(|| CallError::trap(error.to_string()))
+                })
         })
     }
 }
@@ -131,6 +139,7 @@ impl Compiled {
                 context,
                 component,
                 wasi: wasi_context(&self.wasi),
+                gated_wasi: Arc::new(std::sync::Mutex::new(wasi_context(&self.wasi))),
             },
         );
         self.instantiations.fetch_add(1, Ordering::Relaxed);
