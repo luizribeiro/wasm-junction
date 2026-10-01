@@ -1,0 +1,19 @@
+package test:resources@1.0.0;
+
+interface resources {
+  resource session {
+    constructor(user: string);
+    profile: async func() -> string;
+    new: func() -> string;
+    lookup: static func(user: string) -> option<session>;
+  }
+
+  resource host;
+  resource provider;
+
+  record envelope { value: session }
+
+  consume: func(value: session) -> string;
+  maybe: func(value: option<session>) -> option<session>;
+  choose: func(value: result<session, string>) -> result<session, string>;
+}

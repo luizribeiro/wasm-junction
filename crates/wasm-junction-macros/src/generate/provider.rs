@@ -19,7 +19,7 @@ impl Generator<'_> {
             .map(|resource| {
                 Ok((
                     resource.name,
-                    super::rust_ident(&resource.name.to_snake_case())?,
+                    resource_table_ident(resource.name)?,
                     resource.ident,
                 ))
             })
@@ -36,7 +36,7 @@ impl Generator<'_> {
         let drops = resources
             .iter()
             .map(|(name, field, associated)| {
-                let method = super::rust_ident(&format!("drop_{field}"))?;
+                let method = super::rust_ident(&format!("drop_{}", name.to_snake_case()))?;
                 Ok(quote! {
                     #name => {
                         let value: T::#associated = self.#field.take(&resource)?;
@@ -226,7 +226,7 @@ impl Generator<'_> {
                     .as_deref()
                     .ok_or_else(|| Self::unsupported("resource", "anonymous resource"))?;
                 Ok(Some(ResourceUse {
-                    table: super::rust_ident(&name.to_snake_case())?,
+                    table: resource_table_ident(name)?,
                     borrowed,
                 }))
             }
@@ -378,6 +378,13 @@ struct ResourceUse {
     borrowed: bool,
 }
 
+fn resource_table_ident(name: &str) -> syn::Result<proc_macro2::Ident> {
+    super::rust_ident(&format!(
+        "__wasm_junction_resource_{}",
+        name.to_snake_case()
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
@@ -418,11 +425,11 @@ mod tests {
         );
         assert!(tokens.contains("fn drop_resource"), "{tokens}");
         assert!(tokens.contains("Host > :: drop_session"), "{tokens}");
-        assert!(tokens.contains("self . session . borrow"), "{tokens}");
-        assert!(tokens.contains("self . session . take"), "{tokens}");
+        assert!(tokens.contains("resource_session . borrow"), "{tokens}");
+        assert!(tokens.contains("resource_session . take"), "{tokens}");
         assert!(tokens.contains("as_deref"), "{tokens}");
         assert!(tokens.contains("value_ok_borrow"), "{tokens}");
         assert!(tokens.contains("match value"), "{tokens}");
-        assert!(tokens.contains("session . insert"), "{tokens}");
+        assert!(tokens.contains("resource_session . insert"), "{tokens}");
     }
 }
