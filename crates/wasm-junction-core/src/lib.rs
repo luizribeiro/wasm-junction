@@ -8,6 +8,7 @@ mod engine;
 mod error;
 mod future;
 mod resource;
+mod stream;
 mod values;
 
 pub use context::{Extensions, InvocationContext};
@@ -17,4 +18,5 @@ pub use engine::{
 pub use error::{CallError, CallErrorKind};
 pub use future::{BoxFuture, HostBound, MaybeSend};
 pub use resource::{Resource, ResourceOwnership, ResourceTable};
+pub use stream::{InputStream, OutputStream, StreamError, StreamHandle};
 pub use values::{TypeError, Val, Vals};
