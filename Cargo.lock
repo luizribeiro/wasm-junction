@@ -940,7 +940,6 @@ version = "0.0.0"
 dependencies = [
  "tokio",
  "wasm-junction",
- "wasm-junction-wasmtime",
 ]
 
 [[package]]

@@ -22,3 +22,5 @@ The files are intentionally self-contained:
 - `src/main.rs` uses Tokio to provide users, build the app, load the component, and make typed
   calls.
 - `tests/` runs the executable and checks its complete output.
+
+Call `.engine(…)` on the builder to override the target's default engine.

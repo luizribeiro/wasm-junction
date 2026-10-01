@@ -15,4 +15,3 @@ workspace = true
 [dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
 wasm-junction = { path = "../../crates/wasm-junction", version = "=0.0.0" }
-wasm-junction-wasmtime = { path = "../../crates/wasm-junction-wasmtime", version = "=0.0.0" }

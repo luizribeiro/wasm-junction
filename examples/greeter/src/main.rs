@@ -12,7 +12,6 @@ use std::error::Error;
 use bindings::{greeter, users};
 use trace::Trace;
 use wasm_junction::{App, CallContext, Component};
-use wasm_junction_wasmtime::WasmtimeEngine;
 
 const COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/greeter.wasm"));
 
@@ -44,7 +43,6 @@ fn user(name: &str, language: &str) -> users::User {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn Error>> {
     let app = App::builder()
-        .engine(WasmtimeEngine::new()?)
         .provide(users::provider(Users::new()))
         .middleware(Trace)
         .build()?;
