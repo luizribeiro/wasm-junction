@@ -65,9 +65,7 @@ impl host::Host for StreamHost {
     }
 
     async fn audit(&self, _cx: &CallContext, lines: InputStream) -> Result<(), CallError> {
-        if let Ok(bytes) = lines.read_all().await {
-            self.lock().audit = bytes;
-        }
+        self.lock().audit = lines.read_all().await?;
         Ok(())
     }
 
@@ -76,10 +74,8 @@ impl host::Host for StreamHost {
         _cx: &CallContext,
         bytes: Option<InputStream>,
     ) -> Result<Option<OutputStream>, CallError> {
-        Ok(match bytes {
-            Some(bytes) => bytes.read_all().await.ok().map(OutputStream::from_bytes),
-            None => None,
-        })
+        let Some(bytes) = bytes else { return Ok(None) };
+        Ok(Some(OutputStream::from_bytes(bytes.read_all().await?)))
     }
 
     fn chunks(&self, _cx: &CallContext) -> Result<OutputStream, CallError> {
@@ -115,7 +111,7 @@ fn ready<F: Future>(future: F) -> F::Output {
 
 #[cfg(test)]
 mod tests {
-    use wasm_junction::StreamHandle;
+    use wasm_junction::{CallErrorKind, StreamHandle};
 
     use super::*;
 
@@ -133,5 +129,21 @@ mod tests {
             InputStream::try_from(StreamHandle::from(OutputStream::from_bytes(b"entry"))).unwrap();
         ready(host::Host::audit(&host, &context, audit)).unwrap();
         assert_eq!(host.audit(), b"entry");
+    }
+
+    #[test]
+    fn failed_read_fails_the_host_call() {
+        let host = StreamHost::default();
+        let context = CallContext::for_test("streams");
+        let (writer, output) = OutputStream::channel();
+        let input = InputStream::try_from(StreamHandle::from(output)).unwrap();
+        writer.abort();
+
+        let error = ready(host::Host::audit(&host, &context, input)).unwrap_err();
+        assert_eq!(error.kind(), CallErrorKind::Trap);
+        assert_eq!(
+            error.to_string(),
+            "stream was aborted when its invocation ended"
+        );
     }
 }
