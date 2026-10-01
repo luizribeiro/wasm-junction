@@ -1,14 +1,15 @@
 //! Cleanup behavior for guest-owned host resources.
 
 use std::future::Future;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 
 use wasm_junction::{
     App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Component, Handle, Provided,
-    Provider, Resource, Val, Vals,
+    Provider, Resource, ResourceTable, Val, Vals,
 };
-use wasm_junction_conformance::{RESOURCE_CLIENT, RESOURCE_HOST, ResourceHost, resource_component};
+use wasm_junction_conformance::{RESOURCE_CLIENT, RESOURCE_HOST, resource_component};
 use wasm_junction_wasmtime::WasmtimeEngine;
 
 struct ThreadWake(std::thread::Thread);
@@ -41,10 +42,23 @@ fn block_on<F: Future>(future: F) -> F::Output {
     }
 }
 
-#[derive(Clone, Default)]
-struct FailingDropHost {
-    host: ResourceHost,
+#[derive(Clone)]
+struct FailingDropHost(Arc<FailingDropState>);
+
+struct FailingDropState {
+    sessions: ResourceTable<String>,
     attempts: Arc<Mutex<Vec<DropAttempt>>>,
+    active: AtomicUsize,
+}
+
+impl Default for FailingDropHost {
+    fn default() -> Self {
+        Self(Arc::new(FailingDropState {
+            sessions: ResourceTable::new(RESOURCE_HOST, "session"),
+            attempts: Arc::default(),
+            active: AtomicUsize::new(0),
+        }))
+    }
 }
 
 impl FailingDropHost {
@@ -62,26 +76,53 @@ impl FailingDropHost {
     }
 
     fn remove_failed_resource(&self) {
-        self.host
-            .drop_resource(
-                &CallContext::for_test("resource-client"),
-                Resource::owned(RESOURCE_HOST, "session", 0),
-            )
+        self.0
+            .sessions
+            .take(&Resource::owned(RESOURCE_HOST, "session", 0))
             .unwrap();
+        self.0.active.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    fn active_resources(&self) -> usize {
+        self.0.active.load(Ordering::Relaxed)
     }
 }
 
 impl Provider for FailingDropHost {
     fn call<'a>(
         &'a self,
-        context: &'a CallContext,
+        _context: &'a CallContext,
         call: Call,
     ) -> BoxFuture<'a, Result<Vals, CallError>> {
-        self.host.call(context, call)
+        Box::pin(async move {
+            match call.function.as_ref() {
+                "[constructor]session" => {
+                    let [Val::String(user)] = call.args.as_slice() else {
+                        return Err(CallError::trap("session constructor expects a user"));
+                    };
+                    let resource = self.0.sessions.insert(user.clone())?;
+                    self.0.active.fetch_add(1, Ordering::Relaxed);
+                    Ok(vec![Val::Resource(resource)])
+                }
+                "[method]session.profile" => {
+                    let [Val::Resource(session)] = call.args.as_slice() else {
+                        return Err(CallError::trap("session.profile expects a session"));
+                    };
+                    Ok(vec![Val::from(
+                        self.0
+                            .sessions
+                            .with(session, |user| format!("profile:{user}"))?,
+                    )])
+                }
+                function => Err(CallError::unavailable(format!(
+                    "failing resource host has no `{function}` function"
+                ))),
+            }
+        })
     }
 
     fn drop_resource(&self, cx: &CallContext, resource: Resource) -> Result<(), CallError> {
-        self.attempts.lock().unwrap().push(DropAttempt {
+        self.0.attempts.lock().unwrap().push(DropAttempt {
             resource: resource.id(),
             caller: cx.caller().to_string(),
             marker: cx.extensions().get::<DropMarker>().map(|marker| marker.0),
@@ -89,7 +130,9 @@ impl Provider for FailingDropHost {
         if resource.id() == 0 {
             Err(CallError::trap("drop refused for session#0"))
         } else {
-            self.host.drop_resource(cx, resource)
+            drop(self.0.sessions.take(&resource)?);
+            self.0.active.fetch_sub(1, Ordering::Relaxed);
+            Ok(())
         }
     }
 }
@@ -102,7 +145,7 @@ fn successful_calls_report_cleanup_failures_after_attempting_every_drop() {
     assert_eq!(error.kind(), CallErrorKind::Trap);
     assert!(error.to_string().contains("drop refused for session#0"));
     assert_eq!(
-        *provider.attempts.lock().unwrap(),
+        *provider.0.attempts.lock().unwrap(),
         [
             DropAttempt {
                 resource: 0,
@@ -116,7 +159,7 @@ fn successful_calls_report_cleanup_failures_after_attempting_every_drop() {
             }
         ]
     );
-    assert_eq!(provider.host.active_resources(), 1);
+    assert_eq!(provider.active_resources(), 1);
     provider.remove_failed_resource();
 }
 
@@ -137,7 +180,7 @@ fn traps_include_cleanup_failures_after_attempting_every_drop() {
         "{error}"
     );
     assert_eq!(
-        *provider.attempts.lock().unwrap(),
+        *provider.0.attempts.lock().unwrap(),
         [
             DropAttempt {
                 resource: 0,
@@ -151,6 +194,6 @@ fn traps_include_cleanup_failures_after_attempting_every_drop() {
             }
         ]
     );
-    assert_eq!(provider.host.active_resources(), 1);
+    assert_eq!(provider.active_resources(), 1);
     provider.remove_failed_resource();
 }
