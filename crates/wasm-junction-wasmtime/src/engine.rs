@@ -41,6 +41,7 @@ impl WasiView for StoreData {
 #[derive(Clone)]
 pub struct WasmtimeEngine {
     engine: RuntimeEngine,
+    linker: Linker<StoreData>,
     instantiations: Arc<AtomicU64>,
 }
 
@@ -55,8 +56,13 @@ impl WasmtimeEngine {
         config
             .wasm_component_model_async(true)
             .concurrency_support(true);
+        let engine = RuntimeEngine::new(&config)?;
+        let mut linker = Linker::new(&engine);
+        add_ungated_interfaces(&mut linker)?;
+        add_gates(&mut linker)?;
         Ok(Self {
-            engine: RuntimeEngine::new(&config)?,
+            engine,
+            linker,
             instantiations: Arc::new(AtomicU64::new(0)),
         })
     }
@@ -81,10 +87,7 @@ impl Engine for WasmtimeEngine {
         Box::pin(async move {
             let component = Component::new(&self.engine, bytes)
                 .map_err(|error| EngineError::new(error.to_string()))?;
-            let mut linker = Linker::new(&self.engine);
-            add_ungated_interfaces(&mut linker)
-                .map_err(|error| EngineError::new(error.to_string()))?;
-            add_gates(&mut linker).map_err(|error| EngineError::new(error.to_string()))?;
+            let mut linker = self.linker.clone();
             let resources = define_imports(&mut linker, &component)
                 .map_err(|error| EngineError::new(error.to_string()))?;
             let pre = linker
