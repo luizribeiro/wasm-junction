@@ -12,9 +12,9 @@ use wasm_junction::{
     WasiConfig,
 };
 use wasm_junction_conformance::{
-    CYCLE_A, Fixture, FixtureHost, RoutedFixture, RoutedHost, SUMMARIZER, WRITER, component,
-    cycle_a_component, cycle_b_component, run, run_routed, sample_note, translator_component,
-    writer_component,
+    CYCLE_A, Fixture, FixtureHost, RESOURCE_CLIENT, ResourceHost, RoutedFixture, RoutedHost,
+    SUMMARIZER, Trace, WRITER, component, cycle_a_component, cycle_b_component, resource_component,
+    run, run_routed, sample_note, translator_component, writer_component,
 };
 use wasm_junction_wasmtime::WasmtimeEngine;
 
@@ -56,6 +56,40 @@ fn successful_scenario_matches_the_engine_neutral_trace() {
 #[test]
 fn routed_scenario_matches_the_engine_neutral_trace() {
     block_on(run_routed(WasmtimeEngine::new().unwrap())).unwrap();
+}
+
+#[test]
+fn host_resource_calls_cross_middleware_and_the_engine() {
+    let trace = Trace::default();
+    let app = App::builder()
+        .engine(WasmtimeEngine::new().unwrap())
+        .provide(ResourceHost::default().provided())
+        .middleware(trace.clone())
+        .build()
+        .unwrap();
+    let component = Component::from_bytes(resource_component())
+        .unwrap()
+        .named("resource-client");
+    block_on(app.load(component)).unwrap();
+    let result = block_on(app.call(
+        "resource-client",
+        RESOURCE_CLIENT,
+        "run",
+        vec![Val::Bool(false)],
+    ))
+    .unwrap();
+    assert_eq!(result, [Val::from("profile:Ada")]);
+    let trace = trace.entries();
+    assert!(
+        trace
+            .iter()
+            .any(|entry| entry.contains("[constructor]session"))
+    );
+    assert!(
+        trace
+            .iter()
+            .any(|entry| entry.contains("[method]session.profile"))
+    );
 }
 
 #[test]

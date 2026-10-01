@@ -1,19 +1,22 @@
 use std::sync::Arc;
 
-use wasm_junction_core::{CallError, ImportDispatcher, InvocationContext, Vals};
+use wasm_junction_core::{CallError, ImportDispatcher, InvocationContext, Resource, Vals};
 use wasmtime::AsContextMut;
 use wasmtime::bail;
 use wasmtime::component::types::ComponentItem;
-use wasmtime::component::{Component, Linker, LinkerInstance, ResourceType, Val as WasmtimeVal};
+use wasmtime::component::{
+    Component, Linker, LinkerInstance, ResourceAny, ResourceType, Val as WasmtimeVal,
+};
 
-use crate::engine::StoreData;
+use crate::engine::{StoreData, lift_resource, lower_resource};
 use crate::values::{from_wasmtime, to_wasmtime};
 
 pub(crate) fn define_imports(
     linker: &mut Linker<StoreData>,
     component: &Component,
-) -> Result<(), wasmtime::Error> {
+) -> Result<Vec<ResourceDefinition>, wasmtime::Error> {
     let engine = linker.engine().clone();
+    let mut definitions = Vec::new();
     let mut resource_types = Vec::new();
     let mut next_runtime_type = 0_u32;
     for (interface, item) in component.component_type().imports(&engine) {
@@ -52,6 +55,11 @@ pub(crate) fn define_imports(
                     .checked_add(1)
                     .ok_or_else(|| wasmtime::Error::msg("too many imported resource types"))?;
                 resource_types.push((resource, runtime_type));
+                definitions.push(ResourceDefinition {
+                    interface: Arc::from(interface),
+                    name: Arc::from(name.as_str()),
+                    runtime_type,
+                });
                 runtime_type
             };
             instance_linker.resource_concurrent(
@@ -68,7 +76,14 @@ pub(crate) fn define_imports(
             }
         }
     }
-    Ok(())
+    Ok(definitions)
+}
+
+#[derive(Clone)]
+pub(crate) struct ResourceDefinition {
+    pub(crate) interface: Arc<str>,
+    pub(crate) name: Arc<str>,
+    pub(crate) runtime_type: u32,
 }
 
 fn define_concurrent(
@@ -82,7 +97,9 @@ fn define_concurrent(
         let interface = interface.clone();
         let function = function.clone();
         Box::pin(async move {
-            let args = convert_params(params)?;
+            let args = convert_params(params, &mut |resource| {
+                accessor.with(|store| lift_resource(resource, store))
+            })?;
             let (imports, context, component) = accessor.with(|mut store| {
                 let data = store.get();
                 (
@@ -92,7 +109,9 @@ fn define_concurrent(
                 )
             });
             let values = call(imports, context, component, interface, function, args).await?;
-            set_results(results, values)
+            set_results(results, values, &mut |resource| {
+                accessor.with(|store| lower_resource(&resource, store))
+            })
         })
     })
 }
@@ -108,7 +127,9 @@ fn define_plain(
         let interface = interface.clone();
         let function = function.clone();
         Box::new(async move {
-            let args = convert_params(params)?;
+            let args = convert_params(params, &mut |resource| {
+                lift_resource(resource, store.as_context_mut())
+            })?;
             let (imports, context, component) = {
                 let mut store = store.as_context_mut();
                 let data = store.data_mut();
@@ -119,16 +140,21 @@ fn define_plain(
                 )
             };
             let values = call(imports, context, component, interface, function, args).await?;
-            set_results(results, values)
+            set_results(results, values, &mut |resource| {
+                lower_resource(&resource, store.as_context_mut())
+            })
         })
     })
 }
 
-fn convert_params(params: &[WasmtimeVal]) -> Result<Vals, wasmtime::Error> {
+fn convert_params(
+    params: &[WasmtimeVal],
+    resource: &mut impl FnMut(ResourceAny) -> Result<Resource, wasmtime::Error>,
+) -> Result<Vals, wasmtime::Error> {
     params
         .iter()
         .cloned()
-        .map(|value| from_wasmtime(value, &mut |_| bail!("unsupported host resource")))
+        .map(|value| from_wasmtime(value, resource))
         .collect()
 }
 
@@ -146,7 +172,11 @@ async fn call(
         .map_err(|error: CallError| wasmtime::Error::msg(error.to_string()))
 }
 
-fn set_results(results: &mut [WasmtimeVal], values: Vals) -> Result<(), wasmtime::Error> {
+fn set_results(
+    results: &mut [WasmtimeVal],
+    values: Vals,
+    resource: &mut impl FnMut(Resource) -> Result<ResourceAny, wasmtime::Error>,
+) -> Result<(), wasmtime::Error> {
     if results.len() != values.len() {
         bail!(
             "dispatcher returned {} values for {} result slots",
@@ -155,7 +185,7 @@ fn set_results(results: &mut [WasmtimeVal], values: Vals) -> Result<(), wasmtime
         );
     }
     for (result, value) in results.iter_mut().zip(values) {
-        *result = to_wasmtime(value, &mut |_| bail!("unsupported host resource"))?;
+        *result = to_wasmtime(value, resource)?;
     }
     Ok(())
 }
