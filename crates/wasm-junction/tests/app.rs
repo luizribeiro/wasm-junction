@@ -12,8 +12,8 @@ use support::{
 use wasm_junction::{
     App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Caller, Candidate,
     CompiledComponent, Component, Engine, EngineError, GetError, ImportDispatcher, InterfaceHandle,
-    InvocationContext, IssueKind, LoadError, Middleware, Next, Provided, Provider, TypedCall, Val,
-    Vals, WasiConfig,
+    InvocationContext, IssueKind, LoadError, Middleware, Next, Provided, Provider, Resource,
+    TypedCall, Val, Vals, WasiConfig,
 };
 
 const CLOCK: &str = "example:journal/clock@0.1.0";
@@ -319,6 +319,23 @@ fn loaded_component_exports_satisfy_compatible_imports() {
     let app = App::builder().engine(FakeEngine).build().unwrap();
     block_on(app.load(wit_component(TRANSLATOR_WIT, "service", "translator"))).unwrap();
     block_on(app.load(writer_component("writer"))).unwrap();
+
+    let error = block_on(app.call(
+        "writer",
+        "example:writer/article@1.0.0",
+        "write",
+        vec![Val::Resource(Resource::owned(
+            "example:host/files@1.0.0",
+            "file",
+            0,
+        ))],
+    ))
+    .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert_eq!(
+        error.to_string(),
+        "only plain values can cross between components"
+    );
 }
 
 #[test]
