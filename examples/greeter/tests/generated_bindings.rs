@@ -13,7 +13,9 @@ mod generated {
     wasm_junction::bindgen!({ path: "wit" });
 }
 
-use wasm_junction::{CallContext, TypedCall};
+use wasm_junction::{App, CallContext, Component, TypedCall};
+
+const COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/greeter.wasm"));
 
 struct Directory;
 
@@ -76,4 +78,25 @@ fn generated_async_views_match_the_hand_written_value_shape() {
         generated::greeter::Greet::output(Err("missing".into())),
         handwritten::greeter::Greet::output(Err("missing".into()))
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn generated_handle_calls_a_wasmtime_component() {
+    let app = App::builder()
+        .provide(generated::users::provider(Directory))
+        .build()
+        .unwrap();
+    app.load(Component::from_bytes(COMPONENT).unwrap().named("greeter"))
+        .await
+        .unwrap();
+
+    let greeter = app
+        .get::<generated::greeter::Greeter>("greeter")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        greeter.greet(42).await.unwrap(),
+        Ok("Hello, Ada!".to_owned())
+    );
+    assert_eq!(app.all::<generated::greeter::Greeter>().len(), 1);
 }

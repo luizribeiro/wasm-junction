@@ -8,6 +8,7 @@ mod definitions;
 mod display;
 mod errors;
 mod functions;
+mod handles;
 mod host;
 mod provider;
 mod reachability;
@@ -81,6 +82,7 @@ impl Generator<'_> {
             .map(|function| self.typed_call(name, function))
             .collect::<syn::Result<Vec<_>>>()?;
         let host = self.host_trait(name, self.resolve.interfaces[id].functions.values())?;
+        let handle = self.handle(name, self.resolve.interfaces[id].functions.values())?;
         let provider = Self::provider(name, self.resolve.interfaces[id].functions.values())?;
         Ok(quote! {
             #[doc = concat!("Bindings for the `", #interface, "` interface.")]
@@ -90,6 +92,7 @@ impl Generator<'_> {
                 #(#types)*
                 #host
                 #(#calls)*
+                #handle
                 #provider
             }
         })
