@@ -8,9 +8,9 @@ use support::{
     FakeEngine, NOTES, Read, UnusedProvider, block_on, component_bytes, component_bytes_from,
 };
 use wasm_junction::{
-    App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Caller, CompiledComponent,
-    Component, Engine, EngineError, GetError, InterfaceHandle, LoadError, Middleware, Next,
-    Provided, Provider, TypedCall, Vals, WasiConfig,
+    App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Caller, Candidate,
+    CompiledComponent, Component, Engine, EngineError, GetError, InterfaceHandle, IssueKind,
+    LoadError, Middleware, Next, Provided, Provider, TypedCall, Vals, WasiConfig,
 };
 
 const CLOCK: &str = "example:journal/clock@0.1.0";
@@ -217,6 +217,7 @@ fn explicit_link_selects_one_component_provider() {
     app.link("writer", "example:translate/translator@0.1.0", "deepl")
         .unwrap();
     block_on(app.load(wit_component(TRANSLATOR_WIT, "service", "google"))).unwrap();
+    app.check().unwrap();
     block_on(app.call(
         "writer",
         "example:writer/article@1.0.0",
@@ -245,6 +246,31 @@ fn ambiguous_call_errors_name_component_candidates() {
     assert_eq!(
         error.to_string(),
         "more than one provider for `example:translate/translator@0.1.0`: `deepl`, `google`"
+    );
+}
+
+#[test]
+fn check_reports_ambiguous_component_imports() {
+    let app = App::builder().engine(FakeEngine).build().unwrap();
+    block_on(app.load(wit_component(TRANSLATOR_WIT, "service", "deepl"))).unwrap();
+    block_on(app.load(wit_component(TRANSLATOR_WIT, "service", "google"))).unwrap();
+    block_on(app.load(writer_component("writer"))).unwrap();
+
+    let error = app.check().unwrap_err();
+    assert_eq!(error.issues().len(), 1);
+    assert_eq!(error.issues()[0].component, "writer");
+    assert_eq!(
+        error.issues()[0].interface,
+        "example:translate/translator@0.1.0"
+    );
+    assert_eq!(
+        error.issues()[0].kind,
+        IssueKind::Ambiguous {
+            candidates: vec![
+                Candidate::Component("deepl".into()),
+                Candidate::Component("google".into()),
+            ]
+        }
     );
 }
 

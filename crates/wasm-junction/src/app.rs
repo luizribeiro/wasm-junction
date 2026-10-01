@@ -28,6 +28,7 @@ pub(crate) struct AppInner {
 
 struct LoadedComponent {
     name: Arc<str>,
+    imports: Vec<Arc<str>>,
     exports: Vec<Arc<str>>,
     links: HashMap<String, String>,
     compiled: Arc<dyn CompiledComponent>,
@@ -94,6 +95,7 @@ impl App {
             name.clone(),
             LoadedComponent {
                 name: Arc::from(name),
+                imports: imports.into_iter().map(Arc::from).collect(),
                 exports: exports.into_iter().map(Arc::from).collect(),
                 links: HashMap::new(),
                 compiled,
@@ -173,6 +175,49 @@ impl App {
             .links
             .insert(interface, provider.to_owned());
         Ok(())
+    }
+
+    /// Checks every loaded component import for missing or ambiguous providers.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CheckError`] containing every resolution issue found.
+    pub fn check(&self) -> Result<(), CheckError> {
+        let imports = self
+            .lock_components()
+            .iter()
+            .flat_map(|(name, component)| {
+                component
+                    .imports
+                    .iter()
+                    .map(|interface| (name.clone(), interface.clone()))
+            })
+            .collect::<Vec<_>>();
+        let mut issues = imports
+            .into_iter()
+            .filter_map(|(component, interface)| {
+                if self.0.engine.supports_import(&interface) {
+                    return None;
+                }
+                match self.resolve_import(&component, &interface) {
+                    Ok(_) => None,
+                    Err(ResolveError::Missing) => {
+                        Some(ResolutionIssue::missing(component, interface.to_string()))
+                    }
+                    Err(ResolveError::Ambiguous { candidates }) => Some(
+                        ResolutionIssue::ambiguous(component, interface.to_string(), candidates),
+                    ),
+                }
+            })
+            .collect::<Vec<_>>();
+        issues.sort_by(|left, right| {
+            (&left.component, &left.interface).cmp(&(&right.component, &right.interface))
+        });
+        if issues.is_empty() {
+            Ok(())
+        } else {
+            Err(CheckError { issues })
+        }
     }
 
     /// Calls an exported function through the application dispatcher.
@@ -701,6 +746,25 @@ pub struct ResolutionIssue {
     pub kind: IssueKind,
 }
 
+impl ResolutionIssue {
+    fn missing(component: String, interface: String) -> Self {
+        Self {
+            component,
+            interface,
+            kind: IssueKind::Missing,
+        }
+    }
+
+    fn ambiguous(component: String, interface: String, mut candidates: Vec<Candidate>) -> Self {
+        candidates.sort();
+        Self {
+            component,
+            interface,
+            kind: IssueKind::Ambiguous { candidates },
+        }
+    }
+}
+
 impl Display for ResolutionIssue {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
@@ -730,6 +794,32 @@ fn display_candidates(candidates: &[Candidate]) -> String {
         .collect::<Vec<_>>()
         .join(", ")
 }
+
+/// Import resolution problems found by [`App::check`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckError {
+    issues: Vec<ResolutionIssue>,
+}
+
+impl CheckError {
+    /// Returns diagnostics naming each affected component and interface.
+    #[must_use]
+    pub fn issues(&self) -> &[ResolutionIssue] {
+        &self.issues
+    }
+}
+
+impl Display for CheckError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{} import resolution issue(s)",
+            self.issues.len()
+        )
+    }
+}
+
+impl Error for CheckError {}
 
 struct ProviderRegistration {
     provided: Provided,
