@@ -13,7 +13,7 @@ mod walk;
 
 pub(crate) fn generate(resolve: &Resolve, package_id: PackageId) -> syn::Result<TokenStream> {
     validate::package(resolve, package_id)?;
-    let selected = reachability::find(resolve, package_id);
+    let selected = reachability::find(resolve, package_id)?;
     let generator = Generator {
         resolve,
         errors: errors::find(resolve, package_id)?,
