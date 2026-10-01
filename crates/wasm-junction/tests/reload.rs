@@ -5,7 +5,8 @@ mod support;
 use std::sync::Arc;
 
 use support::{
-    FakeEngine, GenerationEngine, GenerationState, block_on, component_bytes, component_bytes_from,
+    FailingEngine, FakeEngine, GenerationEngine, GenerationState, block_on, component_bytes,
+    component_bytes_from,
 };
 use wasm_junction::{App, CallContext, CallErrorKind, Component, ReloadError, UnloadError, Val};
 
@@ -37,6 +38,13 @@ const MARKER_WIT: &str = r"
     package example:marker@1.0.0;
     interface marker { mark: func(); }
     world service { export marker; }
+";
+const CYCLE_WIT: &str = r"
+    package example:cycle@1.0.0;
+    interface first-api { ping: func(); }
+    world first-component { import second-api; export first-api; }
+    interface second-api { ping: func(); }
+    world second-component { import first-api; export second-api; }
 ";
 
 fn component() -> Component {
@@ -295,5 +303,83 @@ fn forced_unload_names_the_provider_for_linked_and_implicit_imports() {
         assert_eq!(error.kind(), CallErrorKind::Unavailable);
         assert!(error.to_string().contains("translator"));
         assert!(error.to_string().contains("was unloaded"));
+    }
+}
+
+#[test]
+fn reload_all_swaps_interdependent_components_or_changes_nothing() {
+    let app = App::builder().engine(FakeEngine).build().unwrap();
+    for name in ["first", "second"] {
+        block_on(
+            app.load(
+                Component::from_bytes(component_bytes(MARKER_WIT, "service"))
+                    .unwrap()
+                    .named(name),
+            ),
+        )
+        .unwrap();
+    }
+    let cyclic = |world| Component::from_bytes(component_bytes(CYCLE_WIT, world)).unwrap();
+    block_on(app.reload_all([
+        ("first", cyclic("first-component")),
+        ("second", cyclic("second-component")),
+    ]))
+    .unwrap();
+    app.check().unwrap();
+
+    let error = block_on(app.reload_all([
+        (
+            "missing",
+            Component::from_bytes(component_bytes(MARKER_WIT, "service")).unwrap(),
+        ),
+        (
+            "first",
+            Component::from_bytes(component_bytes(MARKER_WIT, "service")).unwrap(),
+        ),
+    ]))
+    .unwrap_err();
+    assert!(matches!(error, ReloadError::UnknownComponent(_)));
+    app.check().unwrap();
+}
+
+#[test]
+fn reload_all_changes_nothing_when_a_later_compile_fails() {
+    struct BatchExport<const MARKER: bool>;
+
+    impl<const MARKER: bool> wasm_junction::InterfaceHandle for BatchExport<MARKER> {
+        const INTERFACE: &'static str = if MARKER {
+            "example:marker/marker@1.0.0"
+        } else {
+            TRANSLATOR
+        };
+
+        fn from_app(_app: App, _component: Arc<str>) -> Self {
+            Self
+        }
+    }
+
+    let app = App::builder()
+        .engine(FailingEngine::after(3))
+        .build()
+        .unwrap();
+    block_on(app.load(component().named("first"))).unwrap();
+    block_on(app.load(component().named("second"))).unwrap();
+
+    assert!(matches!(
+        block_on(app.reload_all([
+            (
+                "first",
+                Component::from_bytes(component_bytes(MARKER_WIT, "service")).unwrap(),
+            ),
+            (
+                "second",
+                Component::from_bytes(component_bytes(MARKER_WIT, "service")).unwrap(),
+            ),
+        ])),
+        Err(ReloadError::Compile(error)) if error.to_string() == "invalid adapter"
+    ));
+    for name in ["first", "second"] {
+        assert!(app.has::<BatchExport<false>>(name));
+        assert!(!app.has::<BatchExport<true>>(name));
     }
 }

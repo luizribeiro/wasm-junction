@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use super::{
@@ -76,6 +76,35 @@ impl App {
         self.reload_inner(name, component, false).await
     }
 
+    /// Replaces several loaded components as one atomic operation.
+    ///
+    /// Replacement imports are checked against all other replacements, regardless of order.
+    /// Each component keeps explicit links for compatible replacement imports and discards links
+    /// for imports it no longer has.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReloadError`] without changing any component when a target or replacement is
+    /// invalid, resolution fails, a change is breaking, or compilation fails.
+    pub async fn reload_all<N>(
+        &self,
+        components: impl IntoIterator<Item = (N, Component)>,
+    ) -> Result<(), ReloadError>
+    where
+        N: Into<String>,
+    {
+        let mut names = HashSet::new();
+        let mut pending = Vec::new();
+        for (name, component) in components {
+            let name = name.into();
+            if !names.insert(name.clone()) {
+                return Err(ReloadError::DuplicateTarget(name));
+            }
+            pending.push(pending_reload(name, component)?);
+        }
+        self.reload_pending(pending, false).await
+    }
+
     /// Replaces a loaded component even when the change breaks its dependents.
     ///
     /// # Errors
@@ -92,24 +121,15 @@ impl App {
         component: Component,
         force: bool,
     ) -> Result<(), ReloadError> {
-        let ComponentParts {
-            bytes,
-            imports,
-            exports,
-            mut resource_exports,
-            ..
-        } = component.into_parts();
-        if !resource_exports.is_empty() {
-            resource_exports.sort();
-            resource_exports.dedup();
-            return Err(ReloadError::ResourceExports(resource_exports));
-        }
-        let pending = vec![PendingReload {
-            bytes,
-            name: name.to_owned(),
-            imports,
-            exports,
-        }];
+        let pending = vec![pending_reload(name.to_owned(), component)?];
+        self.reload_pending(pending, force).await
+    }
+
+    async fn reload_pending(
+        &self,
+        pending: Vec<PendingReload>,
+        force: bool,
+    ) -> Result<(), ReloadError> {
         self.validate_reloads(&pending, force, &self.lock_components())?;
         let mut compiled = Vec::with_capacity(pending.len());
         for replacement in &pending {
@@ -231,6 +251,27 @@ impl App {
         }
         Ok(())
     }
+}
+
+fn pending_reload(name: String, component: Component) -> Result<PendingReload, ReloadError> {
+    let ComponentParts {
+        bytes,
+        imports,
+        exports,
+        mut resource_exports,
+        ..
+    } = component.into_parts();
+    if !resource_exports.is_empty() {
+        resource_exports.sort();
+        resource_exports.dedup();
+        return Err(ReloadError::ResourceExports(resource_exports));
+    }
+    Ok(PendingReload {
+        bytes,
+        name,
+        imports,
+        exports,
+    })
 }
 
 fn breaking_dependents(

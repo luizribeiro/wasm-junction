@@ -2,18 +2,16 @@
 
 mod support;
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use support::{
-    CONTEXT_TARGET, ContextMarker, FakeEngine, MiddlewareMarker, NOTES, Read, UnusedProvider,
-    block_on, component_bytes, component_bytes_from,
+    CONTEXT_TARGET, ContextMarker, FailingEngine, FakeEngine, MiddlewareMarker, NOTES, Read,
+    UnusedProvider, block_on, component_bytes, component_bytes_from,
 };
 use wasm_junction::{
-    App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Caller, Candidate,
-    CompiledComponent, Component, Engine, EngineError, GetError, ImportDispatcher, InterfaceHandle,
-    InvocationContext, IssueKind, LoadError, Middleware, Next, OutputStream, Provided, Provider,
-    Resource, TypedCall, Val, Vals, WasiConfig,
+    App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Caller, Candidate, Component,
+    GetError, ImportDispatcher, InterfaceHandle, InvocationContext, IssueKind, LoadError,
+    Middleware, Next, OutputStream, Provided, Provider, Resource, TypedCall, Val, Vals,
 };
 
 const CLOCK: &str = "example:journal/clock@0.1.0";
@@ -202,40 +200,6 @@ impl Provider for NotesProvider {
                 .ok_or_else(|| CallError::trap("unknown notes function"))?;
             Ok(Read::output(format!("contents of {}", read.name)))
         })
-    }
-}
-
-struct FailingEngine {
-    successes: AtomicUsize,
-    fallback: FakeEngine,
-}
-
-impl FailingEngine {
-    fn after(successes: usize) -> Self {
-        Self {
-            successes: AtomicUsize::new(successes),
-            fallback: FakeEngine,
-        }
-    }
-}
-
-impl Engine for FailingEngine {
-    fn compile(
-        &self,
-        bytes: Arc<[u8]>,
-        wasi: WasiConfig,
-    ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
-        if self
-            .successes
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
-                count.checked_sub(1)
-            })
-            .is_ok()
-        {
-            self.fallback.compile(bytes, wasi)
-        } else {
-            Box::pin(async { Err(EngineError::new("invalid adapter")) })
-        }
     }
 }
 

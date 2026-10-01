@@ -1121,6 +1121,8 @@ fn reject_resource_exports(mut interfaces: Vec<String>) -> Result<(), LoadError>
 pub enum ReloadError {
     /// No component is loaded under the requested name.
     UnknownComponent(String),
+    /// The same component name appeared more than once in a batch.
+    DuplicateTarget(String),
     /// Exported interfaces define resources, which cannot yet be routed between components.
     ResourceExports(Vec<String>),
     /// One or more imported interfaces have no unique provider.
@@ -1145,6 +1147,12 @@ impl Display for ReloadError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnknownComponent(name) => write!(formatter, "component `{name}` is not loaded"),
+            Self::DuplicateTarget(name) => {
+                write!(
+                    formatter,
+                    "component `{name}` appears more than once in reload_all"
+                )
+            }
             Self::ResourceExports(interfaces) => write!(
                 formatter,
                 "component exports unsupported resources in: {}",
@@ -1179,6 +1187,7 @@ impl Error for ReloadError {
             Self::MissingImports(error) => Some(error),
             Self::Compile(error) => Some(error),
             Self::UnknownComponent(_)
+            | Self::DuplicateTarget(_)
             | Self::ResourceExports(_)
             | Self::Breaking { .. }
             | Self::WouldMakeAmbiguous { .. } => None,

@@ -94,6 +94,42 @@ impl Engine for FakeEngine {
     }
 }
 
+/// An engine that succeeds a configured number of times before failing.
+pub struct FailingEngine {
+    successes: AtomicUsize,
+    fallback: FakeEngine,
+}
+
+impl FailingEngine {
+    /// Creates an engine that fails after `successes` compilations.
+    pub fn after(successes: usize) -> Self {
+        Self {
+            successes: AtomicUsize::new(successes),
+            fallback: FakeEngine,
+        }
+    }
+}
+
+impl Engine for FailingEngine {
+    fn compile(
+        &self,
+        bytes: Arc<[u8]>,
+        wasi: WasiConfig,
+    ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
+        if self
+            .successes
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                count.checked_sub(1)
+            })
+            .is_ok()
+        {
+            self.fallback.compile(bytes, wasi)
+        } else {
+            Box::pin(async { Err(EngineError::new("invalid adapter")) })
+        }
+    }
+}
+
 /// Shared observations and synchronization for [`GenerationEngine`].
 #[derive(Default)]
 pub struct GenerationState {
