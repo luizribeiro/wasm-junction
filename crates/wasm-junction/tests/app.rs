@@ -6,8 +6,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use support::{
-    CONTEXT_TARGET, ContextMarker, FakeEngine, NOTES, Read, UnusedProvider, block_on,
-    component_bytes, component_bytes_from,
+    CONTEXT_TARGET, ContextMarker, FakeEngine, MiddlewareMarker, NOTES, Read, UnusedProvider,
+    block_on, component_bytes, component_bytes_from,
 };
 use wasm_junction::{
     App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Caller, Candidate,
@@ -134,6 +134,38 @@ impl Middleware for Trace {
     }
 }
 
+struct AttachInvocationData;
+
+impl Middleware for AttachInvocationData {
+    async fn call(&self, mut call: Call, next: Next) -> Result<Vals, CallError> {
+        assert_eq!(
+            call.extensions()
+                .get::<ContextMarker>()
+                .map(|marker| marker.0),
+            Some(42)
+        );
+        if call.function.as_ref() == "attach" {
+            call.extensions_mut().insert(MiddlewareMarker(7));
+        }
+        next.run(call).await
+    }
+}
+
+struct ContextProvider;
+
+impl Provider for ContextProvider {
+    fn call<'a>(
+        &'a self,
+        cx: &'a CallContext,
+        _call: Call,
+    ) -> BoxFuture<'a, Result<Vals, CallError>> {
+        Box::pin(async move {
+            let marker = cx.extensions().get::<MiddlewareMarker>().unwrap();
+            Ok(vec![Val::U32(marker.0)])
+        })
+    }
+}
+
 struct NotesProvider(Arc<Mutex<Vec<Caller>>>);
 
 impl Provider for NotesProvider {
@@ -254,22 +286,60 @@ fn component_imports_route_through_middleware() {
 }
 
 #[test]
-fn invocation_data_crosses_a_component_hop() {
-    let app = App::builder().engine(FakeEngine).build().unwrap();
+fn middleware_data_crosses_a_component_hop_without_leaking() {
+    let app = App::builder()
+        .engine(FakeEngine)
+        .middleware(AttachInvocationData)
+        .build()
+        .unwrap();
     for name in ["caller", "callee"] {
         block_on(app.load(wit_component(CONTEXT_WIT, "target-component", name))).unwrap();
     }
 
-    let values = block_on(ImportDispatcher::call(
+    let context = InvocationContext::with(ContextMarker(42));
+    let attached = block_on(ImportDispatcher::call(
         &app,
-        InvocationContext::with(ContextMarker(42)),
+        context.clone(),
+        Arc::from("caller"),
+        Arc::from(CONTEXT_TARGET),
+        Arc::from("attach"),
+        Vec::new(),
+    ))
+    .unwrap();
+    assert_eq!(attached, [Val::U32(42), Val::U32(7)]);
+
+    let sibling = block_on(ImportDispatcher::call(
+        &app,
+        context.clone(),
         Arc::from("caller"),
         Arc::from(CONTEXT_TARGET),
         Arc::from("read"),
         Vec::new(),
     ))
     .unwrap();
-    assert_eq!(values, [Val::U32(42)]);
+    assert_eq!(sibling, [Val::U32(42), Val::U32(0)]);
+    assert!(context.extensions().get::<MiddlewareMarker>().is_none());
+}
+
+#[test]
+fn middleware_data_reaches_provider_context() {
+    let app = App::builder()
+        .engine(FakeEngine)
+        .provide(Provided::new(CONTEXT_TARGET, ContextProvider))
+        .middleware(AttachInvocationData)
+        .build()
+        .unwrap();
+
+    let values = block_on(ImportDispatcher::call(
+        &app,
+        InvocationContext::with(ContextMarker(42)),
+        Arc::from("caller"),
+        Arc::from(CONTEXT_TARGET),
+        Arc::from("attach"),
+        Vec::new(),
+    ))
+    .unwrap();
+    assert_eq!(values, [Val::U32(7)]);
 }
 
 #[test]

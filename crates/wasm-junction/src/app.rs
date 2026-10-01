@@ -432,6 +432,16 @@ impl App {
             })?;
             (loaded.compiled.clone(), loaded.name.clone(), resolved)
         };
+        let call = call_for_invocation(
+            &context,
+            Call::new(
+                Caller::Host,
+                component_name.clone(),
+                interface,
+                function,
+                args,
+            ),
+        );
         self.dispatch(
             Arc::new(ComponentTarget {
                 compiled,
@@ -440,7 +450,7 @@ impl App {
                 component: component_name.clone(),
                 component_boundary: false,
             }),
-            Call::new(Caller::Host, component_name, interface, function, args),
+            call,
         )
         .await
     }
@@ -461,7 +471,10 @@ impl App {
                 }) => (
                     Arc::from("host"),
                     Arc::from(interface),
-                    Arc::new(HostTarget { provider, context }),
+                    Arc::new(HostTarget {
+                        provider,
+                        context: context.clone(),
+                    }),
                 ),
                 Ok(ResolvedImport::Component {
                     name,
@@ -499,8 +512,8 @@ impl App {
                     )));
                 }
             };
-        self.dispatch(
-            target,
+        let call = call_for_invocation(
+            &context,
             Call::new(
                 Caller::Component(caller),
                 destination,
@@ -508,8 +521,8 @@ impl App {
                 function,
                 args,
             ),
-        )
-        .await
+        );
+        self.dispatch(target, call).await
     }
 
     async fn call_engine_import(
@@ -521,11 +534,12 @@ impl App {
         args: Vals,
         target: Arc<dyn ImportTarget>,
     ) -> Result<Vals, CallError> {
-        self.dispatch(
-            Arc::new(EngineTarget { target, context }),
+        let call = call_for_invocation(
+            &context,
             Call::new(Caller::Component(caller), "host", interface, function, args),
-        )
-        .await
+        );
+        self.dispatch(Arc::new(EngineTarget { target, context }), call)
+            .await
     }
 
     async fn dispatch(&self, target: Arc<dyn CallTarget>, call: Call) -> Result<Vals, CallError> {
@@ -663,7 +677,7 @@ struct HostTarget {
 impl CallTarget for HostTarget {
     fn call(&self, call: Call) -> BoxFuture<'static, Result<Vals, CallError>> {
         let provider = self.provider.clone();
-        let invocation = self.context.clone();
+        let invocation = self.context.with_extensions(call.extensions().clone());
         Box::pin(async move {
             let context = CallContext::new(call.caller.clone(), invocation);
             provider.call(&context, call).await
@@ -686,7 +700,10 @@ struct EngineTarget {
 
 impl CallTarget for EngineTarget {
     fn call(&self, call: Call) -> BoxFuture<'static, Result<Vals, CallError>> {
-        self.target.call(self.context.clone(), call.args)
+        self.target.call(
+            self.context.with_extensions(call.extensions().clone()),
+            call.args,
+        )
     }
 }
 
@@ -694,7 +711,7 @@ impl CallTarget for ComponentTarget {
     fn call(&self, call: Call) -> BoxFuture<'static, Result<Vals, CallError>> {
         let compiled = self.compiled.clone();
         let imports = self.imports.clone();
-        let context = self.context.clone();
+        let context = self.context.with_extensions(call.extensions().clone());
         let component = self.component.clone();
         let component_boundary = self.component_boundary;
         Box::pin(async move {
@@ -753,6 +770,11 @@ fn values_are_plain(values: &[Val]) -> bool {
         | Val::Flags(_) => true,
         _ => false,
     })
+}
+
+fn call_for_invocation(context: &InvocationContext, mut call: Call) -> Call {
+    *call.extensions_mut() = context.extensions().clone();
+    call
 }
 
 /// The construction contract implemented by each generated interface handle.

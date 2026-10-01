@@ -31,6 +31,9 @@ pub const CONTEXT_TARGET: &str = "example:context/target@1.0.0";
 /// Per-invocation data checked by the context propagation fixture.
 pub struct ContextMarker(pub u32);
 
+/// Data attached by middleware in context propagation tests.
+pub struct MiddlewareMarker(pub u32);
+
 /// Builds a real component from inline WIT and a matching dummy core module.
 pub fn component_bytes(wit: &str, world_name: &str) -> Vec<u8> {
     component_bytes_from(&[("fixture.wit", wit)], world_name)
@@ -131,11 +134,17 @@ impl CompiledComponent for UnusedComponent {
                     };
                     Ok(vec![format!("translated: {text}").into()])
                 }
-                CONTEXT_TARGET => context
-                    .extensions()
-                    .get::<ContextMarker>()
-                    .map(|marker| vec![Val::U32(marker.0)])
-                    .ok_or_else(|| CallError::trap("invocation context marker is missing")),
+                CONTEXT_TARGET => {
+                    let marker = context
+                        .extensions()
+                        .get::<ContextMarker>()
+                        .ok_or_else(|| CallError::trap("invocation context marker is missing"))?;
+                    let added = context
+                        .extensions()
+                        .get::<MiddlewareMarker>()
+                        .map_or(0, |marker| marker.0);
+                    Ok(vec![Val::U32(marker.0), Val::U32(added)])
+                }
                 RESERVED_HOST => {
                     imports
                         .call(context, component, interface, function, args)
