@@ -23,6 +23,8 @@ jobs:
         run: nix flake check
       - name: Run pre-commit hooks
         run: nix develop -c pre-commit run --all-files --show-diff-on-failure
+      - name: Check generated bindings for wasm32
+        run: nix develop -c cargo check -p wasm-junction --test bindgen_calls --test bindgen_handles --test bindgen_with --target wasm32-unknown-unknown --no-default-features --locked
       - name: Run pre-push hooks
         run: nix develop -c pre-commit run --all-files --hook-stage pre-push --show-diff-on-failure
       - name: Test without the default engine
