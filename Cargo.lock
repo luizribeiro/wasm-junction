@@ -1348,6 +1348,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm-junction-example-reload"
+version = "0.0.0"
+dependencies = [
+ "tokio",
+ "wasm-junction",
+]
+
+[[package]]
 name = "wasm-junction-example-translate"
 version = "0.0.0"
 dependencies = [

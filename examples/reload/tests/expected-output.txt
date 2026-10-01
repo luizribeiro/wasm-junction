@@ -1,0 +1,15 @@
+load greeter [example:reload/greeter@0.1.0]
+call host → greeter example:reload/greeter@0.1.0.greet("Ada")
+return host → greeter example:reload/greeter@0.1.0.greet("v1: hello, Ada")
+first: v1: hello, Ada
+starting slow call
+call host → greeter example:reload/greeter@0.1.0.greet-slow("Grace")
+call greeter → host example:reload/gate@0.1.0.wait()
+slow call is waiting on v1
+reload greeter [example:reload/greeter@0.1.0] -> [example:reload/greeter@0.1.0]
+call host → greeter example:reload/greeter@0.1.0.greet("Lin")
+return host → greeter example:reload/greeter@0.1.0.greet("v2: hello, Lin")
+after reload: v2: hello, Lin
+return greeter → host example:reload/gate@0.1.0.wait()
+return host → greeter example:reload/greeter@0.1.0.greet-slow("v1: hello, Grace")
+slow call finished: v1: hello, Grace
