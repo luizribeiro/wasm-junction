@@ -202,4 +202,14 @@ mod tests {
         ready(engine.compile(Arc::from(component()), WasiConfig::default())).unwrap();
         assert_eq!(engine.instantiations(), 0);
     }
+
+    #[test]
+    fn compiles_imported_host_resources() {
+        let engine = WasmtimeEngine::new().unwrap();
+        ready(engine.compile(
+            Arc::from(wasm_junction_conformance::resource_component()),
+            WasiConfig::default(),
+        ))
+        .unwrap();
+    }
 }

@@ -29,6 +29,10 @@ pub const WRITER: &str = writer::INTERFACE;
 pub const CYCLE_A: &str = cycle_a::INTERFACE;
 /// The second exported interface in the cyclic fixture.
 pub const CYCLE_B: &str = cycle_b::INTERFACE;
+/// The host-resource fixture's imported interface.
+pub const RESOURCE_HOST: &str = "example:resources/host@1.0.0";
+/// The host-resource fixture's exported interface.
+pub const RESOURCE_CLIENT: &str = "example:resources/client@1.0.0";
 
 pub(crate) struct SessionId(pub u32);
 pub(crate) struct TranslatorHop;
@@ -63,6 +67,12 @@ pub fn cycle_b_component() -> &'static [u8] {
     include_bytes!(concat!(env!("OUT_DIR"), "/cycle-b.wasm"))
 }
 
+/// Returns the component that imports and uses a host resource.
+#[must_use]
+pub fn resource_component() -> &'static [u8] {
+    include_bytes!(concat!(env!("OUT_DIR"), "/resource-client.wasm"))
+}
+
 #[cfg(test)]
 mod tests {
     use wasm_junction::Component;
@@ -95,5 +105,12 @@ mod tests {
         let b = Component::from_bytes(cycle_b_component()).unwrap();
         assert_eq!(b.imports(), [CYCLE_A]);
         assert_eq!(b.exports(), [CYCLE_B]);
+    }
+
+    #[test]
+    fn resource_component_imports_only_the_host_resource() {
+        let component = Component::from_bytes(resource_component()).unwrap();
+        assert_eq!(component.imports(), [RESOURCE_HOST]);
+        assert_eq!(component.exports(), [RESOURCE_CLIENT]);
     }
 }

@@ -4,7 +4,7 @@ use wasm_junction_core::{CallError, ImportDispatcher, InvocationContext, Vals};
 use wasmtime::AsContextMut;
 use wasmtime::bail;
 use wasmtime::component::types::ComponentItem;
-use wasmtime::component::{Component, Linker, LinkerInstance, Val as WasmtimeVal};
+use wasmtime::component::{Component, Linker, LinkerInstance, ResourceType, Val as WasmtimeVal};
 
 use crate::engine::StoreData;
 use crate::values::{from_wasmtime, to_wasmtime};
@@ -14,6 +14,8 @@ pub(crate) fn define_imports(
     component: &Component,
 ) -> Result<(), wasmtime::Error> {
     let engine = linker.engine().clone();
+    let mut resource_types = Vec::new();
+    let mut next_runtime_type = 0_u32;
     for (interface, item) in component.component_type().imports(&engine) {
         if interface.starts_with("wasi:") {
             continue;
@@ -21,6 +23,13 @@ pub(crate) fn define_imports(
         let ComponentItem::ComponentInstance(instance) = item.ty else {
             bail!("unsupported component import `{interface}`");
         };
+        let resources = instance
+            .exports(&engine)
+            .filter_map(|(name, item)| match item.ty {
+                ComponentItem::Resource(resource) => Some((name.to_owned(), resource)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
         let functions = instance
             .exports(&engine)
             .filter_map(|(name, item)| match item.ty {
@@ -31,6 +40,26 @@ pub(crate) fn define_imports(
             })
             .collect::<Vec<_>>();
         let mut instance_linker = linker.instance(interface)?;
+        for (name, resource) in resources {
+            let runtime_type = if let Some((_, runtime_type)) = resource_types
+                .iter()
+                .find(|(candidate, _)| *candidate == resource)
+            {
+                *runtime_type
+            } else {
+                let runtime_type = next_runtime_type;
+                next_runtime_type = next_runtime_type
+                    .checked_add(1)
+                    .ok_or_else(|| wasmtime::Error::msg("too many imported resource types"))?;
+                resource_types.push((resource, runtime_type));
+                runtime_type
+            };
+            instance_linker.resource_concurrent(
+                &name,
+                ResourceType::host_dynamic(runtime_type),
+                |_, _| Box::pin(async { Ok(()) }),
+            )?;
+        }
         for (function, concurrent) in functions {
             if concurrent {
                 define_concurrent(&mut instance_linker, interface, &function)?;
