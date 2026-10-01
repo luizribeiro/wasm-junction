@@ -6,7 +6,9 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
 
-use wasm_junction::{App, Call, CallError, Component, Engine, Middleware, Next, Val, Vals};
+use wasm_junction::{
+    App, Call, CallError, CallErrorKind, Component, Engine, Middleware, Next, Val, Vals,
+};
 use wasm_junction_conformance::{Fixture, FixtureHost, SUMMARIZER, component, run, sample_note};
 use wasm_junction_wasmtime::WasmtimeEngine;
 
@@ -61,6 +63,7 @@ fn typed_refusal_and_guest_trap_remain_distinct() {
     );
 
     let trap = block_on(fixture.call("crash", Vec::new())).unwrap_err();
+    assert_eq!(trap.kind(), CallErrorKind::Trap);
     assert!(
         trap.to_string()
             .contains("example:notes/summarizer@0.1.0#crash"),

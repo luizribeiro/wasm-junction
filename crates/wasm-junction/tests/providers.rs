@@ -22,7 +22,7 @@ impl Provider for NotesProvider {
     ) -> BoxFuture<'a, Result<Vals, CallError>> {
         Box::pin(async move {
             if cx.caller() != &Caller::Component(Arc::from("summarizer")) {
-                return Err(CallError::trap("caller may not read notes"));
+                return Err(CallError::refused("caller may not read notes"));
             }
             let read = call
                 .view::<Read>()?

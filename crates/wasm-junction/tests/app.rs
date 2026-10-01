@@ -8,9 +8,9 @@ use support::{
     FakeEngine, NOTES, Read, UnusedProvider, block_on, component_bytes, component_bytes_from,
 };
 use wasm_junction::{
-    App, BoxFuture, Call, CallContext, CallError, Caller, CompiledComponent, Component, Engine,
-    EngineError, GetError, InterfaceHandle, LoadError, Middleware, Next, Provided, Provider,
-    TypedCall, Vals,
+    App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Caller, CompiledComponent,
+    Component, Engine, EngineError, GetError, InterfaceHandle, LoadError, Middleware, Next,
+    Provided, Provider, TypedCall, Vals,
 };
 
 const CLOCK: &str = "example:journal/clock@0.1.0";
@@ -215,6 +215,15 @@ fn raw_calls_accept_function_names_built_at_runtime() {
         block_on(app.call("summarizer", SUMMARIES, function, vec!["daily".into()])).unwrap(),
         [wasm_junction::Val::from("contents of daily")]
     );
+}
+
+#[test]
+fn calls_report_unavailable_components() {
+    let app = App::builder().engine(FakeEngine).build().unwrap();
+    let error = block_on(app.call("missing", SUMMARIES, "summarize", Vec::new())).unwrap_err();
+
+    assert_eq!(error.kind(), CallErrorKind::Unavailable);
+    assert_eq!(error.to_string(), "component `missing` is not loaded");
 }
 
 #[test]

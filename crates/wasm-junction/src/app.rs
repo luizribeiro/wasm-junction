@@ -166,11 +166,11 @@ impl App {
     ) -> Result<Vals, CallError> {
         let (compiled, component_name, interface) = {
             let components = self.lock_components();
-            let loaded = components
-                .get(component)
-                .ok_or_else(|| CallError::trap(format!("component `{component}` is not loaded")))?;
+            let loaded = components.get(component).ok_or_else(|| {
+                CallError::unavailable(format!("component `{component}` is not loaded"))
+            })?;
             let resolved = loaded.export_name(interface).ok_or_else(|| {
-                CallError::trap(format!(
+                CallError::unavailable(format!(
                     "component `{component}` does not export `{interface}`"
                 ))
             })?;
@@ -198,7 +198,7 @@ impl App {
     ) -> Result<Vals, CallError> {
         let (provided_interface, provider) = self
             .find_provider(&interface)
-            .ok_or_else(|| CallError::trap(format!("no provider for `{interface}`")))?;
+            .ok_or_else(|| CallError::unavailable(format!("no provider for `{interface}`")))?;
         self.dispatch(
             Arc::new(HostTarget { provider, context }),
             Call::new(

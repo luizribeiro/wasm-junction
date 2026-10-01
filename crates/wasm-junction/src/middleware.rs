@@ -94,7 +94,7 @@ mod tests {
     use std::task::{Context, Poll, Waker};
 
     use super::*;
-    use crate::{Caller, TypeError, TypedCall, Val};
+    use crate::{CallErrorKind, Caller, TypeError, TypedCall, Val};
 
     const NOTES: &str = "example:journal/notes@0.1.0";
 
@@ -194,7 +194,7 @@ mod tests {
                     return Err(CallError::trap("unexpected call"));
                 };
                 if read.0 == "secret" {
-                    return Err(CallError::trap("access denied"));
+                    return Err(CallError::refused("access denied"));
                 }
                 call.set_view(Read(String::from("weekly")))?;
                 let first = next.clone().run(call.clone()).await?;
@@ -208,12 +208,9 @@ mod tests {
             run(vec![Arc::new(Behavior)], call("daily")).unwrap(),
             [Val::from("weekly")]
         );
-        assert_eq!(
-            run(vec![Arc::new(Behavior)], call("secret"))
-                .unwrap_err()
-                .to_string(),
-            "access denied"
-        );
+        let refusal = run(vec![Arc::new(Behavior)], call("secret")).unwrap_err();
+        assert_eq!(refusal.kind(), CallErrorKind::Refused);
+        assert_eq!(refusal.to_string(), "access denied");
     }
 
     #[test]
