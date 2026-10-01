@@ -50,6 +50,12 @@ pub const RESOURCE_CLIENT: &str = "example:resources/client@1.0.0";
 pub const STREAM_HOST: &str = "example:streams/host@0.1.0";
 /// The byte-stream fixture's exported interface.
 pub const STREAM_PROBE: &str = "example:streams/probe@0.1.0";
+/// The reload fixture's host gate interface.
+pub const RELOAD_GATE: &str = "example:reload/gate@0.1.0";
+/// The interface replaced by a breaking reload.
+pub const RELOAD_GREETER: &str = "example:reload/greeter@0.1.0";
+/// The reload fixture's routed caller interface.
+pub const RELOAD_WRITER: &str = "example:reload/writer@0.1.0";
 
 pub(crate) struct SessionId(pub u32);
 pub(crate) struct TranslatorHop;
@@ -94,6 +100,18 @@ pub fn resource_component() -> &'static [u8] {
 #[must_use]
 pub fn stream_component() -> &'static [u8] {
     include_bytes!(concat!(env!("OUT_DIR"), "/streams.wasm"))
+}
+
+/// Returns the first reload fixture generation.
+#[must_use]
+pub fn reload_v1_component() -> &'static [u8] {
+    include_bytes!(concat!(env!("OUT_DIR"), "/reload-v1.wasm"))
+}
+
+/// Returns the second reload fixture generation.
+#[must_use]
+pub fn reload_v2_component() -> &'static [u8] {
+    include_bytes!(concat!(env!("OUT_DIR"), "/reload-v2.wasm"))
 }
 
 #[cfg(test)]

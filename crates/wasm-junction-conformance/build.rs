@@ -5,6 +5,7 @@ use wasm_junction_guest_build::build;
 fn main() -> std::io::Result<()> {
     println!("cargo::rerun-if-changed=guest");
     println!("cargo::rerun-if-changed=resource-wit");
+    println!("cargo::rerun-if-changed=reload-wit");
     println!("cargo::rerun-if-changed=stream-wit");
     println!("cargo::rerun-if-changed=wit");
     build(
@@ -26,5 +27,12 @@ fn main() -> std::io::Result<()> {
             "resource-client.wasm",
         )
     })?;
-    build("guest/Cargo.toml", "streams_guest.wasm", "streams.wasm")
+    build("guest/Cargo.toml", "streams_guest.wasm", "streams.wasm")?;
+    for (binary, output) in [
+        ("reload_v1_guest.wasm", "reload-v1.wasm"),
+        ("reload_v2_guest.wasm", "reload-v2.wasm"),
+    ] {
+        build("guest/Cargo.toml", binary, output)?;
+    }
+    Ok(())
 }

@@ -211,6 +211,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "reload-v1-guest"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen",
+]
+
+[[package]]
+name = "reload-v2-guest"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen",
+]
+
+[[package]]
 name = "resource-client-guest"
 version = "0.0.0"
 dependencies = [

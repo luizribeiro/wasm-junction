@@ -1,6 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["cycle-a", "cycle-b", "notes-summary", "resource-client", "streams", "translator", "writer"]
+members = [
+  "cycle-a", "cycle-b", "notes-summary", "reload-v1", "reload-v2", "resource-client",
+  "streams", "translator", "writer",
+]
 
 [workspace.package]
 edition = "2024"
