@@ -1,6 +1,8 @@
 //! End-to-end byte-stream checks for the native engine.
 
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use wasm_junction::{
     App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Component, InputStream,
@@ -177,4 +179,39 @@ fn open_guest_stream_is_aborted_when_its_store_ends() {
                 "stream was aborted when its invocation ended"
             );
         });
+}
+
+#[test]
+fn guest_reads_the_first_chunk_before_requesting_the_second() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let host = StreamHost::default();
+    let app = App::builder()
+        .engine(WasmtimeEngine::new().unwrap())
+        .provide(host.clone().provided())
+        .build()
+        .unwrap();
+    runtime
+        .block_on(
+            app.load(
+                Component::from_bytes(stream_component())
+                    .unwrap()
+                    .named("streams"),
+            ),
+        )
+        .unwrap();
+
+    let (sender, receiver) = mpsc::channel();
+    let _worker = std::thread::spawn(move || {
+        let result = runtime.block_on(app.call("streams", STREAM_PROBE, "incremental", Vec::new()));
+        sender.send(result).unwrap();
+    });
+
+    let result = receiver
+        .recv_timeout(Duration::from_secs(30))
+        .expect("incremental stream deadlocked the current-thread Tokio runtime")
+        .unwrap();
+    assert_eq!(result, [Val::from("first second")]);
+    assert!(host.advanced());
 }
