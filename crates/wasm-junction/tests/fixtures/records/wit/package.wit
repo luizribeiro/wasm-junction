@@ -9,4 +9,7 @@ interface notes {
     score: f32,
     position: coordinates,
   }
+  record value-first { value: string, tail: u32 }
+  record field-first { field: string, tail: u32 }
+  record fields-first { fields: string, tail: u32 }
 }

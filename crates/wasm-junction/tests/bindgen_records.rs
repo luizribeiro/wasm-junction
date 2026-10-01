@@ -38,3 +38,31 @@ fn records_encode_to_named_wit_fields() {
     assert_eq!(notes::Coordinates::try_from(value).unwrap(), coordinates);
     assert!(notes::Coordinates::try_from(wasm_junction::Val::Record(vec![])).is_err());
 }
+
+#[test]
+fn record_field_names_do_not_shadow_decoder_temporaries() {
+    let value = notes::ValueFirst {
+        value: "v".into(),
+        tail: 1,
+    };
+    assert_eq!(
+        notes::ValueFirst::try_from(wasm_junction::Val::from(value.clone())).unwrap(),
+        value
+    );
+    let value = notes::FieldFirst {
+        field: "f".into(),
+        tail: 2,
+    };
+    assert_eq!(
+        notes::FieldFirst::try_from(wasm_junction::Val::from(value.clone())).unwrap(),
+        value
+    );
+    let value = notes::FieldsFirst {
+        fields: "fs".into(),
+        tail: 3,
+    };
+    assert_eq!(
+        notes::FieldsFirst::try_from(wasm_junction::Val::from(value.clone())).unwrap(),
+        value
+    );
+}

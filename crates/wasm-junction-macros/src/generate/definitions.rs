@@ -241,15 +241,18 @@ impl Generator<'_> {
                 let wit_name = &field.name;
                 let missing = format!("{name}.{wit_name} is missing");
                 let wrong = format!("expected {name}.{wit_name} field");
+                let ty = self.rust_type(field.ty, name)?;
                 let value = self.decode(field.ty, quote!(value), name)?;
                 Ok(quote! {
-                    let Some((field, value)) = fields.next() else {
-                        return Err(::wasm_junction::TypeError::new(#missing));
+                    let #field_name: #ty = {
+                        let Some((field, value)) = __wasm_junction_fields.next() else {
+                            return Err(::wasm_junction::TypeError::new(#missing));
+                        };
+                        if field != #wit_name {
+                            return Err(::wasm_junction::TypeError::new(#wrong));
+                        }
+                        #value?
                     };
-                    if field != #wit_name {
-                        return Err(::wasm_junction::TypeError::new(#wrong));
-                    }
-                    let #field_name = #value?;
                 })
             })
             .collect::<syn::Result<Vec<_>>>()?;
@@ -273,9 +276,9 @@ impl Generator<'_> {
                     let ::wasm_junction::Val::Record(fields) = value else {
                         return Err(::wasm_junction::TypeError::new(concat!("expected ", #name, " record")));
                     };
-                    let mut fields = fields.into_iter();
+                    let mut __wasm_junction_fields = fields.into_iter();
                     #(#decoded)*
-                    if fields.next().is_some() {
+                    if __wasm_junction_fields.next().is_some() {
                         return Err(::wasm_junction::TypeError::new(#extra));
                     }
                     Ok(Self { #(#field_names,)* })
