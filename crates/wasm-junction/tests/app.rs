@@ -64,6 +64,18 @@ fn wit_component(wit: &str, world: &str, name: &str) -> Component {
         .named(name)
 }
 
+fn writer_component(name: &str) -> Component {
+    Component::from_bytes(component_bytes_from(
+        &[
+            ("translator.wit", TRANSLATOR_API_WIT),
+            ("writer.wit", WRITER_WIT),
+        ],
+        "example:writer/writer@1.0.0",
+    ))
+    .unwrap()
+    .named(name)
+}
+
 #[derive(Clone)]
 struct Summaries {
     app: App,
@@ -165,16 +177,7 @@ fn load_compiles_and_refuses_missing_imports_or_duplicate_names() {
 fn loaded_component_exports_satisfy_compatible_imports() {
     let app = App::builder().engine(FakeEngine).build().unwrap();
     block_on(app.load(wit_component(TRANSLATOR_WIT, "service", "translator"))).unwrap();
-    let writer = Component::from_bytes(component_bytes_from(
-        &[
-            ("translator.wit", TRANSLATOR_API_WIT),
-            ("writer.wit", WRITER_WIT),
-        ],
-        "example:writer/writer@1.0.0",
-    ))
-    .unwrap()
-    .named("writer");
-    block_on(app.load(writer)).unwrap();
+    block_on(app.load(writer_component("writer"))).unwrap();
 }
 
 #[test]
@@ -186,16 +189,7 @@ fn component_imports_route_through_middleware() {
         .build()
         .unwrap();
     block_on(app.load(wit_component(TRANSLATOR_WIT, "service", "translator"))).unwrap();
-    let writer = Component::from_bytes(component_bytes_from(
-        &[
-            ("translator.wit", TRANSLATOR_API_WIT),
-            ("writer.wit", WRITER_WIT),
-        ],
-        "example:writer/writer@1.0.0",
-    ))
-    .unwrap()
-    .named("writer");
-    block_on(app.load(writer)).unwrap();
+    block_on(app.load(writer_component("writer"))).unwrap();
 
     let result = block_on(app.call(
         "writer",
