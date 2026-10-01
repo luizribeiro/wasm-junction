@@ -1,9 +1,9 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, MutexGuard};
 
-use wasm_junction::{CallContext, Provided, Val};
+use wasm_junction::{CallContext, Caller, Provided, Val};
 
-use crate::{notes, types};
+use crate::{decoration, notes, types};
 
 /// The host implementation used by the notes-summary fixture.
 #[derive(Clone, Default)]
@@ -37,6 +37,50 @@ impl notes::Host for FixtureHost {
     fn normalize(&self, _context: &CallContext, value: types::Note) -> types::Note {
         self.normalizations.fetch_add(1, Ordering::Relaxed);
         value
+    }
+}
+
+/// The host provider called by the translator in the routed fixture.
+#[derive(Clone, Default)]
+pub struct RoutedHost(Arc<std::sync::Mutex<Vec<Caller>>>);
+
+impl RoutedHost {
+    /// Wraps this host as the fixture's decoration provider.
+    #[must_use]
+    pub fn provided(self) -> Provided {
+        decoration::provider(self)
+    }
+
+    /// Returns the callers observed by the provider.
+    #[must_use]
+    pub fn callers(&self) -> Vec<Caller> {
+        self.lock().clone()
+    }
+
+    fn decorate(&self, context: &CallContext, text: &str) -> String {
+        self.lock().push(context.caller().clone());
+        format!("host: {text}")
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Vec<Caller>> {
+        match self.0.lock() {
+            Ok(callers) => callers,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+}
+
+impl decoration::Host for RoutedHost {
+    fn decorate(&self, context: &CallContext, text: String) -> String {
+        self.decorate(context, &text)
+    }
+
+    fn decorate_async(
+        &self,
+        context: &CallContext,
+        text: String,
+    ) -> impl std::future::Future<Output = String> {
+        std::future::ready(self.decorate(context, &text))
     }
 }
 
