@@ -16,5 +16,5 @@ pub use engine::{
 };
 pub use error::{CallError, CallErrorKind};
 pub use future::{BoxFuture, HostBound, MaybeSend};
-pub use resource::{Resource, ResourceOwnership};
+pub use resource::{Resource, ResourceOwnership, ResourceTable};
 pub use values::{TypeError, Val, Vals};
