@@ -54,8 +54,10 @@ impl Generator<'_> {
     }
 
     fn type_definition(&self, name: &str, id: wit_parser::TypeId) -> syn::Result<TokenStream> {
-        if let wit_parser::TypeDefKind::Record(record) = &self.resolve.types[id].kind {
-            return self.record(name, record);
+        match &self.resolve.types[id].kind {
+            wit_parser::TypeDefKind::Record(record) => return self.record(name, record),
+            wit_parser::TypeDefKind::Enum(enum_) => return Self::enum_(name, enum_),
+            _ => {}
         }
         let ident = rust_ident(&name.to_upper_camel_case())?;
         let ty = self.type_kind(&self.resolve.types[id].kind, name)?;

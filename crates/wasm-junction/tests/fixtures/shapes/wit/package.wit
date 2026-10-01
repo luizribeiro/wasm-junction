@@ -1,0 +1,8 @@
+package test:shapes;
+
+interface controls {
+  enum status {
+    ready,
+    needs-review,
+  }
+}

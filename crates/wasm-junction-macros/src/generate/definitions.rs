@@ -1,11 +1,57 @@
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::TokenStream;
 use quote::quote;
-use wit_parser::{Record, Type, TypeDefKind};
+use wit_parser::{Enum, Record, Type, TypeDefKind};
 
 use super::{Generator, rust_ident};
 
 impl Generator<'_> {
+    pub(super) fn enum_(name: &str, enum_: &Enum) -> syn::Result<TokenStream> {
+        let type_ident = rust_ident(&name.to_upper_camel_case())?;
+        let cases = enum_
+            .cases
+            .iter()
+            .map(|case| rust_ident(&case.name.to_upper_camel_case()))
+            .collect::<syn::Result<Vec<_>>>()?;
+        let wit_cases = enum_.cases.iter().map(|case| &case.name);
+        let encode_cases = enum_.cases.iter().zip(&cases).map(|(case, case_ident)| {
+            let name = &case.name;
+            quote!(#type_ident::#case_ident => #name)
+        });
+        let decode_cases = enum_.cases.iter().zip(&cases).map(|(case, ident)| {
+            let name = &case.name;
+            quote!(#name => Ok(Self::#ident))
+        });
+        let expected = format!("expected {name} enum");
+        Ok(quote! {
+            #[doc = concat!("The WIT `", #name, "` enum.")]
+            #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+            pub enum #type_ident {
+                #(#[doc = concat!("The WIT `", #wit_cases, "` case.")] #cases,)*
+            }
+
+            impl ::std::convert::From<#type_ident> for ::wasm_junction::Val {
+                fn from(value: #type_ident) -> Self {
+                    Self::Enum(match value { #(#encode_cases,)* }.to_owned())
+                }
+            }
+
+            impl ::std::convert::TryFrom<::wasm_junction::Val> for #type_ident {
+                type Error = ::wasm_junction::TypeError;
+
+                fn try_from(value: ::wasm_junction::Val) -> ::std::result::Result<Self, Self::Error> {
+                    let ::wasm_junction::Val::Enum(case) = value else {
+                        return Err(::wasm_junction::TypeError::new(#expected));
+                    };
+                    match case.as_str() {
+                        #(#decode_cases,)*
+                        _ => Err(::wasm_junction::TypeError::new(#expected)),
+                    }
+                }
+            }
+        })
+    }
+
     pub(super) fn record(&self, name: &str, record: &Record) -> syn::Result<TokenStream> {
         let ident = rust_ident(&name.to_upper_camel_case())?;
         let fields = record
