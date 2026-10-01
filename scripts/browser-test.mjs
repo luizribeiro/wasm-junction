@@ -1,12 +1,19 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { once } from "node:events";
+import { tmpdir } from "node:os";
 import process from "node:process";
 
 const [browserName, ...cargoArgs] = process.argv.slice(2);
 const playwrightRoot = process.env.PLAYWRIGHT_NODE_PATH;
 if (!playwrightRoot) throw new Error("run this command inside `nix develop`");
+
+const commandEnv = { ...process.env };
+const diagnosticsDirectory = mkdtempSync(join(tmpdir(), "wasm-junction-browser-"));
+const diagnosticsPath = join(diagnosticsDirectory, `${browserName}.log`);
+process.env.DEBUG = "pw:browser";
+process.env.DEBUG_FILE = diagnosticsPath;
 
 const playwright = await import(join(playwrightRoot, "index.mjs"));
 const browserType = playwright[browserName];
@@ -24,6 +31,7 @@ function delay(milliseconds) {
 async function installBrowser() {
   if (existsSync(browserType.executablePath())) return;
   const installer = spawn(process.execPath, [join(playwrightRoot, "cli.js"), "install", browserName], {
+    env: commandEnv,
     stdio: "inherit",
   });
   const [code, signal] = await once(installer, "exit");
@@ -38,7 +46,7 @@ const child = spawn(
   {
     detached: true,
     env: {
-      ...process.env,
+      ...commandEnv,
       CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: "wasm-bindgen-test-runner",
       NO_HEADLESS: "1",
       WASM_BINDGEN_TEST_ADDRESS: "127.0.0.1:0",
@@ -71,6 +79,8 @@ child.once("exit", (code, signal) => {
 
 let browser;
 let stopping = false;
+let resultArrived = false;
+let reportBrowserDiagnostics = false;
 async function stop() {
   if (stopping) return;
   stopping = true;
@@ -85,6 +95,15 @@ async function stop() {
   }
 }
 
+async function printBrowserDiagnostics() {
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const diagnostics = existsSync(diagnosticsPath)
+    ? readFileSync(diagnosticsPath, "utf8").trimEnd()
+    : "";
+  console.error(`\n${browserName} browser diagnostics:`);
+  console.error(diagnostics || "(no browser output captured)");
+}
+
 for (const [signal, status] of [["SIGINT", 130], ["SIGTERM", 143]]) {
   process.once(signal, async () => {
     await stop();
@@ -97,7 +116,15 @@ try {
     server,
     delay(600_000).then(() => { throw new Error("timed out waiting for the test server"); }),
   ]);
-  browser = await browserType.launch({ headless: true });
+  try {
+    browser = await browserType.launch({ headless: true });
+  } catch (error) {
+    reportBrowserDiagnostics = true;
+    throw error;
+  }
+  browser.on("disconnected", () => {
+    if (!resultArrived && !stopping) reportBrowserDiagnostics = true;
+  });
   console.log(`${browserName} ${browser.version()} (Playwright 1.63.0)`);
   const page = await browser.newPage();
   page.on("console", (message) => console.log(message.text()));
@@ -109,10 +136,19 @@ try {
     { timeout: 180_000 },
   );
   const result = await page.locator("#output").textContent();
+  resultArrived = true;
   process.stdout.write(`${result}\n`);
   const summary = result.match(/test result: ok\.\s+(\d+) passed;/);
   if (!summary) throw new Error(`${browserName} tests did not report a passing result`);
   if (Number(summary[1]) === 0) throw new Error(`${browserName} ran zero tests`);
+} catch (error) {
+  if (browser && !resultArrived && !browser.isConnected()) reportBrowserDiagnostics = true;
+  throw error;
 } finally {
-  await stop();
+  try {
+    await stop();
+  } finally {
+    if (reportBrowserDiagnostics) await printBrowserDiagnostics();
+    rmSync(diagnosticsDirectory, { recursive: true, force: true });
+  }
 }
