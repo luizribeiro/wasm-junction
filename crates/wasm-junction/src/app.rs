@@ -1033,6 +1033,11 @@ pub enum ReloadError {
     ResourceExports(Vec<String>),
     /// One or more imported interfaces have no unique provider.
     MissingImports(MissingImports),
+    /// Replacing the component would make existing imports ambiguous.
+    WouldMakeAmbiguous {
+        /// Imports whose resolution would be ambiguous.
+        issues: Vec<ResolutionIssue>,
+    },
     /// The selected engine could not compile the replacement.
     Compile(EngineError),
 }
@@ -1047,6 +1052,15 @@ impl Display for ReloadError {
                 interfaces.join(", ")
             ),
             Self::MissingImports(error) => Display::fmt(error, formatter),
+            Self::WouldMakeAmbiguous { issues } => write!(
+                formatter,
+                "reload would make imports ambiguous: {}",
+                issues
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ),
             Self::Compile(error) => write!(formatter, "component compilation failed: {error}"),
         }
     }
@@ -1057,7 +1071,9 @@ impl Error for ReloadError {
         match self {
             Self::MissingImports(error) => Some(error),
             Self::Compile(error) => Some(error),
-            Self::UnknownComponent(_) | Self::ResourceExports(_) => None,
+            Self::UnknownComponent(_)
+            | Self::ResourceExports(_)
+            | Self::WouldMakeAmbiguous { .. } => None,
         }
     }
 }

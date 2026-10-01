@@ -29,6 +29,11 @@ const WRITER_WIT: &str = r"
     interface article { write: func(text: string) -> string; }
     world writer { import example:translate/translator@0.1.0; export article; }
 ";
+const MARKER_WIT: &str = r"
+    package example:marker@1.0.0;
+    interface marker { mark: func(); }
+    world service { export marker; }
+";
 
 fn component() -> Component {
     Component::from_bytes(component_bytes(TRANSLATOR_WIT, "service")).unwrap()
@@ -110,4 +115,36 @@ fn reload_checks_imports_and_preserves_compatible_links() {
         .unwrap(),
         [Val::from("translated: hello")]
     );
+}
+
+#[test]
+fn reload_refuses_to_make_an_existing_import_ambiguous() {
+    let app = App::builder().engine(FakeEngine).build().unwrap();
+    block_on(
+        app.load(
+            Component::from_bytes(component_bytes(TRANSLATOR_V0_WIT, "service"))
+                .unwrap()
+                .named("translator"),
+        ),
+    )
+    .unwrap();
+    block_on(app.load(writer().named("writer"))).unwrap();
+    block_on(
+        app.load(
+            Component::from_bytes(component_bytes(MARKER_WIT, "service"))
+                .unwrap()
+                .named("candidate"),
+        ),
+    )
+    .unwrap();
+
+    let error = block_on(app.reload(
+        "candidate",
+        Component::from_bytes(component_bytes(TRANSLATOR_V0_WIT, "service")).unwrap(),
+    ))
+    .unwrap_err();
+    let ReloadError::WouldMakeAmbiguous { issues } = error else {
+        panic!("expected an ambiguity");
+    };
+    assert_eq!(issues[0].component, "writer");
 }

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::{
-    App, Generation, LoadedComponent, MissingImports, ReloadError, interfaces_compatible,
-    resolution_candidates_excluding,
+    App, Candidate, Generation, LoadedComponent, MissingImports, ReloadError, ResolutionIssue,
+    interfaces_compatible, resolution_candidates_excluding,
 };
 use crate::Component;
 use crate::component::ComponentParts;
@@ -35,7 +35,7 @@ impl App {
         if !self.lock_components().contains_key(name) {
             return Err(ReloadError::UnknownComponent(name.to_owned()));
         }
-        self.validate_reload(name, &imports, &self.lock_components())?;
+        self.validate_reload(name, &imports, &exports, &self.lock_components())?;
         let compiled = self
             .0
             .engine
@@ -43,7 +43,7 @@ impl App {
             .await
             .map_err(ReloadError::Compile)?;
         let mut components = self.lock_components();
-        self.validate_reload(name, &imports, &components)?;
+        self.validate_reload(name, &imports, &exports, &components)?;
         let loaded = components
             .get_mut(name)
             .ok_or_else(|| ReloadError::UnknownComponent(name.to_owned()))?;
@@ -60,35 +60,111 @@ impl App {
         &self,
         name: &str,
         imports: &[String],
+        exports: &[String],
         components: &std::collections::BTreeMap<String, LoadedComponent>,
     ) -> Result<(), ReloadError> {
         let loaded = components
             .get(name)
             .ok_or_else(|| ReloadError::UnknownComponent(name.to_owned()))?;
         let links = retained_links(loaded, imports);
-        let mut missing = imports
-            .iter()
-            .filter(|import| !self.0.engine.supports_import(import))
-            .filter(|import| {
-                if let Some(provider) = links.get(import.as_str()) {
-                    return components
+        let mut missing = Vec::new();
+        let mut issues = Vec::new();
+        for import in imports {
+            if self.0.engine.supports_import(import) {
+                continue;
+            }
+            let candidates = links.get(import.as_str()).map_or_else(
+                || {
+                    resolution_candidates_excluding(
+                        &self.0.providers,
+                        components,
+                        import,
+                        Some(name),
+                    )
+                },
+                |provider| {
+                    components
                         .get(provider)
-                        .is_none_or(|provider| !provider.exports_interface(import));
+                        .filter(|component| component.exports_interface(import))
+                        .map_or_else(Vec::new, |_| vec![Candidate::Component(provider.clone())])
+                },
+            );
+            match candidates.len() {
+                0 => missing.push(import.clone()),
+                1 => {}
+                _ => issues.push(ResolutionIssue::ambiguous(
+                    name.to_owned(),
+                    import.clone(),
+                    candidates,
+                )),
+            }
+        }
+        for (consumer, component) in components {
+            if consumer == name {
+                continue;
+            }
+            for import in &component.generation.imports {
+                if component.links.contains_key(import.as_ref()) {
+                    continue;
                 }
-                resolution_candidates_excluding(&self.0.providers, components, import, Some(name))
-                    .len()
-                    != 1
-            })
-            .cloned()
-            .collect::<Vec<_>>();
+                let candidates = prospective_candidates(
+                    &self.0.providers,
+                    components,
+                    consumer,
+                    import,
+                    name,
+                    exports,
+                );
+                if candidates.len() > 1 {
+                    issues.push(ResolutionIssue::ambiguous(
+                        consumer.clone(),
+                        import.to_string(),
+                        candidates,
+                    ));
+                }
+            }
+        }
         missing.sort();
         missing.dedup();
-        if missing.is_empty() {
-            Ok(())
-        } else {
-            Err(ReloadError::MissingImports(MissingImports::new(missing)))
+        issues.sort_by(|left, right| {
+            (&left.component, &left.interface).cmp(&(&right.component, &right.interface))
+        });
+        if !missing.is_empty() {
+            return Err(ReloadError::MissingImports(MissingImports::new(missing)));
         }
+        if !issues.is_empty() {
+            return Err(ReloadError::WouldMakeAmbiguous { issues });
+        }
+        Ok(())
     }
+}
+
+fn prospective_candidates(
+    providers: &HashMap<&'static str, Arc<dyn crate::Provider>>,
+    components: &std::collections::BTreeMap<String, LoadedComponent>,
+    consumer: &str,
+    requested: &str,
+    replacement: &str,
+    exports: &[String],
+) -> Vec<Candidate> {
+    providers
+        .keys()
+        .filter(|provided| interfaces_compatible(requested, provided))
+        .map(|_| Candidate::Host)
+        .chain(components.iter().filter_map(|(name, component)| {
+            if name == consumer {
+                return None;
+            }
+            let matches = if name == replacement {
+                exports
+                    .iter()
+                    .any(|export| interfaces_compatible(requested, export))
+            } else {
+                component.exports_interface(requested)
+            };
+            matches.then(|| Candidate::Component(name.clone()))
+        }))
+        .collect()
 }
 
 fn retained_links(component: &LoadedComponent, imports: &[String]) -> HashMap<String, String> {
