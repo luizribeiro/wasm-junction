@@ -1,6 +1,7 @@
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
+use syn::LitStr;
 use wit_parser::{InterfaceId, PackageId, Resolve};
 
 mod collisions;
@@ -20,13 +21,10 @@ mod walk;
 pub(crate) fn generate(
     resolve: &Resolve,
     package_id: PackageId,
+    requested: Option<&[LitStr]>,
     span: Span,
 ) -> syn::Result<TokenStream> {
-    let roots = resolve.packages[package_id]
-        .interfaces
-        .values()
-        .copied()
-        .collect::<Vec<_>>();
+    let roots = select_interfaces(resolve, package_id, requested)?;
     validate::interfaces(resolve, &roots, span)?;
     collisions::check(resolve, &roots, span)?;
     let selected = reachability::find(resolve, &roots)?;
@@ -47,6 +45,44 @@ pub(crate) fn generate(
         })
         .collect::<syn::Result<Vec<_>>>()?;
     Ok(quote!(#(#modules)*))
+}
+
+fn select_interfaces(
+    resolve: &Resolve,
+    package_id: PackageId,
+    requested: Option<&[LitStr]>,
+) -> syn::Result<Vec<InterfaceId>> {
+    let available = resolve.packages[package_id]
+        .interfaces
+        .iter()
+        .map(|(name, id)| (resolve.packages[package_id].name.interface_id(name), *id))
+        .collect::<Vec<_>>();
+    let Some(requested) = requested else {
+        return Ok(available.iter().map(|(_, id)| *id).collect());
+    };
+    requested
+        .iter()
+        .map(|name| {
+            let value = name.value();
+            available
+                .iter()
+                .find(|(candidate, _)| {
+                    candidate == &value || candidate.split('@').next() == Some(&value)
+                })
+                .map(|(_, id)| *id)
+                .ok_or_else(|| {
+                    let names = available
+                        .iter()
+                        .map(|(name, _)| format!("`{name}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    syn::Error::new(
+                        name.span(),
+                        format!("unknown interface `{value}`; available interfaces: {names}"),
+                    )
+                })
+        })
+        .collect()
 }
 
 struct Generator<'a> {
@@ -191,7 +227,7 @@ mod tests {
             .join("../wasm-junction/tests/fixtures/dependencies/wit");
         let mut resolve = Resolve::default();
         let (package, _) = resolve.push_path(path).unwrap();
-        let tokens = super::generate(&resolve, package, Span::call_site())
+        let tokens = super::generate(&resolve, package, None, Span::call_site())
             .unwrap()
             .to_string();
         assert!(
