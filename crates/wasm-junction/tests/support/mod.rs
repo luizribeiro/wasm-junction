@@ -34,6 +34,12 @@ pub const RESOURCE_BINDGEN_CLIENT: &str = "test:resource-plugin/client@1.0.0";
 /// The host-resource bindgen fixture's imported interface.
 pub const RESOURCE_BINDGEN_HOST: &str = "test:resources/resources@1.0.0";
 
+/// The generated stream fixture's imported interface.
+pub const STREAM_BINDGEN_HOST: &str = "test:bindgen-streams/host@1.0.0";
+
+/// The generated stream fixture's exported interface.
+pub const STREAM_BINDGEN_GUEST: &str = "test:bindgen-streams/guest@1.0.0";
+
 /// Per-invocation data checked by the context propagation fixture.
 pub struct ContextMarker(pub u32);
 
@@ -163,6 +169,9 @@ impl CompiledComponent for UnusedComponent {
                         )
                         .await
                 }
+                STREAM_BINDGEN_GUEST => {
+                    stream_import(imports, context, component, function, args).await
+                }
                 RESERVED_HOST => {
                     imports
                         .call(context, component, interface, function, args)
@@ -195,6 +204,24 @@ impl CompiledComponent for UnusedComponent {
             }
         })
     }
+}
+
+async fn stream_import(
+    imports: Arc<dyn ImportDispatcher>,
+    context: InvocationContext,
+    component: Arc<str>,
+    function: Arc<str>,
+    args: Vals,
+) -> Result<Vals, CallError> {
+    imports
+        .call(
+            context,
+            component,
+            Arc::from(STREAM_BINDGEN_HOST),
+            function,
+            args,
+        )
+        .await
 }
 
 fn resource_import(function: &str) -> Result<&str, CallError> {

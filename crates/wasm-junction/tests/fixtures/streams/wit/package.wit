@@ -1,0 +1,18 @@
+package test:bindgen-streams@1.0.0;
+
+interface host {
+  top: async func(value: stream<u8>) -> stream<u8>;
+  optional: async func(value: option<stream<u8>>) -> option<stream<u8>>;
+  choose: async func(value: result<stream<u8>, stream<u8>>) -> result<stream<u8>, stream<u8>>;
+}
+
+interface guest {
+  top: async func(value: stream<u8>) -> stream<u8>;
+  optional: async func(value: option<stream<u8>>) -> option<stream<u8>>;
+  choose: async func(value: result<stream<u8>, stream<u8>>) -> result<stream<u8>, stream<u8>>;
+}
+
+world plugin {
+  import host;
+  export guest;
+}
