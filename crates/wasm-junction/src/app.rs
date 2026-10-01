@@ -138,7 +138,7 @@ impl App {
                 }
             }
         }
-        typed_load_resolution_result(missing, issues)
+        load_resolution_result(missing, issues)
     }
 
     /// Returns a generated handle for one component interface.
@@ -1081,7 +1081,7 @@ fn resolution_candidates_excluding(
         .collect()
 }
 
-fn typed_load_resolution_result(
+fn load_resolution_result(
     mut missing: Vec<String>,
     mut issues: Vec<ResolutionIssue>,
 ) -> Result<(), LoadError> {
