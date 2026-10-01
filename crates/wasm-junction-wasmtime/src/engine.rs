@@ -1,6 +1,10 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::future::Future;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Waker};
 
 use wasm_junction_core::{
     BoxFuture, CallError, CompiledComponent, Engine, EngineError, ImportDispatcher,
@@ -84,23 +88,118 @@ impl Engine for WasmtimeEngine {
         bytes: Arc<[u8]>,
         wasi: WasiConfig,
     ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
-        Box::pin(async move {
-            let component = Component::new(&self.engine, bytes)
-                .map_err(|error| EngineError::new(error.to_string()))?;
-            let mut linker = self.linker.clone();
-            let resources = define_imports(&mut linker, &component)
-                .map_err(|error| EngineError::new(error.to_string()))?;
-            let pre = linker
-                .instantiate_pre(&component)
-                .map_err(|error| EngineError::new(error.to_string()))?;
-            Ok(Arc::new(Compiled {
-                pre,
-                instantiations: self.instantiations.clone(),
-                wasi,
-                resources: resources.into(),
-            }) as Arc<dyn CompiledComponent>)
-        })
+        let engine = self.engine.clone();
+        let linker = self.linker.clone();
+        let instantiations = self.instantiations.clone();
+        Box::pin(spawn_compile(move || {
+            compile_component(&engine, linker, instantiations, bytes, wasi)
+        }))
     }
+}
+
+fn spawn_compile(compile: impl FnOnce() -> CompileResult + Send + 'static) -> CompileReceiver {
+    let (channel, receiver) = compile_channel();
+    let worker = channel.clone();
+    let run = move || {
+        let result = catch_unwind(AssertUnwindSafe(compile)).unwrap_or_else(|panic| {
+            Err(EngineError::new(format!(
+                "compilation panicked: {}",
+                panic_message(panic.as_ref())
+            )))
+        });
+        send_compile(&worker, result);
+    };
+    if let Err(error) = std::thread::Builder::new()
+        .name("wasm-junction-compile".to_owned())
+        .spawn(run)
+    {
+        send_compile(
+            &channel,
+            Err(EngineError::new(format!(
+                "could not start compilation worker: {error}"
+            ))),
+        );
+    }
+    receiver
+}
+
+fn panic_message(panic: &(dyn std::any::Any + Send)) -> &str {
+    if let Some(message) = panic.downcast_ref::<&str>() {
+        message
+    } else if let Some(message) = panic.downcast_ref::<String>() {
+        message
+    } else {
+        "unknown panic"
+    }
+}
+
+type CompileResult = Result<Arc<dyn CompiledComponent>, EngineError>;
+
+#[derive(Default)]
+struct CompileChannel {
+    result: Option<CompileResult>,
+    waker: Option<Waker>,
+}
+
+struct CompileReceiver(Arc<Mutex<CompileChannel>>);
+
+impl Future for CompileReceiver {
+    type Output = CompileResult;
+
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut channel = lock_channel(&self.0);
+        if let Some(result) = channel.result.take() {
+            Poll::Ready(result)
+        } else {
+            channel.waker = Some(context.waker().clone());
+            Poll::Pending
+        }
+    }
+}
+
+fn compile_channel() -> (Arc<Mutex<CompileChannel>>, CompileReceiver) {
+    let channel = Arc::new(Mutex::new(CompileChannel::default()));
+    (channel.clone(), CompileReceiver(channel))
+}
+
+fn send_compile(channel: &Mutex<CompileChannel>, result: CompileResult) {
+    let waker = {
+        let mut channel = lock_channel(channel);
+        channel.result = Some(result);
+        channel.waker.take()
+    };
+    if let Some(waker) = waker {
+        waker.wake();
+    }
+}
+
+fn lock_channel(channel: &Mutex<CompileChannel>) -> std::sync::MutexGuard<'_, CompileChannel> {
+    match channel.lock() {
+        Ok(channel) => channel,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn compile_component(
+    engine: &RuntimeEngine,
+    mut linker: Linker<StoreData>,
+    instantiations: Arc<AtomicU64>,
+    bytes: Arc<[u8]>,
+    wasi: WasiConfig,
+) -> CompileResult {
+    let component =
+        Component::new(engine, bytes).map_err(|error| EngineError::new(error.to_string()))?;
+    let resources = define_imports(&mut linker, &component)
+        .map_err(|error| EngineError::new(error.to_string()))?;
+    let pre = linker
+        .instantiate_pre(&component)
+        .map_err(|error| EngineError::new(error.to_string()))?;
+    Ok(Arc::new(Compiled {
+        pre,
+        instantiations,
+        wasi,
+        resources: resources.into(),
+    }))
 }
 
 struct Compiled {
@@ -380,37 +479,71 @@ fn wasi_context(configuration: &WasiConfig) -> WasiState {
 #[cfg(test)]
 mod tests {
     use std::future::Future;
-    use std::task::{Context, Poll, Waker};
+    use std::task::{Context, Poll, Wake, Waker};
+    use std::time::Duration;
 
     use wasm_junction_conformance::component;
 
     use super::*;
 
-    fn ready<F: Future>(future: F) -> F::Output {
+    struct ThreadWake(std::thread::Thread);
+
+    impl Wake for ThreadWake {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+
+    fn block_on<F: Future>(future: F) -> F::Output {
         let mut future = std::pin::pin!(future);
-        match future
-            .as_mut()
-            .poll(&mut Context::from_waker(Waker::noop()))
-        {
-            Poll::Ready(output) => output,
-            Poll::Pending => panic!("compilation unexpectedly suspended"),
+        let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
+        let mut context = Context::from_waker(&waker);
+        loop {
+            match future.as_mut().poll(&mut context) {
+                Poll::Ready(output) => return output,
+                Poll::Pending => std::thread::park(),
+            }
         }
     }
 
     #[test]
     fn compiles_component_once_without_instantiating_it() {
         let engine = WasmtimeEngine::new().unwrap();
-        ready(engine.compile(Arc::from(component()), WasiConfig::default())).unwrap();
+        block_on(engine.compile(Arc::from(component()), WasiConfig::default())).unwrap();
         assert_eq!(engine.instantiations(), 0);
     }
 
     #[test]
     fn compiles_imported_host_resources() {
         let engine = WasmtimeEngine::new().unwrap();
-        ready(engine.compile(
+        block_on(engine.compile(
             Arc::from(wasm_junction_conformance::resource_component()),
             WasiConfig::default(),
         ))
         .unwrap();
+    }
+
+    #[test]
+    fn reports_a_compilation_worker_panic() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            sender
+                .send(block_on(spawn_compile(|| {
+                    panic!("deliberate compilation panic")
+                })))
+                .unwrap();
+        });
+
+        let result = receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("panicking compilation left its receiver pending");
+        worker.join().unwrap();
+        let Err(error) = result else {
+            panic!("panicking compilation unexpectedly succeeded");
+        };
+        assert_eq!(
+            error.to_string(),
+            "compilation panicked: deliberate compilation panic"
+        );
     }
 }

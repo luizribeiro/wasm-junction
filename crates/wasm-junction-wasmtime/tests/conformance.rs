@@ -13,10 +13,11 @@ use wasm_junction::{
     Provided, Provider, Resource, Val, Vals, WasiConfig,
 };
 use wasm_junction_conformance::{
-    CYCLE_A, Fixture, FixtureHost, RESOURCE_CLIENT, RESOURCE_HOST, ReloadGreeter, ReloadHost,
-    ResourceHost, RoutedFixture, RoutedHost, SUMMARIZER, WRITER, component, cycle_a_component,
-    cycle_b_component, reload_v1_component, reload_v2_component, resource_component, run,
-    run_reload, run_resources, run_routed, sample_note, translator_component, writer_component,
+    CYCLE_A, Fixture, FixtureHost, RELOAD_GREETER, RESOURCE_CLIENT, RESOURCE_HOST, ReloadGreeter,
+    ReloadHost, ResourceHost, RoutedFixture, RoutedHost, SUMMARIZER, WRITER, component,
+    cycle_a_component, cycle_b_component, reload_v1_component, reload_v2_component,
+    resource_component, run, run_reload, run_resources, run_routed, sample_note,
+    translator_component, writer_component,
 };
 use wasm_junction_wasmtime::WasmtimeEngine;
 
@@ -104,6 +105,56 @@ fn reload_scenario_progresses_on_a_current_thread_runtime() {
         .expect("reload scenario deadlocked")
         .unwrap();
     worker.join().unwrap();
+}
+
+#[test]
+fn call_completes_while_reload_compiles_on_a_current_thread_runtime() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let app = App::builder()
+        .engine(WasmtimeEngine::new().unwrap())
+        .provide(ReloadHost::default().provided())
+        .build()
+        .unwrap();
+    runtime
+        .block_on(
+            app.load(
+                Component::from_bytes(reload_v1_component())
+                    .unwrap()
+                    .named("greeter"),
+            ),
+        )
+        .unwrap();
+
+    let (sender, receiver) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let result = runtime.block_on(async {
+            let reload = app.reload(
+                "greeter",
+                Component::from_bytes(reload_v2_component()).unwrap(),
+            );
+            let mut reload = std::pin::pin!(reload);
+            poll_fn(|context| match reload.as_mut().poll(context) {
+                Poll::Pending => Poll::Ready(()),
+                Poll::Ready(result) => panic!("reload did not suspend: {result:?}"),
+            })
+            .await;
+            let output = app
+                .call("greeter", RELOAD_GREETER, "greet", vec![Val::from("Ada")])
+                .await
+                .map_err(|error| error.to_string())?;
+            reload.await.map_err(|error| error.to_string())?;
+            Ok::<_, String>(output)
+        });
+        sender.send(result).unwrap();
+    });
+    let output = receiver
+        .recv_timeout(Duration::from_secs(30))
+        .expect("concurrent reload deadlocked")
+        .unwrap();
+    worker.join().unwrap();
+    assert_eq!(output, [Val::from("v1: hello, Ada")]);
 }
 
 #[derive(Clone)]
