@@ -16,6 +16,21 @@ pub(crate) fn from_wasmtime(value: WasmtimeVal) -> Result<Val, wasmtime::Error> 
         WasmtimeVal::Float64(value) => Ok(Val::F64(value)),
         WasmtimeVal::Char(value) => Ok(Val::Char(value)),
         WasmtimeVal::String(value) => Ok(Val::String(value)),
+        WasmtimeVal::List(values) => values
+            .into_iter()
+            .map(from_wasmtime)
+            .collect::<Result<_, _>>()
+            .map(Val::List),
+        WasmtimeVal::Tuple(values) => values
+            .into_iter()
+            .map(from_wasmtime)
+            .collect::<Result<_, _>>()
+            .map(Val::Tuple),
+        WasmtimeVal::Record(fields) => fields
+            .into_iter()
+            .map(|(name, value)| Ok((name, from_wasmtime(value)?)))
+            .collect::<Result<_, _>>()
+            .map(Val::Record),
         other => Err(wasmtime::Error::msg(format!(
             "unsupported component value: {other:?}"
         ))),
@@ -37,10 +52,21 @@ pub(crate) fn to_wasmtime(value: Val) -> Result<WasmtimeVal, wasmtime::Error> {
         Val::F64(value) => Ok(WasmtimeVal::Float64(value)),
         Val::Char(value) => Ok(WasmtimeVal::Char(value)),
         Val::String(value) => Ok(WasmtimeVal::String(value)),
+        Val::List(values) => convert_values(values).map(WasmtimeVal::List),
+        Val::Tuple(values) => convert_values(values).map(WasmtimeVal::Tuple),
+        Val::Record(fields) => fields
+            .into_iter()
+            .map(|(name, value)| Ok((name, to_wasmtime(value)?)))
+            .collect::<Result<_, _>>()
+            .map(WasmtimeVal::Record),
         other => Err(wasmtime::Error::msg(format!(
             "unsupported framework value: {other:?}"
         ))),
     }
+}
+
+fn convert_values(values: Vec<Val>) -> Result<Vec<WasmtimeVal>, wasmtime::Error> {
+    values.into_iter().map(to_wasmtime).collect()
 }
 
 #[cfg(test)]
@@ -89,5 +115,15 @@ mod tests {
             panic!("f64 changed shape");
         };
         assert!(value.is_nan());
+    }
+
+    #[test]
+    fn list_tuple_and_record_round_trip() {
+        let value = Val::Record(vec![(
+            "items".to_owned(),
+            Val::List(vec![Val::Tuple(vec![Val::U32(7), Val::from("weekly")])]),
+        )]);
+        assert_eq!(round_trip(value.clone()), value);
+        assert_eq!(round_trip(Val::List(Vec::new())), Val::List(Vec::new()));
     }
 }
