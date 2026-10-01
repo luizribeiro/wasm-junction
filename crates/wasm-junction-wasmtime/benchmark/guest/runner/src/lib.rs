@@ -8,7 +8,7 @@ mod bindings {
     });
 }
 
-use bindings::benchmark::dispatch::host;
+use bindings::benchmark::dispatch::pinger;
 
 struct Component;
 
@@ -16,7 +16,7 @@ impl bindings::exports::benchmark::dispatch::runner::Guest for Component {
     fn imports(iterations: u32) -> u32 {
         let mut value = 0;
         for _ in 0..iterations {
-            value = host::ping(value);
+            value = pinger::ping(value);
         }
         value
     }
