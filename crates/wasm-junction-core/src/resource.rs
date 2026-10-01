@@ -90,7 +90,7 @@ pub struct ResourceTable<T: HostBound> {
 
 struct TableState<T> {
     next: Option<u32>,
-    values: HashMap<u32, T>,
+    values: HashMap<u32, Arc<T>>,
 }
 
 impl<T: HostBound> ResourceTable<T> {
@@ -140,7 +140,7 @@ impl<T: HostBound> ResourceTable<T> {
             .state
             .lock()
             .map_err(|_| CallError::trap("resource table lock is poisoned"))?;
-        let id = state.insert(value).ok_or_else(|| {
+        let id = state.insert(Arc::new(value)).ok_or_else(|| {
             CallError::trap(format!(
                 "resource table for `{}/{}` is exhausted",
                 self.interface, self.name
@@ -163,6 +163,16 @@ impl<T: HostBound> ResourceTable<T> {
         resource: &Resource,
         operation: impl FnOnce(&T) -> R,
     ) -> Result<R, CallError> {
+        let value = self.borrow(resource)?;
+        Ok(operation(&value))
+    }
+
+    /// Returns shared ownership of a borrowed value without retaining the table lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CallError`] for the wrong resource type or an unknown id.
+    pub fn borrow(&self, resource: &Resource) -> Result<Arc<T>, CallError> {
         self.validate(resource)?;
         #[cfg(target_arch = "wasm32")]
         let state = self
@@ -177,7 +187,7 @@ impl<T: HostBound> ResourceTable<T> {
         state
             .values
             .get(&resource.id)
-            .map(operation)
+            .cloned()
             .ok_or_else(|| self.unknown(resource.id))
     }
 
@@ -204,10 +214,20 @@ impl<T: HostBound> ResourceTable<T> {
             .state
             .lock()
             .map_err(|_| CallError::trap("resource table lock is poisoned"))?;
-        state
+        let value = state
             .values
             .remove(&resource.id)
-            .ok_or_else(|| self.unknown(resource.id))
+            .ok_or_else(|| self.unknown(resource.id))?;
+        match Arc::try_unwrap(value) {
+            Ok(value) => Ok(value),
+            Err(value) => {
+                state.values.insert(resource.id, value);
+                Err(CallError::trap(format!(
+                    "cannot take resource `{}/{}` id {} while it is borrowed",
+                    self.interface, self.name, resource.id
+                )))
+            }
+        }
     }
 
     fn validate(&self, resource: &Resource) -> Result<(), CallError> {
@@ -237,7 +257,7 @@ impl<T> TableState<T> {
         }
     }
 
-    fn insert(&mut self, value: T) -> Option<u32> {
+    fn insert(&mut self, value: Arc<T>) -> Option<u32> {
         let id = self.next?;
         self.next = id.checked_add(1);
         self.values.insert(id, value);
@@ -247,6 +267,8 @@ impl<T> TableState<T> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::TableState;
     use crate::{Resource, ResourceOwnership, ResourceTable, Val};
 
@@ -263,8 +285,8 @@ mod tests {
     #[test]
     fn table_ids_do_not_wrap() {
         let mut state = TableState::with_next_id(Some(u32::MAX));
-        assert_eq!(state.insert("last"), Some(u32::MAX));
-        assert_eq!(state.insert("overflow"), None);
+        assert_eq!(state.insert(Arc::new("last")), Some(u32::MAX));
+        assert_eq!(state.insert(Arc::new("overflow")), None);
     }
 
     #[test]
@@ -301,5 +323,19 @@ mod tests {
                 .to_string()
                 .contains("file")
         );
+    }
+
+    #[test]
+    fn taking_a_borrowed_value_preserves_it_for_a_later_owner() {
+        let table = ResourceTable::new("example:host/api@1.0.0", "session");
+        let owned = table.insert(String::from("Ada")).unwrap();
+        let borrowed = table.borrow(&owned).unwrap();
+
+        let error = table.take(&owned).unwrap_err();
+        assert!(error.to_string().contains("while it is borrowed"));
+        assert_eq!(borrowed.as_str(), "Ada");
+
+        drop(borrowed);
+        assert_eq!(table.take(&owned).unwrap(), "Ada");
     }
 }
