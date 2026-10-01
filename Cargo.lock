@@ -1303,6 +1303,7 @@ name = "wasm-junction"
 version = "0.0.0"
 dependencies = [
  "wasm-junction-core",
+ "wasm-junction-macros",
  "wasm-junction-wasmtime",
  "wasmparser 0.259.0",
  "wit-component 0.259.0",
@@ -1340,6 +1341,17 @@ dependencies = [
 [[package]]
 name = "wasm-junction-guest-build"
 version = "0.0.0"
+
+[[package]]
+name = "wasm-junction-macros"
+version = "0.0.0"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "wit-parser 0.259.0",
+]
 
 [[package]]
 name = "wasm-junction-wasmtime"

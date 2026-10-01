@@ -1,0 +1,22 @@
+[package]
+name = "wasm-junction-macros"
+description = "Binding generation for wasm-junction"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[lib]
+proc-macro = true
+
+[lints]
+workspace = true
+
+[dependencies]
+heck = "0.5.0"
+proc-macro2 = "1.0.101"
+quote = "1.0.40"
+syn = { version = "2.0.106", default-features = false, features = ["parsing", "proc-macro"] }
+wit-parser = { version = "=0.259.0", default-features = false, features = ["std"] }

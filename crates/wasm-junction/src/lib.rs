@@ -27,3 +27,4 @@ pub use wasm_junction_core::{
     HostBound, ImportDispatcher, ImportTarget, InvocationContext, MaybeSend, TypeError, Val, Vals,
     WasiConfig,
 };
+pub use wasm_junction_macros::bindgen;

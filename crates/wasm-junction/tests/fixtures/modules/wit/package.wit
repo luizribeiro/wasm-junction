@@ -1,0 +1,4 @@
+package test:names@1.2.3;
+
+interface note-store {}
+interface search {}
