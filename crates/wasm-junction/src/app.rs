@@ -23,6 +23,7 @@ pub(crate) struct AppInner {
     #[allow(dead_code, reason = "export dispatch runs the middleware chain")]
     middleware: Arc<[Arc<dyn ErasedMiddleware>]>,
     wasi: WasiConfig,
+    max_call_depth: usize,
     components: Mutex<BTreeMap<String, LoadedComponent>>,
 }
 
@@ -466,17 +467,26 @@ impl App {
                     name,
                     interface,
                     compiled,
-                }) => (
-                    name.clone(),
-                    interface,
-                    Arc::new(ComponentTarget {
-                        compiled,
-                        imports: Arc::new(self.clone()),
-                        context,
-                        component: name,
-                        component_boundary: true,
-                    }),
-                ),
+                }) => {
+                    let context = context.descend();
+                    if context.call_depth() > self.0.max_call_depth {
+                        return Err(CallError::refused(format!(
+                            "maximum call depth of {} exceeded",
+                            self.0.max_call_depth
+                        )));
+                    }
+                    (
+                        name.clone(),
+                        interface,
+                        Arc::new(ComponentTarget {
+                            compiled,
+                            imports: Arc::new(self.clone()),
+                            context,
+                            component: name,
+                            component_boundary: true,
+                        }),
+                    )
+                }
                 Err(ResolveError::Missing) => {
                     return Err(CallError::unavailable(format!(
                         "no provider for `{interface}`"
@@ -1017,6 +1027,7 @@ pub struct AppBuilder {
     providers: Vec<ProviderRegistration>,
     middleware: Vec<Arc<dyn ErasedMiddleware>>,
     wasi: WasiConfig,
+    max_call_depth: Option<usize>,
 }
 
 impl AppBuilder {
@@ -1049,6 +1060,13 @@ impl AppBuilder {
     #[must_use]
     pub fn wasi(mut self, wasi: WasiConfig) -> Self {
         self.wasi = wasi;
+        self
+    }
+
+    /// Sets the maximum number of nested component-to-component calls.
+    #[must_use]
+    pub fn max_call_depth(mut self, depth: usize) -> Self {
+        self.max_call_depth = Some(depth);
         self
     }
 
@@ -1090,6 +1108,7 @@ impl AppBuilder {
             providers,
             middleware: self.middleware.into(),
             wasi: self.wasi,
+            max_call_depth: self.max_call_depth.unwrap_or(64),
             components: Mutex::new(BTreeMap::new()),
         })))
     }

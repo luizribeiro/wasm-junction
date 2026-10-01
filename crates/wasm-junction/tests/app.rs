@@ -290,15 +290,31 @@ fn load_refuses_to_make_an_existing_import_ambiguous() {
 }
 
 #[test]
-fn load_all_accepts_mutually_dependent_components_in_any_order() {
-    let app = App::builder().engine(FakeEngine).build().unwrap();
+fn cyclic_components_load_in_any_order_and_stop_at_the_depth_limit() {
+    let trace = Arc::new(Mutex::new(Vec::new()));
+    let app = App::builder()
+        .engine(FakeEngine)
+        .middleware(Trace(trace.clone()))
+        .max_call_depth(3)
+        .build()
+        .unwrap();
     let first = cyclic_component("first-component", "first");
     let second = cyclic_component("second-component", "second");
     block_on(app.load_all([second, first])).unwrap();
     app.check().unwrap();
     let error = block_on(app.call("first", "example:cycle/first-api@1.0.0", "ping", Vec::new()))
         .unwrap_err();
-    assert_eq!(error.kind(), CallErrorKind::Trap);
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert_eq!(error.to_string(), "maximum call depth of 3 exceeded");
+    let calls = trace.lock().unwrap();
+    assert_eq!(calls.len(), 4);
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|call| matches!(call.caller, Caller::Component(_)))
+            .count(),
+        3
+    );
 }
 
 #[test]

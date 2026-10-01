@@ -44,7 +44,10 @@ impl Extensions {
 
 /// Per-invocation data carried through an engine and its imported calls.
 #[derive(Clone, Default)]
-pub struct InvocationContext(Arc<Extensions>);
+pub struct InvocationContext {
+    extensions: Arc<Extensions>,
+    call_depth: usize,
+}
 
 impl InvocationContext {
     #[cfg(not(target_arch = "wasm32"))]
@@ -52,7 +55,10 @@ impl InvocationContext {
     pub(crate) fn with<T: Any + Send + Sync>(value: T) -> Self {
         let mut extensions = Extensions::default();
         extensions.insert(value);
-        Self(Arc::new(extensions))
+        Self {
+            extensions: Arc::new(extensions),
+            call_depth: 0,
+        }
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -60,13 +66,39 @@ impl InvocationContext {
     pub(crate) fn with<T: Any>(value: T) -> Self {
         let mut extensions = Extensions::default();
         extensions.insert(value);
-        Self(Arc::new(extensions))
+        Self {
+            extensions: Arc::new(extensions),
+            call_depth: 0,
+        }
     }
 
     /// Returns data attached to this invocation.
     #[must_use]
     pub fn extensions(&self) -> &Extensions {
-        &self.0
+        &self.extensions
+    }
+
+    /// Returns a copy entered one component-to-component call deeper.
+    ///
+    /// This is public only for the facade dispatcher across the crate boundary. Engine
+    /// implementations should pass invocation context through unchanged.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn descend(&self) -> Self {
+        Self {
+            extensions: self.extensions.clone(),
+            call_depth: self.call_depth.saturating_add(1),
+        }
+    }
+
+    /// Returns the number of component-to-component calls entered by this invocation.
+    ///
+    /// This is public only for the facade dispatcher across the crate boundary. Engine
+    /// implementations should not interpret this value.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn call_depth(&self) -> usize {
+        self.call_depth
     }
 }
 

@@ -85,6 +85,28 @@ impl CompiledComponent for UnusedComponent {
         args: Vals,
     ) -> BoxFuture<'_, Result<Vals, CallError>> {
         Box::pin(async move {
+            if interface.as_ref() == "example:cycle/first-api@1.0.0" {
+                return imports
+                    .call(
+                        context,
+                        component,
+                        Arc::from("example:cycle/second-api@1.0.0"),
+                        function,
+                        args,
+                    )
+                    .await;
+            }
+            if interface.as_ref() == "example:cycle/second-api@1.0.0" {
+                return imports
+                    .call(
+                        context,
+                        component,
+                        Arc::from("example:cycle/first-api@1.0.0"),
+                        function,
+                        args,
+                    )
+                    .await;
+            }
             if interface.as_ref() == "example:writer/article@1.0.0" {
                 return imports
                     .call(
