@@ -7,6 +7,7 @@ mod context;
 mod engine;
 mod error;
 mod future;
+mod resource;
 mod values;
 
 pub use context::{Extensions, InvocationContext};
@@ -15,4 +16,5 @@ pub use engine::{
 };
 pub use error::{CallError, CallErrorKind};
 pub use future::{BoxFuture, HostBound, MaybeSend};
+pub use resource::{Resource, ResourceOwnership};
 pub use values::{TypeError, Val, Vals};

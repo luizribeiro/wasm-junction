@@ -1,6 +1,8 @@
 use std::error::Error;
 use std::fmt::{self, Display};
 
+use crate::Resource;
+
 /// An engine-neutral representation of a plain WIT value.
 ///
 /// Generated bindings convert their Rust types to and from this representation at call
@@ -55,6 +57,8 @@ pub enum Val {
     Option(Option<Box<Self>>),
     /// A WIT `result`, whose success and error payloads may each be absent.
     Result(Result<Option<Box<Self>>, Option<Box<Self>>>),
+    /// A host-defined WIT resource handle.
+    Resource(Resource),
 }
 
 /// A sequence of engine-neutral WIT values used for call arguments and results.
