@@ -108,3 +108,62 @@ fn result_value(case: &str, value: Option<&Val>) -> String {
         |value| format!("{case}({})", val(value)),
     )
 }
+
+macro_rules! with_note {
+    ($prefix:literal, $suffix:literal) => {
+        concat!(
+            $prefix,
+            "{title: \"Daily\", published: true, signed-8: -8, unsigned-8: 8, ",
+            "signed-16: -16, unsigned-16: 16, signed-32: -32, unsigned-32: 32, ",
+            "signed-64: -64, unsigned-64: 64, score-32: 3.5, score-64: 7.25, ",
+            "marker: '§', tags: [\"rust\", \"wasm\"], location: (-71, 42), ",
+            "attachment: text(\"diagram\"), mood: upbeat, emphasis: [concise|detailed], ",
+            "subtitle: some(\"Engine notes\"), revision: ok(7)}",
+            $suffix
+        )
+    };
+}
+
+#[cfg(test)]
+const NOTE: &str = with_note!("", "");
+
+/// Exact trace produced by the fixture's successful summary scenario.
+pub const EXPECTED_TRACE: &[&str] = &[
+    "invocation start summarizer",
+    "call host → summarizer example:notes/summarizer@0.1.0.summarize(\"daily\")",
+    "invocation start host",
+    "call summarizer → host example:notes/notes@0.1.0.read(\"daily\")",
+    with_note!(
+        "return summarizer → host example:notes/notes@0.1.0.read(ok(",
+        "))"
+    ),
+    "invocation end host",
+    "invocation start host",
+    with_note!(
+        "call summarizer → host example:notes/notes@0.1.0.normalize(",
+        ")"
+    ),
+    with_note!(
+        "return summarizer → host example:notes/notes@0.1.0.normalize(",
+        ")"
+    ),
+    "invocation end host",
+    with_note!(
+        "return host → summarizer example:notes/summarizer@0.1.0.summarize(ok({text: \"Daily: 2 tags\", source: ",
+        "}))"
+    ),
+    "invocation end summarizer",
+];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{sample_note, sample_summary};
+
+    #[test]
+    fn expected_trace_covers_calls_returns_and_boundaries() {
+        assert_eq!(val(&sample_note()), NOTE);
+        assert!(val(&sample_summary()).starts_with("ok({text:"));
+        assert_eq!(EXPECTED_TRACE.len(), 12);
+    }
+}
