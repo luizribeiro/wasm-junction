@@ -12,9 +12,10 @@ use wasm_junction::{
     Middleware, Next, Provided, Provider, Resource, Val, Vals, WasiConfig,
 };
 use wasm_junction_conformance::{
-    CYCLE_A, Fixture, FixtureHost, RESOURCE_CLIENT, RESOURCE_HOST, ResourceHost, RoutedFixture,
-    RoutedHost, SUMMARIZER, Trace, WRITER, component, cycle_a_component, cycle_b_component,
-    resource_component, run, run_routed, sample_note, translator_component, writer_component,
+    CYCLE_A, EXPECTED_RESOURCE_TRACE, Fixture, FixtureHost, RESOURCE_CLIENT, RESOURCE_HOST,
+    ResourceHost, RoutedFixture, RoutedHost, SUMMARIZER, Trace, WRITER, component,
+    cycle_a_component, cycle_b_component, resource_component, run, run_routed, sample_note,
+    translator_component, writer_component,
 };
 use wasm_junction_wasmtime::WasmtimeEngine;
 
@@ -82,19 +83,7 @@ fn host_resource_calls_cross_middleware_and_the_engine() {
     assert_eq!(result, [Val::from("profile:Ada")]);
     assert_eq!(host.active_resources(), 0);
     assert!(host.profile(0).unwrap_err().to_string().contains("unknown"));
-    let trace = trace.entries();
-    assert!(
-        trace
-            .iter()
-            .any(|entry| entry.contains("[constructor]session"))
-    );
-    assert!(
-        trace
-            .iter()
-            .any(|entry| entry.contains("[method]session.profile"))
-    );
-    assert!(trace.iter().any(|entry| entry.contains("resource drop")));
-    assert!(!trace.iter().any(|entry| entry.contains("[drop]session")));
+    assert_eq!(trace.entries(), EXPECTED_RESOURCE_TRACE);
 
     let error = block_on(app.call(
         "resource-client",

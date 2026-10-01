@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use wasm_junction::{Call, CallError, Event, Middleware, Next, Val, Vals};
+use wasm_junction::{Call, CallError, Event, Middleware, Next, ResourceOwnership, Val, Vals};
 
 use crate::{SessionId, TranslatorHop};
 
@@ -124,6 +124,16 @@ fn val(value: &Val) -> String {
             Ok(value) => result_value("ok", value.as_deref()),
             Err(value) => result_value("err", value.as_deref()),
         },
+        Val::Resource(resource) => format!(
+            "{}({}/{}#{})",
+            match resource.ownership() {
+                ResourceOwnership::Own => "own",
+                ResourceOwnership::Borrow => "borrow",
+            },
+            resource.interface(),
+            resource.name(),
+            resource.id()
+        ),
         _ => format!("{value:?}"),
     }
 }
@@ -209,6 +219,23 @@ pub const EXPECTED_ROUTED_TRACE: &[&str] = &[
     "invocation end writer",
 ];
 
+/// Exact trace produced when the resource guest opens, uses, and drops a host session.
+pub const EXPECTED_RESOURCE_TRACE: &[&str] = &[
+    "invocation start resource-client",
+    "call host → resource-client example:resources/client@1.0.0.run(false)",
+    "invocation start host",
+    "call resource-client → host example:resources/host@1.0.0.[constructor]session(\"Ada\")",
+    "return resource-client → host example:resources/host@1.0.0.[constructor]session(own(example:resources/host@1.0.0/session#0))",
+    "invocation end host",
+    "invocation start host",
+    "call resource-client → host example:resources/host@1.0.0.[method]session.profile(borrow(example:resources/host@1.0.0/session#0))",
+    "return resource-client → host example:resources/host@1.0.0.[method]session.profile(\"profile:Ada\")",
+    "invocation end host",
+    "resource drop example:resources/host@1.0.0/session#0",
+    "return host → resource-client example:resources/client@1.0.0.run(\"profile:Ada\")",
+    "invocation end resource-client",
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,5 +246,6 @@ mod tests {
         assert_eq!(val(&sample_note()), NOTE);
         assert!(val(&sample_summary()).starts_with("ok({text:"));
         assert_eq!(EXPECTED_TRACE.len(), 12);
+        assert_eq!(EXPECTED_RESOURCE_TRACE.len(), 13);
     }
 }
