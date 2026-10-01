@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::{error::Error, fmt};
 
-use crate::{BoxFuture, CallError, HostBound, InvocationContext, Vals};
+use crate::{BoxFuture, CallError, HostBound, InvocationContext, Resource, Vals};
 
 /// The engine-provided implementation at the end of an imported call's middleware chain.
 pub trait ImportTarget: HostBound {
@@ -52,6 +52,13 @@ pub trait ImportDispatcher: HostBound {
         args: Vals,
         target: Arc<dyn ImportTarget>,
     ) -> BoxFuture<'_, Result<Vals, CallError>>;
+
+    /// Drops a host resource owned by `caller` without passing through call middleware.
+    fn drop_resource(
+        &self,
+        caller: Arc<str>,
+        resource: Resource,
+    ) -> BoxFuture<'_, Result<(), CallError>>;
 }
 
 /// Compiles WebAssembly components for an application dispatcher.

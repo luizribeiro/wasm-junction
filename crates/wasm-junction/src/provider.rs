@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{BoxFuture, Call, CallContext, CallError, HostBound, Vals};
+use crate::{BoxFuture, Call, CallContext, CallError, HostBound, Resource, Vals};
 
 /// An object-safe implementation of one host or component interface.
 pub trait Provider: HostBound {
@@ -10,6 +10,24 @@ pub trait Provider: HostBound {
         cx: &'a CallContext,
         call: Call,
     ) -> BoxFuture<'a, Result<Vals, CallError>>;
+
+    /// Drops one owned resource after its guest handle is released.
+    ///
+    /// The hand-written default is unavailable because this base trait stores no resource value.
+    /// Generated providers override it to remove the value from their
+    /// [`ResourceTable`](crate::ResourceTable) and drop that value by default.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CallError`] when the resource type or id is unknown.
+    fn drop_resource(&self, resource: Resource) -> Result<(), CallError> {
+        Err(CallError::unavailable(format!(
+            "provider cannot drop resource `{}/{}` id {}",
+            resource.interface(),
+            resource.name(),
+            resource.id()
+        )))
+    }
 }
 
 /// A provider paired with the fully qualified interface it implements.

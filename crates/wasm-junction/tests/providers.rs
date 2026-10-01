@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use support::{NOTES, Read, block_on, read_call};
 use wasm_junction::{
-    BoxFuture, Call, CallContext, CallError, Caller, Provided, Provider, TypedCall, Vals,
+    BoxFuture, Call, CallContext, CallError, Caller, Provided, Provider, Resource, TypedCall, Vals,
 };
 
 struct NotesProvider {
@@ -71,4 +71,11 @@ fn provider_future_can_be_dropped_before_polling() {
 fn generated_constructor_can_make_a_provided_interface() {
     let provided = Provided::new(NOTES, provider());
     assert!(format!("{provided:?}").contains(NOTES));
+}
+
+#[test]
+fn providers_without_resources_refuse_drops() {
+    let resource = Resource::owned(NOTES, "session", 3);
+    let error = provider().drop_resource(resource).unwrap_err();
+    assert!(error.to_string().contains("cannot drop resource"));
 }

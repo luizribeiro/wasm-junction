@@ -17,6 +17,18 @@ pub enum Event {
         /// The application name of the invoked component.
         component: Arc<str>,
     },
+    /// A guest's owned host-resource handle is gone.
+    ///
+    /// This event fires before the provider's drop runs and remains observable whether that drop
+    /// succeeds or fails.
+    ResourceDrop {
+        /// The resource's defining versioned interface.
+        interface: Arc<str>,
+        /// The resource name within its defining interface.
+        resource: Arc<str>,
+        /// The provider-assigned resource id.
+        id: u32,
+    },
 }
 
 /// Logic that wraps every host-to-guest and guest-to-host call.

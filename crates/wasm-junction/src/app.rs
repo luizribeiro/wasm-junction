@@ -12,7 +12,7 @@ use crate::middleware::{CallTarget, ErasedMiddleware};
 use crate::{
     BoxFuture, Call, CallContext, CallError, Caller, CompiledComponent, Component, Engine,
     EngineError, Event, HostBound, ImportDispatcher, ImportTarget, InvocationContext, Middleware,
-    Provided, Provider, Val, Vals, WasiConfig,
+    Provided, Provider, Resource, Val, Vals, WasiConfig,
 };
 
 /// An application assembled from host providers, middleware, and WebAssembly components.
@@ -554,6 +554,27 @@ impl App {
             .await
     }
 
+    fn drop_host_resource(&self, resource: Resource) -> Result<(), CallError> {
+        let provider = self
+            .0
+            .providers
+            .iter()
+            .find(|(interface, _)| interfaces_compatible(resource.interface(), interface))
+            .map(|(_, provider)| provider)
+            .ok_or_else(|| {
+                CallError::unavailable(format!(
+                    "no host provider for resource interface `{}`",
+                    resource.interface()
+                ))
+            })?;
+        self.emit(&Event::ResourceDrop {
+            interface: Arc::from(resource.interface()),
+            resource: Arc::from(resource.name()),
+            id: resource.id(),
+        });
+        provider.drop_resource(resource)
+    }
+
     async fn dispatch(&self, target: Arc<dyn CallTarget>, call: Call) -> Result<Vals, CallError> {
         self.emit(&Event::InvocationStart {
             component: call.callee.clone(),
@@ -689,6 +710,14 @@ impl ImportDispatcher for App {
         target: Arc<dyn ImportTarget>,
     ) -> BoxFuture<'_, Result<Vals, CallError>> {
         Box::pin(self.call_engine_import(context, caller, interface, function, args, target))
+    }
+
+    fn drop_resource(
+        &self,
+        _caller: Arc<str>,
+        resource: Resource,
+    ) -> BoxFuture<'_, Result<(), CallError>> {
+        Box::pin(async move { self.drop_host_resource(resource) })
     }
 }
 
