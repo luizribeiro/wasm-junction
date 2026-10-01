@@ -17,8 +17,8 @@ mod middleware;
 mod provider;
 
 pub use app::{
-    App, AppBuilder, BuildError, Candidate, CheckError, GetError, InterfaceHandle, IssueKind,
-    LinkError, LoadError, MissingImports, ResolutionIssue,
+    App, AppBuilder, BuildError, Candidate, CheckError, GetError, Handle, InterfaceHandle,
+    IssueKind, LinkError, LoadError, MissingImports, ResolutionIssue,
 };
 pub use call::{Call, Caller, TypedCall};
 pub use component::{Component, ComponentError};

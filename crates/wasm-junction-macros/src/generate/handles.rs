@@ -19,11 +19,27 @@ impl Generator<'_> {
             #[doc = concat!("A typed handle for a component's `", #interface, "` export.")]
             #[derive(Clone)]
             pub struct #handle {
-                app: ::wasm_junction::App,
-                component: ::std::sync::Arc<str>,
+                handle: ::wasm_junction::Handle,
             }
 
-            impl #handle { #(#methods)* }
+            impl #handle {
+                /// Returns a copy whose calls carry `value` as per-call data.
+                #[must_use]
+                pub fn with<T: ::std::any::Any + ::wasm_junction::HostBound>(
+                    &self,
+                    value: T,
+                ) -> Self {
+                    Self { handle: self.handle.with(value) }
+                }
+
+                /// Returns a copy whose calls continue the invocation in `context`.
+                #[must_use]
+                pub fn within(&self, context: &::wasm_junction::CallContext) -> Self {
+                    Self { handle: self.handle.within(context) }
+                }
+
+                #(#methods)*
+            }
 
             impl ::wasm_junction::InterfaceHandle for #handle {
                 const INTERFACE: &'static str = INTERFACE;
@@ -32,7 +48,7 @@ impl Generator<'_> {
                     app: ::wasm_junction::App,
                     component: ::std::sync::Arc<str>,
                 ) -> Self {
-                    Self { app, component }
+                    Self { handle: ::wasm_junction::Handle::new(app, component) }
                 }
             }
         })
@@ -66,8 +82,7 @@ impl Generator<'_> {
             pub async fn #method(&self, #(#names: #types),*) ->
                 ::std::result::Result<#output, ::wasm_junction::CallError>
             {
-                let values = self.app.call(
-                    &self.component,
+                let values = self.handle.call(
                     INTERFACE,
                     <#call as ::wasm_junction::TypedCall>::FUNCTION,
                     <#call as ::wasm_junction::TypedCall>::into_vals(

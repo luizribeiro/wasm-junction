@@ -150,6 +150,12 @@ impl CompiledComponent for UnusedComponent {
                         .call(context, component, interface, function, args)
                         .await
                 }
+                HANDLE_SUMMARIES if function.as_ref() == "context" => Ok(vec![Val::U32(
+                    context
+                        .extensions()
+                        .get::<ContextMarker>()
+                        .map_or(0, |marker| marker.0),
+                )]),
                 HANDLE_SUMMARIES => handle_call(&function, args),
                 "example:journal/summaries@0.1.0" => {
                     let import = match function.as_ref() {

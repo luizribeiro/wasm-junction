@@ -53,4 +53,8 @@ impl CallContext {
     pub fn extensions(&self) -> &Extensions {
         self.invocation.extensions()
     }
+
+    pub(crate) const fn invocation(&self) -> &InvocationContext {
+        &self.invocation
+    }
 }

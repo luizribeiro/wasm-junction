@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{self, Display};
@@ -9,8 +10,8 @@ use semver::Version;
 use crate::middleware::{CallTarget, ErasedMiddleware};
 use crate::{
     BoxFuture, Call, CallContext, CallError, Caller, CompiledComponent, Component, Engine,
-    EngineError, Event, ImportDispatcher, ImportTarget, InvocationContext, Middleware, Provided,
-    Provider, Val, Vals, WasiConfig,
+    EngineError, Event, HostBound, ImportDispatcher, ImportTarget, InvocationContext, Middleware,
+    Provided, Provider, Val, Vals, WasiConfig,
 };
 
 /// An application assembled from host providers, middleware, and WebAssembly components.
@@ -775,6 +776,69 @@ fn values_are_plain(values: &[Val]) -> bool {
 fn call_for_invocation(context: &InvocationContext, mut call: Call) -> Call {
     *call.extensions_mut() = context.extensions().clone();
     call
+}
+
+/// Shared state and dispatch behavior wrapped by generated interface handles.
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct Handle {
+    app: App,
+    component: Arc<str>,
+    context: InvocationContext,
+}
+
+impl Handle {
+    /// Creates the backing state for a generated interface handle.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn new(app: App, component: Arc<str>) -> Self {
+        Self {
+            app,
+            component,
+            context: InvocationContext::default(),
+        }
+    }
+
+    /// Returns a copy with one value attached to its calls.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with<T: Any + HostBound>(&self, value: T) -> Self {
+        let mut extensions = self.context.extensions().clone();
+        extensions.insert(value);
+        Self {
+            context: self.context.with_extensions(extensions),
+            ..self.clone()
+        }
+    }
+
+    /// Returns a copy that continues the invocation represented by `context`.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn within(&self, context: &CallContext) -> Self {
+        Self {
+            context: context.invocation().descend(),
+            ..self.clone()
+        }
+    }
+
+    /// Calls an exported function with the state carried by this handle.
+    #[doc(hidden)]
+    pub async fn call(
+        &self,
+        interface: &str,
+        function: &'static str,
+        args: Vals,
+    ) -> Result<Vals, CallError> {
+        self.app
+            .call_with_context(
+                &self.component,
+                interface,
+                Arc::from(function),
+                args,
+                self.context.clone(),
+            )
+            .await
+    }
 }
 
 /// The construction contract implemented by each generated interface handle.

@@ -6,7 +6,7 @@ mod support;
 
 use std::sync::Arc;
 
-use wasm_junction::{App, CallErrorKind, Component, InterfaceHandle};
+use wasm_junction::{App, CallContext, CallErrorKind, Component, InterfaceHandle};
 
 wasm_junction::bindgen!({ path: "tests/fixtures/handles/wit" });
 
@@ -22,6 +22,16 @@ fn handles_encode_borrowed_arguments_and_decode_every_result_shape() {
     support::block_on(app.load(component)).unwrap();
 
     let handle = app.get::<summaries::Summaries>("journal").unwrap();
+    let attached = handle
+        .with(support::ContextMarker(1))
+        .with(support::ContextMarker(42));
+    assert_eq!(support::block_on(attached.context()).unwrap(), 42);
+    assert_eq!(support::block_on(handle.context()).unwrap(), 0);
+    let context = CallContext::for_test("writer").with(support::ContextMarker(7));
+    assert_eq!(
+        support::block_on(handle.within(&context).context()).unwrap(),
+        7
+    );
     let note = summaries::Note {
         title: "project".into(),
     };
