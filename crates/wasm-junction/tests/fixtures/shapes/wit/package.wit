@@ -39,4 +39,7 @@ interface controls {
     success-only: result<u32>,
     failure-only: result<_, string>,
   }
+
+  enum problem { denied, invalid }
+  decide: func() -> result<_, problem>;
 }

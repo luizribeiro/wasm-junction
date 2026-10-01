@@ -4,6 +4,8 @@
 
 wasm_junction::bindgen!({ path: "tests/fixtures/shapes/wit" });
 
+fn requires_error<T: std::error::Error>() {}
+
 #[test]
 fn every_enum_case_round_trips() {
     for status in [controls::Status::Ready, controls::Status::NeedsReview] {
@@ -82,4 +84,15 @@ fn primitives_and_nested_shapes_round_trip() {
     };
     let value = wasm_junction::Val::from(nested.clone());
     assert_eq!(controls::NestedValues::try_from(value).unwrap(), nested);
+}
+
+#[test]
+fn result_error_types_implement_display_and_error() {
+    requires_error::<controls::Problem>();
+    assert_eq!(controls::Problem::Denied.to_string(), "problem: Denied");
+    let value = wasm_junction::Val::from(controls::Problem::Invalid);
+    assert_eq!(
+        controls::Problem::try_from(value).unwrap(),
+        controls::Problem::Invalid
+    );
 }

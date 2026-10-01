@@ -4,12 +4,16 @@ use quote::quote;
 use wit_parser::{InterfaceId, PackageId, Resolve};
 
 mod definitions;
+mod errors;
 mod types;
 mod values;
 
 pub(crate) fn generate(resolve: &Resolve, package_id: PackageId) -> syn::Result<TokenStream> {
     let package = &resolve.packages[package_id];
-    let generator = Generator { resolve };
+    let generator = Generator {
+        resolve,
+        errors: errors::find(resolve, package_id),
+    };
     let modules = package
         .interfaces
         .iter()
@@ -20,6 +24,7 @@ pub(crate) fn generate(resolve: &Resolve, package_id: PackageId) -> syn::Result<
 
 struct Generator<'a> {
     resolve: &'a Resolve,
+    errors: std::collections::HashSet<wit_parser::TypeId>,
 }
 
 impl Generator<'_> {
@@ -54,19 +59,41 @@ impl Generator<'_> {
     }
 
     fn type_definition(&self, name: &str, id: wit_parser::TypeId) -> syn::Result<TokenStream> {
-        match &self.resolve.types[id].kind {
-            wit_parser::TypeDefKind::Record(record) => return self.record(name, record),
-            wit_parser::TypeDefKind::Enum(enum_) => return Self::enum_(name, enum_),
-            wit_parser::TypeDefKind::Flags(flags) => return Self::flags(name, flags),
-            wit_parser::TypeDefKind::Variant(variant) => return self.variant(name, variant),
-            _ => {}
-        }
         let ident = rust_ident(&name.to_upper_camel_case())?;
-        let ty = self.type_kind(&self.resolve.types[id].kind, name)?;
-        Ok(quote! {
-            #[doc = concat!("The WIT `", #name, "` type.")]
-            pub type #ident = #ty;
-        })
+        let (definition, nominal) = match &self.resolve.types[id].kind {
+            wit_parser::TypeDefKind::Record(record) => (self.record(name, record)?, true),
+            wit_parser::TypeDefKind::Enum(enum_) => (Self::enum_(name, enum_)?, true),
+            wit_parser::TypeDefKind::Flags(flags) => (Self::flags(name, flags)?, true),
+            wit_parser::TypeDefKind::Variant(variant) => (self.variant(name, variant)?, true),
+            kind => {
+                let ty = self.type_kind(kind, name)?;
+                (
+                    quote! {
+                        #[doc = concat!("The WIT `", #name, "` type.")]
+                        pub type #ident = #ty;
+                    },
+                    false,
+                )
+            }
+        };
+        let error = nominal.then(|| self.error_impl(name, id, &ident));
+        Ok(quote!(#definition #error))
+    }
+
+    fn error_impl(&self, name: &str, id: wit_parser::TypeId, ident: &Ident) -> TokenStream {
+        if !self.errors.contains(&id) {
+            return TokenStream::new();
+        }
+        quote! {
+            #[doc = "Formats the WIT type name followed by its structured debug form."]
+            impl ::std::fmt::Display for #ident {
+                fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                    write!(formatter, concat!(#name, ": {:?}"), self)
+                }
+            }
+
+            impl ::std::error::Error for #ident {}
+        }
     }
 }
 
