@@ -4,6 +4,7 @@ members = [
   "crates/wasm-junction",
   "crates/wasm-junction-conformance",
   "crates/wasm-junction-wasmtime",
+  "examples/greeter",
 ]
 
 [workspace.package]

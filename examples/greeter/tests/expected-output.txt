@@ -1,0 +1,15 @@
+call host → greeter example:greeter/greeter@0.1.0.greet(1)
+call greeter → host example:greeter/users@0.1.0.lookup(1)
+return greeter → host example:greeter/users@0.1.0.lookup(some({name: "Ada", language: "en"}))
+return host → greeter example:greeter/greeter@0.1.0.greet(ok("Hello, Ada!"))
+result 1: Hello, Ada!
+call host → greeter example:greeter/greeter@0.1.0.greet(2)
+call greeter → host example:greeter/users@0.1.0.lookup(2)
+return greeter → host example:greeter/users@0.1.0.lookup(some({name: "Luiz", language: "pt"}))
+return host → greeter example:greeter/greeter@0.1.0.greet(ok("Olá, Luiz!"))
+result 2: Olá, Luiz!
+call host → greeter example:greeter/greeter@0.1.0.greet(99)
+call greeter → host example:greeter/users@0.1.0.lookup(99)
+return greeter → host example:greeter/users@0.1.0.lookup(none)
+return host → greeter example:greeter/greeter@0.1.0.greet(err("user 99 not found"))
+result 99: error: user 99 not found

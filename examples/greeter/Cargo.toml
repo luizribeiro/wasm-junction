@@ -1,0 +1,18 @@
+[package]
+name = "wasm-junction-example-greeter"
+description = "Self-contained host and guest greeter example"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+publish = false
+build = "build.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
+wasm-junction = { path = "../../crates/wasm-junction", version = "=0.0.0" }
+wasm-junction-wasmtime = { path = "../../crates/wasm-junction-wasmtime", version = "=0.0.0" }
