@@ -10,6 +10,7 @@ interface host {
 interface probe {
   motd: async func() -> string;
   audit: async func();
+  leave-open: async func();
   incremental: async func() -> string;
   drop-early: async func();
   accept: async func(bytes: stream<u8>) -> string;

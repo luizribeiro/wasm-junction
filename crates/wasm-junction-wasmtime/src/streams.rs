@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll};
 
 use wasm_junction_core::{
@@ -13,6 +14,20 @@ use wasmtime::{AsContextMut, StoreContextMut};
 
 use crate::engine::StoreData;
 
+pub(crate) type ActiveStreams = Arc<Mutex<HashMap<u64, OutputStreamWriter>>>;
+
+pub(crate) fn abort_streams(store: &StoreData) {
+    let streams = lock_active(&store.active_streams)
+        .drain()
+        .collect::<Vec<_>>();
+    for (id, writer) in streams {
+        writer.abort();
+        store
+            .imports
+            .channel_close(id, ChannelDirection::GuestToHost);
+    }
+}
+
 pub(crate) fn lift_stream(
     stream: StreamAny,
     mut store: impl AsContextMut<Data = StoreData>,
@@ -23,12 +38,15 @@ pub(crate) fn lift_stream(
     let id = handle.id();
     let imports = store.as_context().data().imports.clone();
     imports.channel_open(id, ChannelDirection::GuestToHost);
+    let active = store.as_context().data().active_streams.clone();
+    lock_active(&active).insert(id, writer.clone());
     reader.pipe(
         store.as_context_mut(),
         CoreConsumer {
             writer: Some(writer),
             id,
             imports,
+            active,
             closed: false,
         },
     )?;
@@ -131,17 +149,28 @@ struct CoreConsumer {
     writer: Option<OutputStreamWriter>,
     id: u64,
     imports: Arc<dyn ImportDispatcher>,
+    active: ActiveStreams,
     closed: bool,
 }
 
 impl CoreConsumer {
     fn close(&mut self) {
+        let was_active = lock_active(&self.active).remove(&self.id).is_some();
         self.writer.take();
         if !self.closed {
             self.closed = true;
-            self.imports
-                .channel_close(self.id, ChannelDirection::GuestToHost);
+            if was_active {
+                self.imports
+                    .channel_close(self.id, ChannelDirection::GuestToHost);
+            }
         }
+    }
+}
+
+fn lock_active(active: &ActiveStreams) -> MutexGuard<'_, HashMap<u64, OutputStreamWriter>> {
+    match active.lock() {
+        Ok(streams) => streams,
+        Err(poisoned) => poisoned.into_inner(),
     }
 }
 

@@ -26,6 +26,16 @@ impl bindings::exports::example::streams::probe::Guest for Component {
         host::audit(reader).await;
     }
 
+    async fn leave_open() {
+        let (mut writer, reader) = bindings::wit_stream::new();
+        wit_bindgen::spawn_local(async move {
+            let _ = writer.write_all(b"written".to_vec()).await;
+            let _ = writer.write_all(b"in flight".to_vec()).await;
+            core::mem::forget(writer);
+        });
+        host::audit(reader).await;
+    }
+
     async fn incremental() -> String {
         let mut stream = host::chunks();
         let (_, mut bytes) = stream.read(Vec::with_capacity(64)).await;

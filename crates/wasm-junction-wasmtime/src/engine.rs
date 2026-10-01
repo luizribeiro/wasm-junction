@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -24,6 +24,7 @@ pub(crate) struct StoreData {
     pub(crate) gated_wasi: Arc<std::sync::Mutex<WasiState>>,
     pub(crate) resources: Arc<[ResourceDefinition]>,
     pub(crate) owned_resources: HashSet<Resource>,
+    pub(crate) active_streams: crate::streams::ActiveStreams,
 }
 
 impl WasiView for StoreData {
@@ -148,6 +149,7 @@ impl Compiled {
                 gated_wasi: Arc::new(std::sync::Mutex::new(wasi_context(&self.wasi))),
                 resources: self.resources.clone(),
                 owned_resources: HashSet::new(),
+                active_streams: Arc::new(std::sync::Mutex::new(HashMap::new())),
             },
         );
         let result = async {
@@ -198,6 +200,7 @@ impl Compiled {
             Ok(values)
         }
         .await;
+        crate::streams::abort_streams(store.data());
         let cleanup = cleanup_resources(&mut store).await;
         match result {
             Ok(values) => cleanup.map(|()| values),
