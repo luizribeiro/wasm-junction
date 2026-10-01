@@ -26,6 +26,11 @@ if (!browserType || cargoArgs.length === 0) {
   throw new Error("browser and cargo test arguments are required");
 }
 
+// The dev shell points XDG_DATA_DIRS at the Nix store only, which hides the system's GSettings
+// schemas; WebKit's network process aborts without them.
+const browserEnv = { ...process.env };
+delete browserEnv.XDG_DATA_DIRS;
+
 function delay(milliseconds) {
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, milliseconds);
@@ -121,7 +126,7 @@ try {
     server,
     delay(600_000).then(() => { throw new Error("timed out waiting for the test server"); }),
   ]);
-  browser = await browserType.launch({ headless: true });
+  browser = await browserType.launch({ headless: true, env: browserEnv });
   console.log(`${browserName} ${browser.version()} (Playwright 1.63.0)`);
   const page = await browser.newPage();
   page.on("console", (message) => console.log(message.text()));
