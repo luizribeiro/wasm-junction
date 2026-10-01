@@ -42,7 +42,8 @@ impl Parse for Config {
 ///
 /// Generated WIT errors display enum and payload-free variant cases by their
 /// kebab-case names. Variant payloads follow the case name and use `Display`
-/// when available, otherwise a compact debug representation.
+/// when available, otherwise a compact debug representation. Record errors
+/// display comma-separated `field: value` pairs with the same value rule.
 #[proc_macro]
 pub fn bindgen(input: TokenStream) -> TokenStream {
     syn::parse::<Config>(input)

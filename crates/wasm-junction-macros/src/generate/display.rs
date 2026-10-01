@@ -1,4 +1,4 @@
-use heck::ToUpperCamelCase;
+use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, TokenStream};
 use quote::quote;
 use wit_parser::{Type, TypeDefKind, TypeId};
@@ -46,6 +46,27 @@ impl Generator<'_> {
                     "Displays the WIT case name and any payload as a message.",
                     quote!(match self { #(#arms,)* }),
                 )
+            }
+            TypeDefKind::Record(record) => {
+                let mut pieces = Vec::new();
+                let mut values = Vec::new();
+                for field in &record.fields {
+                    let marker = if self.has_display(field.ty) {
+                        "{}"
+                    } else {
+                        "{:?}"
+                    };
+                    pieces.push(format!("{}: {marker}", field.name));
+                    let field = rust_ident(&field.name.to_snake_case())?;
+                    values.push(quote!(&self.#field));
+                }
+                let message = pieces.join(", ");
+                let body = if values.is_empty() {
+                    quote!(formatter.write_str(#message))
+                } else {
+                    quote!(write!(formatter, #message, #(#values),*))
+                };
+                ("Displays comma-separated WIT field names and values.", body)
             }
             _ => (
                 "Displays the WIT type name and compact debug representation.",

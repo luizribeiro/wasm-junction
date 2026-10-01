@@ -118,3 +118,18 @@ fn variant_errors_display_as_messages() {
         "nested: denied"
     );
 }
+
+#[test]
+fn record_errors_display_as_field_messages() {
+    requires_error::<controls::Details>();
+    let error = controls::Details {
+        message: "bad input".into(),
+        code: 7,
+        choice: controls::Choice::None,
+        problem: controls::Problem::Invalid,
+    };
+    assert_eq!(
+        error.to_string(),
+        "message: bad input, code: 7, choice: None, problem: invalid"
+    );
+}

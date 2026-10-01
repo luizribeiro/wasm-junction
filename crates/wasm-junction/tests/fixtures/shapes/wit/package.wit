@@ -48,6 +48,13 @@ interface controls {
     structured(choice),
     nested(problem),
   }
+  record details {
+    message: string,
+    code: u32,
+    choice: choice,
+    problem: problem,
+  }
   decide: func() -> result<_, problem>;
   fail: func() -> result<_, failure>;
+  explain: func() -> result<_, details>;
 }
