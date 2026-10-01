@@ -9,6 +9,8 @@ use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 use crate::engine::StoreData;
 
+mod clocks;
+
 const INTERFACE: &str = "wasi:cli/environment@0.2.12";
 
 pub(crate) struct WasiState {
@@ -128,26 +130,42 @@ impl environment::Host for Gate<'_> {
 }
 
 impl Gate<'_> {
+    fn dispatch(
+        &mut self,
+        interface: impl Into<Arc<str>>,
+        function: impl Into<Arc<str>>,
+        args: Vals,
+        target: Arc<dyn ImportTarget>,
+    ) -> wasmtime::Result<Vals> {
+        futures::executor::block_on(self.0.imports.call_engine(
+            self.0.context.clone(),
+            self.0.component.clone(),
+            interface.into(),
+            function.into(),
+            args,
+            target,
+        ))
+        .map_err(wasmtime::Error::new)
+    }
+
     fn call(
         &mut self,
         function: &'static str,
         operation: EnvironmentOperation,
     ) -> wasmtime::Result<Vals> {
-        futures::executor::block_on(self.0.imports.call_engine(
-            self.0.context.clone(),
-            self.0.component.clone(),
-            Arc::from(INTERFACE),
-            Arc::from(function),
+        self.dispatch(
+            INTERFACE,
+            function,
             Vec::new(),
             Arc::new(EnvironmentTarget(self.0.gated_wasi.clone(), operation)),
-        ))
-        .map_err(wasmtime::Error::new)
+        )
     }
 }
 
-pub(crate) fn add_environment_gate(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+pub(crate) fn add_gates(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     linker.allow_shadowing(true);
-    let result = environment::add_to_linker::<StoreData, GateData>(linker, project);
+    let result = environment::add_to_linker::<StoreData, GateData>(linker, project)
+        .and_then(|()| clocks::add_wall_clock_gate(linker));
     linker.allow_shadowing(false);
     result
 }

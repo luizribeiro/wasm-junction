@@ -16,6 +16,7 @@ use wasm_junction_wasmtime::WasmtimeEngine;
 const WASI_COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wasi-test.wasm"));
 const ENVIRONMENT: &str = "test:wasi/environment@0.1.0";
 const WASI_ENVIRONMENT: &str = "wasi:cli/environment@0.2.12";
+const WALL_CLOCK: &str = "wasi:clocks/wall-clock@0.2.12";
 
 struct ThreadWake(std::thread::Thread);
 
@@ -60,6 +61,14 @@ struct EnvironmentBehavior(Arc<Mutex<Vec<Call>>>);
 
 impl Middleware for EnvironmentBehavior {
     async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.interface.as_ref() == WALL_CLOCK && call.function.as_ref() == "now" {
+            self.0.lock().unwrap().push(call.clone());
+            next.run(call).await?;
+            return Ok(vec![Val::Record(vec![
+                ("seconds".to_owned(), Val::U64(1_700_000_000)),
+                ("nanoseconds".to_owned(), Val::U32(123_456_789)),
+            ])]);
+        }
         if call.interface.as_ref() != WASI_ENVIRONMENT {
             return next.run(call).await;
         }
@@ -103,6 +112,7 @@ fn environment_gate_traces_refuses_and_rewrites() {
     let arguments = block_on(app.call("wasi", ENVIRONMENT, "arguments", Vec::new())).unwrap();
     let current_directory =
         block_on(app.call("wasi", ENVIRONMENT, "current-directory", Vec::new())).unwrap();
+    let wall_time = block_on(app.call("wasi", ENVIRONMENT, "wall-time", Vec::new())).unwrap();
 
     assert_eq!(
         configured,
@@ -113,13 +123,21 @@ fn environment_gate_traces_refuses_and_rewrites() {
     assert_eq!(rewritten, [Val::Option(Some(Box::new(Val::from("fixed"))))]);
     assert_eq!(arguments, [Val::List(Vec::new())]);
     assert_eq!(current_directory, [Val::Option(None)]);
+    assert_eq!(
+        wall_time,
+        [Val::Tuple(vec![
+            Val::U64(1_700_000_000),
+            Val::U32(123_456_789)
+        ])]
+    );
     let calls = calls.lock().unwrap();
-    assert_eq!(calls.len(), 6);
+    assert_eq!(calls.len(), 7);
     assert_eq!(calls[0].caller, Caller::Component(Arc::from("wasi")));
     assert_eq!(calls[0].function.as_ref(), "get-environment");
     assert!(calls[0].args.is_empty());
     assert_eq!(calls[4].function.as_ref(), "get-arguments");
     assert_eq!(calls[5].function.as_ref(), "initial-cwd");
+    assert_eq!(calls[6].interface.as_ref(), WALL_CLOCK);
 }
 
 #[test]

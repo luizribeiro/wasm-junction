@@ -4,6 +4,7 @@ interface environment {
   read: func(name: string) -> option<string>;
   arguments: func() -> list<string>;
   current-directory: func() -> option<string>;
+  wall-time: func() -> tuple<u64, u32>;
 }
 
 world fixture {
