@@ -171,7 +171,7 @@ impl Provider for WrongResourceResult {
         })
     }
 
-    fn drop_resource(&self, resource: Resource) -> Result<(), CallError> {
+    fn drop_resource(&self, _cx: &CallContext, resource: Resource) -> Result<(), CallError> {
         self.0.close(&resource)
     }
 }

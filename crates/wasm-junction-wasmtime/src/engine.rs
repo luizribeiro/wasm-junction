@@ -304,10 +304,11 @@ pub(crate) fn lower_resource(
 }
 
 async fn cleanup_resources(store: &mut Store<StoreData>) -> Result<(), wasmtime::Error> {
-    let (imports, caller, mut resources) = {
+    let (imports, context, caller, mut resources) = {
         let data = store.data_mut();
         (
             data.imports.clone(),
+            data.context.clone(),
             data.component.clone(),
             data.owned_resources.drain().collect::<Vec<_>>(),
         )
@@ -321,7 +322,10 @@ async fn cleanup_resources(store: &mut Store<StoreData>) -> Result<(), wasmtime:
     });
     let mut failures = Vec::new();
     for resource in resources {
-        if let Err(error) = imports.drop_resource(caller.clone(), resource).await {
+        if let Err(error) = imports
+            .drop_resource(context.clone(), caller.clone(), resource)
+            .await
+        {
             failures.push(error.to_string());
         }
     }

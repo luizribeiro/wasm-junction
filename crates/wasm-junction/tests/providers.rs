@@ -76,6 +76,8 @@ fn generated_constructor_can_make_a_provided_interface() {
 #[test]
 fn providers_without_resources_refuse_drops() {
     let resource = Resource::owned(NOTES, "session", 3);
-    let error = provider().drop_resource(resource).unwrap_err();
+    let error = provider()
+        .drop_resource(&CallContext::for_test("summarizer"), resource)
+        .unwrap_err();
     assert!(error.to_string().contains("cannot drop resource"));
 }

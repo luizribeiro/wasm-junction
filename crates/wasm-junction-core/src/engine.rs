@@ -56,6 +56,7 @@ pub trait ImportDispatcher: HostBound {
     /// Drops a host resource owned by `caller` without passing through call middleware.
     fn drop_resource(
         &self,
+        context: InvocationContext,
         caller: Arc<str>,
         resource: Resource,
     ) -> BoxFuture<'_, Result<(), CallError>>;

@@ -16,11 +16,13 @@ pub trait Provider: HostBound {
     /// The hand-written default is unavailable because this base trait stores no resource value.
     /// Generated providers override it to remove the value from their
     /// [`ResourceTable`](crate::ResourceTable) and drop that value by default.
+    /// The context identifies the component that released the handle and carries its invocation
+    /// data.
     ///
     /// # Errors
     ///
     /// Returns a [`CallError`] when the resource type or id is unknown.
-    fn drop_resource(&self, resource: Resource) -> Result<(), CallError> {
+    fn drop_resource(&self, _cx: &CallContext, resource: Resource) -> Result<(), CallError> {
         Err(CallError::unavailable(format!(
             "provider cannot drop resource `{}/{}` id {}",
             resource.interface(),

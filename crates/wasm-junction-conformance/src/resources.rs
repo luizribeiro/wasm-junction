@@ -128,7 +128,11 @@ impl Provider for ResourceHost {
         })
     }
 
-    fn drop_resource(&self, resource: wasm_junction::Resource) -> Result<(), CallError> {
+    fn drop_resource(
+        &self,
+        _cx: &CallContext,
+        resource: wasm_junction::Resource,
+    ) -> Result<(), CallError> {
         self.close(&resource)
     }
 }

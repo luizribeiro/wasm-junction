@@ -554,7 +554,7 @@ impl App {
             .await
     }
 
-    fn drop_host_resource(&self, resource: Resource) -> Result<(), CallError> {
+    fn drop_host_resource(&self, cx: &CallContext, resource: Resource) -> Result<(), CallError> {
         let provider = self
             .0
             .providers
@@ -572,7 +572,7 @@ impl App {
             resource: Arc::from(resource.name()),
             id: resource.id(),
         });
-        provider.drop_resource(resource)
+        provider.drop_resource(cx, resource)
     }
 
     async fn dispatch(&self, target: Arc<dyn CallTarget>, call: Call) -> Result<Vals, CallError> {
@@ -714,10 +714,14 @@ impl ImportDispatcher for App {
 
     fn drop_resource(
         &self,
-        _caller: Arc<str>,
+        context: InvocationContext,
+        caller: Arc<str>,
         resource: Resource,
     ) -> BoxFuture<'_, Result<(), CallError>> {
-        Box::pin(async move { self.drop_host_resource(resource) })
+        Box::pin(async move {
+            let context = CallContext::new(Caller::Component(caller), context);
+            self.drop_host_resource(&context, resource)
+        })
     }
 }
 
