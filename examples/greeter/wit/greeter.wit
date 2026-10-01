@@ -1,0 +1,19 @@
+package example:greeter@0.1.0;
+
+interface users {
+  record user {
+    name: string,
+    language: string,
+  }
+
+  lookup: func(id: u32) -> option<user>;
+}
+
+interface greeter {
+  greet: async func(id: u32) -> result<string, string>;
+}
+
+world plugin {
+  import users;
+  export greeter;
+}

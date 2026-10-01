@@ -1,0 +1,14 @@
+[workspace]
+resolver = "3"
+members = ["greeter"]
+
+[workspace.package]
+edition = "2024"
+version = "0.0.0"
+publish = false
+
+[workspace.dependencies]
+wit-bindgen = { version = "=0.62.0", features = ["async"] }
+
+[profile.release]
+panic = "abort"
