@@ -5,6 +5,30 @@ use wit_parser::{Type, TypeDefKind};
 use super::{Generator, rust_ident};
 
 impl Generator<'_> {
+    pub(super) fn decode(
+        &self,
+        ty: Type,
+        value: TokenStream,
+        item: &str,
+    ) -> syn::Result<TokenStream> {
+        match ty {
+            Type::Id(id) => match &self.resolve.types[id].kind {
+                TypeDefKind::Record(_)
+                | TypeDefKind::Variant(_)
+                | TypeDefKind::Enum(_)
+                | TypeDefKind::Flags(_) => {
+                    let ty = self.named_type(id)?;
+                    Ok(
+                        quote!(<#ty as ::std::convert::TryFrom<::wasm_junction::Val>>::try_from(#value)),
+                    )
+                }
+                kind => self.decode_kind(kind, value, item),
+            },
+            Type::ErrorContext => Err(Self::unsupported(item, "error-context")),
+            _ => Ok(quote!(::std::convert::TryFrom::try_from(#value))),
+        }
+    }
+
     pub(super) fn encode(
         &self,
         ty: Type,
@@ -67,6 +91,84 @@ impl Generator<'_> {
                 }))
             }
             other => Err(Self::unsupported(item, other.as_str())),
+        }
+    }
+
+    fn decode_kind(
+        &self,
+        kind: &TypeDefKind,
+        value: TokenStream,
+        item: &str,
+    ) -> syn::Result<TokenStream> {
+        let expected = format!("expected {item} {}", kind.as_str());
+        match kind {
+            TypeDefKind::Type(ty) => self.decode(*ty, value, item),
+            TypeDefKind::List(ty) => {
+                let element = self.decode(*ty, quote!(value), item)?;
+                Ok(quote!(match #value {
+                    ::wasm_junction::Val::List(values) => values.into_iter()
+                        .map(|value| #element).collect(),
+                    _ => Err(::wasm_junction::TypeError::new(#expected)),
+                }))
+            }
+            TypeDefKind::Option(ty) => {
+                let payload = self.decode(*ty, quote!(*value), item)?;
+                Ok(quote!(match #value {
+                    ::wasm_junction::Val::Option(value) => value.map(|value| #payload).transpose(),
+                    _ => Err(::wasm_junction::TypeError::new(#expected)),
+                }))
+            }
+            TypeDefKind::Result(result) => {
+                let ok = self.decode_result_payload(result.ok, true, item)?;
+                let err = self.decode_result_payload(result.err, false, item)?;
+                let missing = format!("{item} result payload does not match its type");
+                Ok(quote!(match #value {
+                    ::wasm_junction::Val::Result(value) => match value {
+                        #ok, #err,
+                        _ => Err(::wasm_junction::TypeError::new(#missing)),
+                    },
+                    _ => Err(::wasm_junction::TypeError::new(#expected)),
+                }))
+            }
+            TypeDefKind::Tuple(tuple) => {
+                let names = (0..tuple.types.len())
+                    .map(|index| rust_ident(&format!("value_{index}")))
+                    .collect::<syn::Result<Vec<_>>>()?;
+                let len = names.len();
+                let values = tuple
+                    .types
+                    .iter()
+                    .zip(&names)
+                    .map(|(ty, name)| {
+                        let value = self.decode(*ty, quote!(#name), item)?;
+                        Ok(quote!(#value?))
+                    })
+                    .collect::<syn::Result<Vec<_>>>()?;
+                Ok(quote!((|| {
+                    let ::wasm_junction::Val::Tuple(values) = #value else {
+                        return Err(::wasm_junction::TypeError::new(#expected));
+                    };
+                    let [#(#names,)*] = <[::wasm_junction::Val; #len]>::try_from(values)
+                        .map_err(|_| ::wasm_junction::TypeError::new(#expected))?;
+                    Ok((#(#values,)*))
+                })()))
+            }
+            other => Err(Self::unsupported(item, other.as_str())),
+        }
+    }
+
+    fn decode_result_payload(
+        &self,
+        ty: Option<Type>,
+        ok: bool,
+        item: &str,
+    ) -> syn::Result<TokenStream> {
+        let constructor = if ok { quote!(Ok) } else { quote!(Err) };
+        if let Some(ty) = ty {
+            let value = self.decode(ty, quote!(*value), item)?;
+            Ok(quote!(#constructor(Some(value)) => #value.map(#constructor)))
+        } else {
+            Ok(quote!(#constructor(None) => Ok(#constructor(()))))
         }
     }
 

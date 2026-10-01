@@ -20,11 +20,14 @@ fn records_have_rust_names_and_expected_derives() {
     };
     assert_eq!(note.clone(), note);
     assert!(format!("{note:?}").contains("Plans"));
+    let value = wasm_junction::Val::from(note.clone());
+    assert_eq!(notes::Note::try_from(value).unwrap(), note);
 }
 
 #[test]
 fn records_encode_to_named_wit_fields() {
-    let value = wasm_junction::Val::from(notes::Coordinates { x: 3, y: -2 });
+    let coordinates = notes::Coordinates { x: 3, y: -2 };
+    let value = wasm_junction::Val::from(coordinates.clone());
     assert_eq!(
         value,
         wasm_junction::Val::Record(vec![
@@ -32,4 +35,6 @@ fn records_encode_to_named_wit_fields() {
             ("y".to_owned(), wasm_junction::Val::S32(-2)),
         ])
     );
+    assert_eq!(notes::Coordinates::try_from(value).unwrap(), coordinates);
+    assert!(notes::Coordinates::try_from(wasm_junction::Val::Record(vec![])).is_err());
 }

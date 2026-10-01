@@ -10,4 +10,10 @@ interface aliases {
   type character-pair = tuple<char, bool>;
   type outcome = result<u32, string>;
   type count-copy = imported-count;
+  record alias-container {
+    labels: labels,
+    character-pair: character-pair,
+    outcome: outcome,
+    count: count-copy,
+  }
 }

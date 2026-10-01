@@ -16,4 +16,13 @@ fn aliases_follow_rust_naming_and_wit_shapes() {
     assert_eq!(pair, ('x', true));
     assert_eq!(outcome, Ok(7));
     assert_eq!(imported, 2);
+
+    let aliases = aliases::AliasContainer {
+        labels,
+        character_pair: pair,
+        outcome,
+        count: copied,
+    };
+    let value = wasm_junction::Val::from(aliases.clone());
+    assert_eq!(aliases::AliasContainer::try_from(value).unwrap(), aliases);
 }

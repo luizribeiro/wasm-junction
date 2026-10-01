@@ -41,6 +41,27 @@ impl Generator<'_> {
                 Ok(quote!((#wit_name.to_owned(), #value)))
             })
             .collect::<syn::Result<Vec<_>>>()?;
+        let decoded = record
+            .fields
+            .iter()
+            .zip(&field_names)
+            .map(|(field, field_name)| {
+                let wit_name = &field.name;
+                let missing = format!("{name}.{wit_name} is missing");
+                let wrong = format!("expected {name}.{wit_name} field");
+                let value = self.decode(field.ty, quote!(value), name)?;
+                Ok(quote! {
+                    let Some((field, value)) = fields.next() else {
+                        return Err(::wasm_junction::TypeError::new(#missing));
+                    };
+                    if field != #wit_name {
+                        return Err(::wasm_junction::TypeError::new(#wrong));
+                    }
+                    let #field_name = #value?;
+                })
+            })
+            .collect::<syn::Result<Vec<_>>>()?;
+        let extra = format!("{name} has unexpected fields");
         Ok(quote! {
             #[doc = concat!("The WIT `", #name, "` record.")]
             #[derive(Debug, Clone, PartialEq, #eq_hash)]
@@ -50,6 +71,22 @@ impl Generator<'_> {
                 fn from(value: #ident) -> Self {
                     let #ident { #(#field_names,)* } = value;
                     Self::Record(::std::vec![#(#values,)*])
+                }
+            }
+
+            impl ::std::convert::TryFrom<::wasm_junction::Val> for #ident {
+                type Error = ::wasm_junction::TypeError;
+
+                fn try_from(value: ::wasm_junction::Val) -> ::std::result::Result<Self, Self::Error> {
+                    let ::wasm_junction::Val::Record(fields) = value else {
+                        return Err(::wasm_junction::TypeError::new(concat!("expected ", #name, " record")));
+                    };
+                    let mut fields = fields.into_iter();
+                    #(#decoded)*
+                    if fields.next().is_some() {
+                        return Err(::wasm_junction::TypeError::new(#extra));
+                    }
+                    Ok(Self { #(#field_names,)* })
                 }
             }
         })
