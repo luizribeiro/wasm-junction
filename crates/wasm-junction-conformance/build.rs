@@ -15,5 +15,7 @@ fn main() -> std::io::Result<()> {
         "translator_guest.wasm",
         "translator.wasm",
     )?;
-    build("guest/Cargo.toml", "writer_guest.wasm", "writer.wasm")
+    build("guest/Cargo.toml", "writer_guest.wasm", "writer.wasm")?;
+    build("guest/Cargo.toml", "cycle_a_guest.wasm", "cycle-a.wasm")?;
+    build("guest/Cargo.toml", "cycle_b_guest.wasm", "cycle-b.wasm")
 }

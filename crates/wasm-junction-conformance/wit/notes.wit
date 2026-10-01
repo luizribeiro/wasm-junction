@@ -74,3 +74,21 @@ world translator-component {
   import decoration;
   export translator;
 }
+
+interface cycle-a {
+  recurse: func(depth: u32) -> u32;
+}
+
+interface cycle-b {
+  recurse: func(depth: u32) -> u32;
+}
+
+world cycle-a-component {
+  import cycle-b;
+  export cycle-a;
+}
+
+world cycle-b-component {
+  import cycle-a;
+  export cycle-b;
+}
