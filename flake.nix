@@ -25,6 +25,11 @@
       let
         overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs { inherit system overlays; };
+        isLinux = pkgs.stdenv.hostPlatform.isLinux;
+        playwrightBrowsers = pkgs.lib.optionals isLinux [ pkgs.playwright-driver.browsers ];
+        playwrightBrowserEnv = pkgs.lib.optionalAttrs isLinux {
+          PLAYWRIGHT_NIX_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
+        };
         toolchain = pkgs.rust-bin.stable."1.98.1".minimal.override {
           extensions = [
             "clippy"
@@ -114,18 +119,26 @@
           hooks = offlineHooks;
         };
 
-        devShells.default = pkgs.mkShell {
-          packages = [
-            toolchain
-            pkgs.wasm-tools
-            pkgs.cargo-nextest
-            pkgs.cargo-deny
-            pkgs.git-absorb
-            pkgs.libiconv
-          ]
-          ++ gitHooks.enabledPackages;
-          inherit (gitHooks) shellHook;
-        };
+        devShells.default = pkgs.mkShell (
+          {
+            packages = [
+              toolchain
+              pkgs.wasm-tools
+              pkgs.cargo-nextest
+              pkgs.cargo-deny
+              pkgs.git-absorb
+              pkgs.libiconv
+              pkgs.nodejs_24
+              pkgs.playwright-driver
+              pkgs.wasm-bindgen-cli
+            ]
+            ++ playwrightBrowsers
+            ++ gitHooks.enabledPackages;
+            PLAYWRIGHT_NODE_PATH = "${pkgs.playwright-driver}";
+            inherit (gitHooks) shellHook;
+          }
+          // playwrightBrowserEnv
+        );
       }
     );
 }
