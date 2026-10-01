@@ -1,0 +1,19 @@
+package example:audit@0.1.0;
+
+interface audit {
+  resource session {
+    constructor(user: string);
+    user: func() -> string;
+  }
+
+  audit: async func(lines: stream<u8>);
+}
+
+interface runner {
+  run: async func(user: string);
+}
+
+world plugin {
+  import audit;
+  export runner;
+}
