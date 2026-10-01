@@ -7,12 +7,6 @@ import process from "node:process";
 const [browserName, ...cargoArgs] = process.argv.slice(2);
 const playwrightRoot = process.env.PLAYWRIGHT_NODE_PATH;
 if (!playwrightRoot) throw new Error("run this command inside `nix develop`");
-if (process.platform === "linux") {
-  process.env.PLAYWRIGHT_BROWSERS_PATH =
-    process.env.PLAYWRIGHT_NIX_BROWSERS_PATH;
-} else {
-  delete process.env.PLAYWRIGHT_BROWSERS_PATH;
-}
 
 const playwright = await import(join(playwrightRoot, "index.mjs"));
 const browserType = playwright[browserName];
@@ -28,7 +22,7 @@ function delay(milliseconds) {
 }
 
 async function installBrowser() {
-  if (process.platform === "linux" || existsSync(browserType.executablePath())) return;
+  if (existsSync(browserType.executablePath())) return;
   const installer = spawn(process.execPath, [join(playwrightRoot, "cli.js"), "install", browserName], {
     stdio: "inherit",
   });

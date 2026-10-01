@@ -25,11 +25,6 @@
       let
         overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs { inherit system overlays; };
-        isLinux = pkgs.stdenv.hostPlatform.isLinux;
-        playwrightBrowsers = pkgs.lib.optionals isLinux [ pkgs.playwright-driver.browsers ];
-        playwrightBrowserEnv = pkgs.lib.optionalAttrs isLinux {
-          PLAYWRIGHT_NIX_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
-        };
         toolchain = pkgs.rust-bin.stable."1.98.1".minimal.override {
           extensions = [
             "clippy"
@@ -101,8 +96,7 @@
               pkgs.nodejs_24
               pkgs.playwright-driver
               pkgs.wasm-bindgen-cli
-            ]
-            ++ playwrightBrowsers;
+            ];
             text = ''
               scripts/browser-test all -- -p wasm-junction-jco --lib
               scripts/browser-test all -- -p wasm-junction-jco --test browser
@@ -133,26 +127,22 @@
           hooks = offlineHooks;
         };
 
-        devShells.default = pkgs.mkShell (
-          {
-            packages = [
-              toolchain
-              pkgs.wasm-tools
-              pkgs.cargo-nextest
-              pkgs.cargo-deny
-              pkgs.git-absorb
-              pkgs.libiconv
-              pkgs.nodejs_24
-              pkgs.playwright-driver
-              pkgs.wasm-bindgen-cli
-            ]
-            ++ playwrightBrowsers
-            ++ gitHooks.enabledPackages;
-            PLAYWRIGHT_NODE_PATH = "${pkgs.playwright-driver}";
-            inherit (gitHooks) shellHook;
-          }
-          // playwrightBrowserEnv
-        );
+        devShells.default = pkgs.mkShell ({
+          packages = [
+            toolchain
+            pkgs.wasm-tools
+            pkgs.cargo-nextest
+            pkgs.cargo-deny
+            pkgs.git-absorb
+            pkgs.libiconv
+            pkgs.nodejs_24
+            pkgs.playwright-driver
+            pkgs.wasm-bindgen-cli
+          ]
+          ++ gitHooks.enabledPackages;
+          PLAYWRIGHT_NODE_PATH = "${pkgs.playwright-driver}";
+          inherit (gitHooks) shellHook;
+        });
       }
     );
 }
