@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::Span;
-use wit_parser::{InterfaceId, PackageId, Resolve, Type, TypeId, TypeOwner};
+use wit_parser::{InterfaceId, PackageId, Resolve, Type, TypeDefKind, TypeId, TypeOwner};
 
 use super::{rust_ident, walk};
 
@@ -33,6 +33,55 @@ pub(super) fn check(resolve: &Resolve, package: PackageId, span: Span) -> syn::R
             let rust = rust_ident(&name.to_upper_camel_case())?.to_string();
             unique(&mut names, &rust, name, "type", span)?;
         }
+    }
+    for id in types {
+        let kind = &resolve.types[id].kind;
+        match kind {
+            TypeDefKind::Record(record) => check_members(
+                record.fields.iter().map(|field| field.name.as_str()),
+                false,
+                "field",
+                span,
+            )?,
+            TypeDefKind::Variant(variant) => check_members(
+                variant.cases.iter().map(|case| case.name.as_str()),
+                true,
+                "case",
+                span,
+            )?,
+            TypeDefKind::Enum(enum_) => check_members(
+                enum_.cases.iter().map(|case| case.name.as_str()),
+                true,
+                "case",
+                span,
+            )?,
+            TypeDefKind::Flags(flags) => check_members(
+                flags.flags.iter().map(|flag| flag.name.as_str()),
+                false,
+                "flag",
+                span,
+            )?,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn check_members<'a>(
+    items: impl Iterator<Item = &'a str>,
+    upper_camel: bool,
+    kind: &str,
+    span: Span,
+) -> syn::Result<()> {
+    let mut names = HashMap::new();
+    for wit in items {
+        let converted = if upper_camel {
+            wit.to_upper_camel_case()
+        } else {
+            wit.to_snake_case()
+        };
+        let rust = rust_ident(&converted)?.to_string();
+        unique(&mut names, &rust, wit, kind, span)?;
     }
     Ok(())
 }
@@ -104,5 +153,22 @@ mod tests {
         let error = collision("tests/fixtures/collisions/types/wit");
         assert!(error.contains("`http2` and `http-2`"));
         assert!(error.contains("`Http2`"));
+    }
+
+    #[test]
+    fn member_collisions_name_both_members() {
+        let error = collision("tests/fixtures/collisions/cases/wit");
+        assert!(error.contains("WIT cases `http2` and `http-2`"));
+        for kind in ["field", "flag"] {
+            let error = super::check_members(
+                ["hello__world", "hello-world"].into_iter(),
+                false,
+                kind,
+                Span::call_site(),
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains(&format!("WIT {kind}s `hello__world` and `hello-world`")));
+        }
     }
 }

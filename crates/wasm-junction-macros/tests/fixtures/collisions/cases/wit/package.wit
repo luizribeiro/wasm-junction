@@ -1,0 +1,5 @@
+package test:colliding-cases;
+
+interface values {
+  variant collision { http2, http-2 }
+}
