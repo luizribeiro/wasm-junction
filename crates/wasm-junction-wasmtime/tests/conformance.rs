@@ -3,20 +3,20 @@
 use std::future::{Future, poll_fn};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
 
 use wasm_junction::{
-    App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Caller, Component, Engine,
-    ImportDispatcher, InvocationContext, Middleware, Next, Provided, Provider, Resource, Val, Vals,
-    WasiConfig,
+    App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Caller, CompiledComponent,
+    Component, Engine, EngineError, ImportDispatcher, InvocationContext, Middleware, Next,
+    Provided, Provider, Resource, Val, Vals, WasiConfig,
 };
 use wasm_junction_conformance::{
-    CYCLE_A, Fixture, FixtureHost, RESOURCE_CLIENT, RESOURCE_HOST, ResourceHost, RoutedFixture,
-    RoutedHost, SUMMARIZER, WRITER, component, cycle_a_component, cycle_b_component,
-    resource_component, run, run_reload, run_resources, run_routed, sample_note,
-    translator_component, writer_component,
+    CYCLE_A, Fixture, FixtureHost, RESOURCE_CLIENT, RESOURCE_HOST, ReloadGreeter, ReloadHost,
+    ResourceHost, RoutedFixture, RoutedHost, SUMMARIZER, WRITER, component, cycle_a_component,
+    cycle_b_component, reload_v1_component, reload_v2_component, resource_component, run,
+    run_reload, run_resources, run_routed, sample_note, translator_component, writer_component,
 };
 use wasm_junction_wasmtime::WasmtimeEngine;
 
@@ -104,6 +104,100 @@ fn reload_scenario_progresses_on_a_current_thread_runtime() {
         .expect("reload scenario deadlocked")
         .unwrap();
     worker.join().unwrap();
+}
+
+#[derive(Clone)]
+struct TrackingEngine {
+    inner: WasmtimeEngine,
+    compiled: Arc<Mutex<Vec<Weak<dyn CompiledComponent>>>>,
+}
+
+impl TrackingEngine {
+    fn new() -> Self {
+        Self {
+            inner: WasmtimeEngine::new().unwrap(),
+            compiled: Arc::default(),
+        }
+    }
+
+    fn compilation(&self, index: usize) -> Weak<dyn CompiledComponent> {
+        self.compiled.lock().unwrap()[index].clone()
+    }
+}
+
+impl Engine for TrackingEngine {
+    fn supports_import(&self, interface: &str) -> bool {
+        self.inner.supports_import(interface)
+    }
+
+    fn compile(
+        &self,
+        bytes: Arc<[u8]>,
+        wasi: WasiConfig,
+    ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
+        Box::pin(async move {
+            let compiled = self.inner.compile(bytes, wasi).await?;
+            self.compiled
+                .lock()
+                .unwrap()
+                .push(Arc::downgrade(&compiled));
+            Ok(compiled)
+        })
+    }
+}
+
+#[test]
+fn retired_generation_drops_after_its_last_call() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let engine = TrackingEngine::new();
+    let (sender, receiver) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let old = runtime.block_on(async {
+            let host = ReloadHost::default();
+            let app = App::builder()
+                .engine(engine.clone())
+                .provide(host.clone().provided())
+                .build()
+                .unwrap();
+            app.load(
+                Component::from_bytes(reload_v1_component())
+                    .unwrap()
+                    .named("greeter"),
+            )
+            .await
+            .unwrap();
+            let old = engine.compilation(0);
+            {
+                let greeter = app.get::<ReloadGreeter>("greeter").unwrap();
+                let slow = greeter.greet_slow("Ada");
+                let mut slow = std::pin::pin!(slow);
+                poll_fn(|context| match slow.as_mut().poll(context) {
+                    Poll::Pending if host.entered() => Poll::Ready(()),
+                    Poll::Pending => Poll::Pending,
+                    Poll::Ready(result) => panic!("slow call ended early: {result:?}"),
+                })
+                .await;
+                app.reload(
+                    "greeter",
+                    Component::from_bytes(reload_v2_component()).unwrap(),
+                )
+                .await
+                .unwrap();
+                assert!(old.upgrade().is_some());
+                host.release();
+                assert_eq!(slow.await.unwrap(), "v1: hello, Ada");
+            }
+            old
+        });
+        sender.send(old).unwrap();
+    });
+    let old = receiver
+        .recv_timeout(Duration::from_secs(30))
+        .expect("generation retirement deadlocked");
+    worker.join().unwrap();
+    assert!(old.upgrade().is_none());
 }
 
 #[test]
