@@ -676,6 +676,50 @@ pub enum Candidate {
     Component(String),
 }
 
+/// The reason a component import cannot resolve uniquely.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IssueKind {
+    /// No provider exports a compatible interface.
+    Missing,
+    /// More than one provider exports a compatible interface.
+    Ambiguous {
+        /// Providers that could receive the import.
+        candidates: Vec<Candidate>,
+    },
+}
+
+/// One component import that cannot resolve uniquely.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolutionIssue {
+    /// The component containing the import.
+    pub component: String,
+    /// The imported interface.
+    pub interface: String,
+    /// The import's resolution failure.
+    pub kind: IssueKind,
+}
+
+impl Display for ResolutionIssue {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.kind {
+            IssueKind::Missing => write!(
+                formatter,
+                "component `{}` has no provider for `{}`",
+                self.component, self.interface
+            ),
+            IssueKind::Ambiguous { candidates } => write!(
+                formatter,
+                "component `{}` import `{}` is ambiguous: {}",
+                self.component,
+                self.interface,
+                display_candidates(candidates)
+            ),
+        }
+    }
+}
+
 fn display_candidates(candidates: &[Candidate]) -> String {
     candidates
         .iter()
@@ -990,6 +1034,24 @@ mod tests {
             assert!(!interfaces_compatible(left, right));
             assert!(!interfaces_compatible(right, left));
         }
+    }
+
+    #[test]
+    fn resolution_issue_display_names_candidates() {
+        let issue = ResolutionIssue {
+            component: "writer".into(),
+            interface: "example:translate/translator@0.1.0".into(),
+            kind: IssueKind::Ambiguous {
+                candidates: vec![
+                    Candidate::Component("deepl".into()),
+                    Candidate::Component("google".into()),
+                ],
+            },
+        };
+        assert_eq!(
+            issue.to_string(),
+            "component `writer` import `example:translate/translator@0.1.0` is ambiguous: `deepl`, `google`"
+        );
     }
 
     #[test]
