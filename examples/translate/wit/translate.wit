@@ -1,0 +1,18 @@
+package example:translate@0.1.0;
+
+interface translator {
+  translate: async func(text: string, target-language: string) -> result<string, string>;
+}
+
+interface writer {
+  write: async func(text: string, target-language: string) -> result<string, string>;
+}
+
+world writer-component {
+  import translator;
+  export writer;
+}
+
+world translator-component {
+  export translator;
+}
