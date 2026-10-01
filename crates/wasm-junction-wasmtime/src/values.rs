@@ -31,6 +31,14 @@ pub(crate) fn from_wasmtime(value: WasmtimeVal) -> Result<Val, wasmtime::Error> 
             .map(|(name, value)| Ok((name, from_wasmtime(value)?)))
             .collect::<Result<_, _>>()
             .map(Val::Record),
+        WasmtimeVal::Variant(case, value) => Ok(Val::Variant {
+            case,
+            value: value
+                .map(|value| from_wasmtime(*value).map(Box::new))
+                .transpose()?,
+        }),
+        WasmtimeVal::Enum(case) => Ok(Val::Enum(case)),
+        WasmtimeVal::Flags(names) => Ok(Val::Flags(names)),
         other => Err(wasmtime::Error::msg(format!(
             "unsupported component value: {other:?}"
         ))),
@@ -59,6 +67,14 @@ pub(crate) fn to_wasmtime(value: Val) -> Result<WasmtimeVal, wasmtime::Error> {
             .map(|(name, value)| Ok((name, to_wasmtime(value)?)))
             .collect::<Result<_, _>>()
             .map(WasmtimeVal::Record),
+        Val::Variant { case, value } => Ok(WasmtimeVal::Variant(
+            case,
+            value
+                .map(|value| to_wasmtime(*value).map(Box::new))
+                .transpose()?,
+        )),
+        Val::Enum(case) => Ok(WasmtimeVal::Enum(case)),
+        Val::Flags(names) => Ok(WasmtimeVal::Flags(names)),
         other => Err(wasmtime::Error::msg(format!(
             "unsupported framework value: {other:?}"
         ))),
@@ -125,5 +141,26 @@ mod tests {
         )]);
         assert_eq!(round_trip(value.clone()), value);
         assert_eq!(round_trip(Val::List(Vec::new())), Val::List(Vec::new()));
+    }
+
+    #[test]
+    fn variant_enum_and_flags_edge_cases_round_trip() {
+        let values = [
+            Val::Variant {
+                case: "none".to_owned(),
+                value: None,
+            },
+            Val::Variant {
+                case: "count".to_owned(),
+                value: Some(Box::new(Val::U32(3))),
+            },
+            Val::Enum("neutral".to_owned()),
+            Val::Enum("upbeat".to_owned()),
+            Val::Flags(Vec::new()),
+            Val::Flags(vec!["concise".to_owned(), "detailed".to_owned()]),
+        ];
+        for value in values {
+            assert_eq!(round_trip(value.clone()), value);
+        }
     }
 }
