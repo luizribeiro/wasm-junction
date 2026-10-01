@@ -95,6 +95,20 @@
             '';
             stages = [ "pre-push" ];
           };
+          browser-tests = cargoHook {
+            name = "browser-tests-hook";
+            runtimeInputs = [
+              pkgs.nodejs_24
+              pkgs.playwright-driver
+              pkgs.wasm-bindgen-cli
+            ]
+            ++ playwrightBrowsers;
+            text = ''
+              scripts/browser-test all -- -p wasm-junction-jco --lib
+              scripts/browser-test all -- -p wasm-junction-jco --test browser
+            '';
+            stages = [ "pre-push" ];
+          };
           doctests = cargoHook {
             name = "doctests-hook";
             text = "cargo test --doc --workspace --locked";
