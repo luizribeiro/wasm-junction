@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use wasm_junction::{
     BoxFuture, Call, CallContext, CallError, InputStream, OutputStream, OutputStreamWriter,
-    Provided, Provider, Vals,
+    Provided, Provider, Val, Vals,
 };
 
 use crate::STREAM_HOST;
@@ -78,6 +78,20 @@ impl Provider for StreamHost {
                         .map_err(|error| CallError::trap(error.to_string()))?;
                     Ok(Vec::new())
                 }
+                "optional" => {
+                    let [Val::Option(Some(value))] = <[_; 1]>::try_from(call.args)
+                        .map_err(|_| CallError::trap("optional expects one stream option"))?
+                    else {
+                        return Err(CallError::trap("optional expects some stream"));
+                    };
+                    let bytes = InputStream::try_from(*value)?
+                        .read_all()
+                        .await
+                        .map_err(|error| CallError::trap(error.to_string()))?;
+                    Ok(vec![Val::Option(Some(Box::new(
+                        OutputStream::from_bytes(bytes).into(),
+                    )))])
+                }
                 "chunks" => {
                     let (writer, stream) = OutputStream::channel();
                     writer
@@ -113,7 +127,7 @@ mod tests {
     use std::future::Future;
     use std::task::{Context, Poll, Waker};
 
-    use wasm_junction::{Caller, StreamHandle, Val};
+    use wasm_junction::{Caller, StreamHandle};
 
     use super::*;
 

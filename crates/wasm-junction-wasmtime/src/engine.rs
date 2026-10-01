@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use wasm_junction_core::{
     BoxFuture, CallError, CompiledComponent, Engine, EngineError, ImportDispatcher,
-    InvocationContext, Resource, ResourceOwnership, Vals, WasiConfig,
+    InvocationContext, Resource, ResourceOwnership, StreamHandle, Val, Vals, WasiConfig,
 };
 use wasmtime::component::{
     Component, InstancePre, Linker, ResourceAny, ResourceDynamic, ResourceType, Val as WasmtimeVal,
@@ -13,7 +13,8 @@ use wasmtime::{AsContextMut, Config, Engine as RuntimeEngine, Store};
 use wasmtime_wasi::{WasiCtxBuilder, WasiCtxView, WasiView};
 
 use crate::imports::{ResourceDefinition, define_imports};
-use crate::values::{ExpectedResource, from_wasmtime, to_wasmtime};
+use crate::streams::lower_stream;
+use crate::values::{ExpectedResource, LiftValue, LowerValue, from_wasmtime, to_wasmtime};
 use crate::wasi::{WasiState, add_gates, add_ungated_interfaces};
 
 pub(crate) struct StoreData {
@@ -176,9 +177,15 @@ impl Compiled {
                             to_wasmtime(
                                 value,
                                 parameter_types.get(index),
-                                &mut |resource, expected| {
-                                    accessor
-                                        .with(|store| lower_resource(&resource, expected, store))
+                                &mut |value| match value {
+                                    LowerValue::Resource(resource, expected) => accessor
+                                        .with(|store| {
+                                            lower_resource(&resource, expected, store)
+                                        })
+                                        .map(WasmtimeVal::Resource),
+                                    LowerValue::Stream(stream) => accessor
+                                        .with(|store| lower_stream(stream, store))
+                                        .map(WasmtimeVal::Stream),
                                 },
                             )
                         })
@@ -190,8 +197,26 @@ impl Compiled {
                     results
                         .into_iter()
                         .map(|value| {
-                            from_wasmtime(value, &mut |resource| {
-                                accessor.with(|store| lift_resource(resource, store))
+                            from_wasmtime(value, &mut |value| match value {
+                                LiftValue::Resource(resource) => accessor
+                                    .with(|store| lift_resource(resource, store))
+                                    .map(Val::Resource),
+                                LiftValue::Stream(stream) => {
+                                    let reader = stream.try_into_stream_reader::<u8>()?;
+                                    accessor.with(|mut store| {
+                                        match reader
+                                            .try_into::<StreamHandle>(store.as_context_mut())
+                                        {
+                                            Ok(handle) => Ok(Val::Stream(handle)),
+                                            Err(mut reader) => {
+                                                reader.close(store.as_context_mut())?;
+                                                Err(wasmtime::Error::new(CallError::refused(
+                                                    "guest-created streams cannot be returned because the Wasmtime store ends with each call",
+                                                )))
+                                            }
+                                        }
+                                    })
+                                }
                             })
                         })
                         .collect::<Result<Vals, wasmtime::Error>>()

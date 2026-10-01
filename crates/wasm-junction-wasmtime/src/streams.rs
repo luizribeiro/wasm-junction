@@ -1,3 +1,4 @@
+use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -142,6 +143,18 @@ impl StreamProducer<StoreData> for CoreProducer {
             }
             Poll::Pending => Poll::Pending,
         }
+    }
+
+    fn try_into(mut me: Pin<Box<Self>>, ty: TypeId) -> Result<Box<dyn Any>, Pin<Box<Self>>> {
+        if ty != TypeId::of::<StreamHandle>() {
+            return Err(me);
+        }
+        let Some(input) = me.as_mut().get_mut().input.take() else {
+            return Err(me);
+        };
+        let handle = input.into_handle();
+        me.as_mut().get_mut().close();
+        Ok(Box::new(handle))
     }
 }
 

@@ -3,6 +3,7 @@ package example:streams@0.1.0;
 interface host {
   motd: func() -> stream<u8>;
   audit: async func(lines: stream<u8>);
+  optional: async func(bytes: option<stream<u8>>) -> option<stream<u8>>;
   chunks: func() -> stream<u8>;
   advance: func();
 }
@@ -10,6 +11,8 @@ interface host {
 interface probe {
   motd: async func() -> string;
   audit: async func();
+  optional: async func() -> string;
+  echo-optional: async func(bytes: option<stream<u8>>) -> option<stream<u8>>;
   leave-open: async func();
   incremental: async func() -> string;
   drop-early: async func();

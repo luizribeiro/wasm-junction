@@ -10,7 +10,7 @@ use wasmtime::component::{
 
 use crate::engine::{StoreData, lift_resource, lower_resource};
 use crate::streams::{lift_stream, lower_stream};
-use crate::values::{from_wasmtime, to_wasmtime};
+use crate::values::{LiftValue, LowerValue, from_wasmtime, to_wasmtime};
 
 pub(crate) fn define_imports(
     linker: &mut Linker<StoreData>,
@@ -130,15 +130,14 @@ fn define_concurrent(
         let result_types = ty.results().collect::<Vec<_>>();
         Box::pin(async move {
             let args = convert_params(params, &mut |value| {
-                if let WasmtimeVal::Stream(stream) = value {
-                    accessor
+                from_wasmtime(value, &mut |value| match value {
+                    LiftValue::Resource(resource) => accessor
+                        .with(|store| lift_resource(resource, store))
+                        .map(Val::Resource),
+                    LiftValue::Stream(stream) => accessor
                         .with(|store| lift_stream(stream, store))
-                        .map(Val::Stream)
-                } else {
-                    from_wasmtime(value, &mut |resource| {
-                        accessor.with(|store| lift_resource(resource, store))
-                    })
-                }
+                        .map(Val::Stream),
+                })
             })?;
             let (imports, context, component) = accessor.with(|mut store| {
                 let data = store.get();
@@ -150,15 +149,14 @@ fn define_concurrent(
             });
             let values = call(imports, context, component, interface, function, args).await?;
             set_results(results, values, &result_types, &mut |value, expected| {
-                if let Val::Stream(stream) = value {
-                    accessor
+                to_wasmtime(value, expected, &mut |value| match value {
+                    LowerValue::Resource(resource, expected) => accessor
+                        .with(|store| lower_resource(&resource, expected, store))
+                        .map(WasmtimeVal::Resource),
+                    LowerValue::Stream(stream) => accessor
                         .with(|store| lower_stream(stream, store))
-                        .map(WasmtimeVal::Stream)
-                } else {
-                    to_wasmtime(value, expected, &mut |resource, expected| {
-                        accessor.with(|store| lower_resource(&resource, expected, store))
-                    })
-                }
+                        .map(WasmtimeVal::Stream),
+                })
             })
         })
     })
@@ -177,13 +175,14 @@ fn define_plain(
         let result_types = ty.results().collect::<Vec<_>>();
         Box::new(async move {
             let args = convert_params(params, &mut |value| {
-                if let WasmtimeVal::Stream(stream) = value {
-                    lift_stream(stream, store.as_context_mut()).map(Val::Stream)
-                } else {
-                    from_wasmtime(value, &mut |resource| {
-                        lift_resource(resource, store.as_context_mut())
-                    })
-                }
+                from_wasmtime(value, &mut |value| match value {
+                    LiftValue::Resource(resource) => {
+                        lift_resource(resource, store.as_context_mut()).map(Val::Resource)
+                    }
+                    LiftValue::Stream(stream) => {
+                        lift_stream(stream, store.as_context_mut()).map(Val::Stream)
+                    }
+                })
             })?;
             let (imports, context, component) = {
                 let mut store = store.as_context_mut();
@@ -196,13 +195,15 @@ fn define_plain(
             };
             let values = call(imports, context, component, interface, function, args).await?;
             set_results(results, values, &result_types, &mut |value, expected| {
-                if let Val::Stream(stream) = value {
-                    lower_stream(stream, store.as_context_mut()).map(WasmtimeVal::Stream)
-                } else {
-                    to_wasmtime(value, expected, &mut |resource, expected| {
+                to_wasmtime(value, expected, &mut |value| match value {
+                    LowerValue::Resource(resource, expected) => {
                         lower_resource(&resource, expected, store.as_context_mut())
-                    })
-                }
+                            .map(WasmtimeVal::Resource)
+                    }
+                    LowerValue::Stream(stream) => {
+                        lower_stream(stream, store.as_context_mut()).map(WasmtimeVal::Stream)
+                    }
+                })
             })
         })
     })

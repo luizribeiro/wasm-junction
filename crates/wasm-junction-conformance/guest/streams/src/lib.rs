@@ -26,6 +26,19 @@ impl bindings::exports::example::streams::probe::Guest for Component {
         host::audit(reader).await;
     }
 
+    async fn optional() -> String {
+        let (mut writer, reader) = bindings::wit_stream::new();
+        wit_bindgen::spawn_local(async move {
+            let _ = writer.write_all(b"nested import".to_vec()).await;
+        });
+        let stream = host::optional(Some(reader)).await.unwrap();
+        text(stream.collect().await)
+    }
+
+    async fn echo_optional(bytes: Option<StreamReader<u8>>) -> Option<StreamReader<u8>> {
+        bytes
+    }
+
     async fn leave_open() {
         let (mut writer, reader) = bindings::wit_stream::new();
         wit_bindgen::spawn_local(async move {

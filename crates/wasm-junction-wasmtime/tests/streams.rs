@@ -3,8 +3,8 @@
 use std::sync::{Arc, Mutex};
 
 use wasm_junction::{
-    App, BoxFuture, Call, CallContext, CallError, Component, InputStream, Provided, Provider, Val,
-    Vals,
+    App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Component, InputStream,
+    OutputStream, Provided, Provider, Val, Vals,
 };
 use wasm_junction_conformance::{STREAM_HOST, STREAM_PROBE, StreamHost, stream_component};
 use wasm_junction_wasmtime::WasmtimeEngine;
@@ -71,6 +71,55 @@ fn host_streams_reach_the_guest_and_close_on_early_drop() {
                 .await
                 .unwrap();
             assert_eq!(host.audit(), b"opened note\n");
+
+            let nested_import = app
+                .call("streams", STREAM_PROBE, "optional", Vec::new())
+                .await
+                .unwrap();
+            assert_eq!(nested_import, [Val::from("nested import")]);
+
+            let mut nested_export = app
+                .call(
+                    "streams",
+                    STREAM_PROBE,
+                    "echo-optional",
+                    vec![Val::Option(Some(Box::new(
+                        OutputStream::from_bytes(b"nested export").into(),
+                    )))],
+                )
+                .await
+                .unwrap();
+            let Val::Option(Some(stream)) = nested_export.remove(0) else {
+                panic!("echo-optional did not return a stream option");
+            };
+            let input = InputStream::try_from(*stream).unwrap();
+            assert_eq!(input.read_all().await.unwrap(), b"nested export");
+
+            let accepted = app
+                .call(
+                    "streams",
+                    STREAM_PROBE,
+                    "accept",
+                    vec![OutputStream::from_bytes(b"export argument").into()],
+                )
+                .await
+                .unwrap();
+            assert_eq!(accepted, [Val::from("export argument")]);
+
+            let mut returned = app
+                .call("streams", STREAM_PROBE, "return-host", Vec::new())
+                .await
+                .unwrap();
+            let input = InputStream::try_from(returned.remove(0)).unwrap();
+            assert_eq!(input.read_all().await.unwrap(), b"Have a good day.");
+
+            let error = app
+                .call("streams", STREAM_PROBE, "return-guest", Vec::new())
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind(), CallErrorKind::Refused);
+            assert!(error.to_string().contains("store ends with each call"));
+
             app.call("streams", STREAM_PROBE, "drop-early", Vec::new())
                 .await
                 .unwrap();

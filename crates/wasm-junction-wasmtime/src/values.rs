@@ -1,5 +1,5 @@
-use wasm_junction_core::{Resource, ResourceOwnership, Val};
-use wasmtime::component::{ResourceAny, ResourceType, Type, Val as WasmtimeVal};
+use wasm_junction_core::{Resource, ResourceOwnership, StreamHandle, Val};
+use wasmtime::component::{ResourceAny, ResourceType, StreamAny, Type, Val as WasmtimeVal};
 
 #[derive(Clone, Copy)]
 pub(crate) struct ExpectedResource {
@@ -7,9 +7,19 @@ pub(crate) struct ExpectedResource {
     pub(crate) ty: ResourceType,
 }
 
+pub(crate) enum LiftValue {
+    Resource(ResourceAny),
+    Stream(StreamAny),
+}
+
+pub(crate) enum LowerValue {
+    Resource(Resource, Option<ExpectedResource>),
+    Stream(StreamHandle),
+}
+
 pub(crate) fn from_wasmtime(
     value: WasmtimeVal,
-    resource: &mut impl FnMut(ResourceAny) -> Result<Resource, wasmtime::Error>,
+    store: &mut impl FnMut(LiftValue) -> Result<Val, wasmtime::Error>,
 ) -> Result<Val, wasmtime::Error> {
     match value {
         WasmtimeVal::Bool(value) => Ok(Val::Bool(value)),
@@ -27,41 +37,42 @@ pub(crate) fn from_wasmtime(
         WasmtimeVal::String(value) => Ok(Val::String(value)),
         WasmtimeVal::List(values) => values
             .into_iter()
-            .map(|value| from_wasmtime(value, resource))
+            .map(|value| from_wasmtime(value, store))
             .collect::<Result<_, _>>()
             .map(Val::List),
         WasmtimeVal::Tuple(values) => values
             .into_iter()
-            .map(|value| from_wasmtime(value, resource))
+            .map(|value| from_wasmtime(value, store))
             .collect::<Result<_, _>>()
             .map(Val::Tuple),
         WasmtimeVal::Record(fields) => fields
             .into_iter()
-            .map(|(name, value)| Ok((name, from_wasmtime(value, resource)?)))
+            .map(|(name, value)| Ok((name, from_wasmtime(value, store)?)))
             .collect::<Result<_, _>>()
             .map(Val::Record),
         WasmtimeVal::Variant(case, value) => Ok(Val::Variant {
             case,
             value: value
-                .map(|value| from_wasmtime(*value, resource).map(Box::new))
+                .map(|value| from_wasmtime(*value, store).map(Box::new))
                 .transpose()?,
         }),
         WasmtimeVal::Enum(case) => Ok(Val::Enum(case)),
         WasmtimeVal::Flags(names) => Ok(Val::Flags(names)),
         WasmtimeVal::Option(value) => Ok(Val::Option(
             value
-                .map(|value| from_wasmtime(*value, resource).map(Box::new))
+                .map(|value| from_wasmtime(*value, store).map(Box::new))
                 .transpose()?,
         )),
         WasmtimeVal::Result(result) => Ok(Val::Result(match result {
             Ok(value) => Ok(value
-                .map(|value| from_wasmtime(*value, resource).map(Box::new))
+                .map(|value| from_wasmtime(*value, store).map(Box::new))
                 .transpose()?),
             Err(value) => Err(value
-                .map(|value| from_wasmtime(*value, resource).map(Box::new))
+                .map(|value| from_wasmtime(*value, store).map(Box::new))
                 .transpose()?),
         })),
-        WasmtimeVal::Resource(value) => resource(value).map(Val::Resource),
+        WasmtimeVal::Resource(value) => store(LiftValue::Resource(value)),
+        WasmtimeVal::Stream(value) => store(LiftValue::Stream(value)),
         other => Err(wasmtime::Error::msg(format!(
             "unsupported component value: {other:?}"
         ))),
@@ -71,10 +82,7 @@ pub(crate) fn from_wasmtime(
 pub(crate) fn to_wasmtime(
     value: Val,
     expected: Option<&Type>,
-    resource: &mut impl FnMut(
-        Resource,
-        Option<ExpectedResource>,
-    ) -> Result<ResourceAny, wasmtime::Error>,
+    store: &mut impl FnMut(LowerValue) -> Result<WasmtimeVal, wasmtime::Error>,
 ) -> Result<WasmtimeVal, wasmtime::Error> {
     match value {
         Val::Bool(value) => Ok(WasmtimeVal::Bool(value)),
@@ -92,7 +100,7 @@ pub(crate) fn to_wasmtime(
         Val::String(value) => Ok(WasmtimeVal::String(value)),
         Val::List(values) => {
             let ty = list_element_type(expected);
-            convert_values(values, ty.as_ref(), resource).map(WasmtimeVal::List)
+            convert_values(values, ty.as_ref(), store).map(WasmtimeVal::List)
         }
         Val::Tuple(values) => {
             let types = match expected {
@@ -102,7 +110,7 @@ pub(crate) fn to_wasmtime(
             values
                 .into_iter()
                 .enumerate()
-                .map(|(index, value)| to_wasmtime(value, types.get(index), resource))
+                .map(|(index, value)| to_wasmtime(value, types.get(index), store))
                 .collect::<Result<_, _>>()
                 .map(WasmtimeVal::Tuple)
         }
@@ -116,7 +124,7 @@ pub(crate) fn to_wasmtime(
                         .map(|field| field.ty),
                     _ => None,
                 };
-                Ok((name, to_wasmtime(value, ty.as_ref(), resource)?))
+                Ok((name, to_wasmtime(value, ty.as_ref(), store)?))
             })
             .collect::<Result<_, _>>()
             .map(WasmtimeVal::Record),
@@ -131,7 +139,7 @@ pub(crate) fn to_wasmtime(
             Ok(WasmtimeVal::Variant(
                 case,
                 value
-                    .map(|value| to_wasmtime(*value, ty.as_ref(), resource).map(Box::new))
+                    .map(|value| to_wasmtime(*value, ty.as_ref(), store).map(Box::new))
                     .transpose()?,
             ))
         }
@@ -144,7 +152,7 @@ pub(crate) fn to_wasmtime(
             };
             Ok(WasmtimeVal::Option(
                 value
-                    .map(|value| to_wasmtime(*value, ty.as_ref(), resource).map(Box::new))
+                    .map(|value| to_wasmtime(*value, ty.as_ref(), store).map(Box::new))
                     .transpose()?,
             ))
         }
@@ -155,7 +163,7 @@ pub(crate) fn to_wasmtime(
                         Some(Type::Result(ty)) => ty.ok(),
                         _ => None,
                     };
-                    to_wasmtime(*value, ty.as_ref(), resource).map(Box::new)
+                    to_wasmtime(*value, ty.as_ref(), store).map(Box::new)
                 })
                 .transpose()?),
             Err(value) => Err(value
@@ -164,13 +172,12 @@ pub(crate) fn to_wasmtime(
                         Some(Type::Result(ty)) => ty.err(),
                         _ => None,
                     };
-                    to_wasmtime(*value, ty.as_ref(), resource).map(Box::new)
+                    to_wasmtime(*value, ty.as_ref(), store).map(Box::new)
                 })
                 .transpose()?),
         })),
-        Val::Resource(value) => {
-            resource(value, expected_resource(expected)).map(WasmtimeVal::Resource)
-        }
+        Val::Resource(value) => store(LowerValue::Resource(value, expected_resource(expected))),
+        Val::Stream(value) => store(LowerValue::Stream(value)),
         other => Err(wasmtime::Error::msg(format!(
             "unsupported framework value: {other:?}"
         ))),
@@ -202,14 +209,11 @@ fn expected_resource(expected: Option<&Type>) -> Option<ExpectedResource> {
 fn convert_values(
     values: Vec<Val>,
     expected: Option<&Type>,
-    resource: &mut impl FnMut(
-        Resource,
-        Option<ExpectedResource>,
-    ) -> Result<ResourceAny, wasmtime::Error>,
+    store: &mut impl FnMut(LowerValue) -> Result<WasmtimeVal, wasmtime::Error>,
 ) -> Result<Vec<WasmtimeVal>, wasmtime::Error> {
     values
         .into_iter()
-        .map(|value| to_wasmtime(value, expected, resource))
+        .map(|value| to_wasmtime(value, expected, store))
         .collect()
 }
 
@@ -220,7 +224,7 @@ mod tests {
     use wasm_junction_core::Resource;
 
     fn round_trip(value: Val) -> Val {
-        let value = to_wasmtime(value, None, &mut |_, _| unreachable!()).unwrap();
+        let value = to_wasmtime(value, None, &mut |_| unreachable!()).unwrap();
         from_wasmtime(value, &mut |_| unreachable!()).unwrap()
     }
 
@@ -320,7 +324,10 @@ mod tests {
             "session",
             4,
         )))));
-        let error = to_wasmtime(value, None, &mut |resource, _| {
+        let error = to_wasmtime(value, None, &mut |value| {
+            let LowerValue::Resource(resource, _) = value else {
+                unreachable!();
+            };
             Err(wasmtime::Error::msg(format!(
                 "saw {}/{}:{}",
                 resource.interface(),
@@ -333,5 +340,20 @@ mod tests {
             error.to_string(),
             "saw example:resources/host@1.0.0/session:4"
         );
+    }
+
+    #[test]
+    fn nested_streams_use_the_store_aware_conversion() {
+        let value = Val::Option(Some(Box::new(Val::from(
+            wasm_junction_core::OutputStream::from_bytes(b"nested"),
+        ))));
+        let error = to_wasmtime(value, None, &mut |value| {
+            let LowerValue::Stream(stream) = value else {
+                unreachable!();
+            };
+            Err(wasmtime::Error::msg(format!("saw stream {}", stream.id())))
+        })
+        .unwrap_err();
+        assert!(error.to_string().starts_with("saw stream "));
     }
 }

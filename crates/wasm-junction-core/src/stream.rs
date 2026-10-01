@@ -125,6 +125,15 @@ impl InputStream {
         }
         Ok(bytes)
     }
+    /// Releases this reader back into an opaque handle for an engine boundary transfer.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn into_handle(mut self) -> StreamHandle {
+        self.handle.state().reader_taken = false;
+        self.finished = true;
+        self.handle.clone()
+    }
+
     /// Closes the reader while preserving the reason for subsequent writer failures.
     #[doc(hidden)]
     pub fn close_reader(mut self) {
@@ -352,6 +361,9 @@ mod tests {
             panic!("cloned handle gained another reader");
         };
         assert_eq!(error.to_string(), "stream already has a reader");
+
+        let handle = input.into_handle();
+        assert!(InputStream::try_from(handle).is_ok());
     }
 
     #[test]
