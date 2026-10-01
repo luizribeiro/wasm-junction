@@ -1,0 +1,11 @@
+[package]
+name = "wasm-junction-guest-build"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+publish = false
+
+[lints]
+workspace = true

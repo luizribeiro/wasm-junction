@@ -925,6 +925,7 @@ name = "wasm-junction-conformance"
 version = "0.0.0"
 dependencies = [
  "wasm-junction",
+ "wasm-junction-guest-build",
 ]
 
 [[package]]
@@ -937,11 +938,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm-junction-guest-build"
+version = "0.0.0"
+
+[[package]]
 name = "wasm-junction-wasmtime"
 version = "0.0.0"
 dependencies = [
  "wasm-junction",
  "wasm-junction-conformance",
+ "wasm-junction-guest-build",
  "wasmtime",
 ]
 

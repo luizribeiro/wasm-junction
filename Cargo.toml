@@ -3,6 +3,7 @@ resolver = "3"
 members = [
   "crates/wasm-junction",
   "crates/wasm-junction-conformance",
+  "crates/wasm-junction-guest-build",
   "crates/wasm-junction-wasmtime",
   "examples/greeter",
 ]

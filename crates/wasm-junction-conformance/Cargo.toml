@@ -14,3 +14,5 @@ workspace = true
 
 [dependencies]
 wasm-junction = { path = "../wasm-junction", version = "=0.0.0" }
+[build-dependencies]
+wasm-junction-guest-build = { path = "../wasm-junction-guest-build", version = "=0.0.0" }

@@ -17,6 +17,8 @@ wasmtime = { version = "=49.0.1", default-features = false, features = ["compone
 
 [dev-dependencies]
 wasm-junction-conformance = { path = "../wasm-junction-conformance", version = "=0.0.0" }
+[build-dependencies]
+wasm-junction-guest-build = { path = "../wasm-junction-guest-build", version = "=0.0.0" }
 
 [[bench]]
 name = "dispatch"
