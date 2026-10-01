@@ -10,7 +10,9 @@ mod future;
 mod values;
 
 pub use context::{Extensions, InvocationContext};
-pub use engine::{CompiledComponent, Engine, EngineError, ImportDispatcher, WasiConfig};
+pub use engine::{
+    CompiledComponent, Engine, EngineError, ImportDispatcher, ImportTarget, WasiConfig,
+};
 pub use error::{CallError, CallErrorKind};
 pub use future::{BoxFuture, HostBound, MaybeSend};
 pub use values::{TypeError, Val, Vals};

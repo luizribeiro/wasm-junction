@@ -24,5 +24,6 @@ pub use middleware::{Event, Middleware, Next};
 pub use provider::{Provided, Provider};
 pub use wasm_junction_core::{
     BoxFuture, CallError, CallErrorKind, CompiledComponent, Engine, EngineError, Extensions,
-    HostBound, ImportDispatcher, InvocationContext, MaybeSend, TypeError, Val, Vals, WasiConfig,
+    HostBound, ImportDispatcher, ImportTarget, InvocationContext, MaybeSend, TypeError, Val, Vals,
+    WasiConfig,
 };

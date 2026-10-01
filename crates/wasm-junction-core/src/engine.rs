@@ -4,6 +4,16 @@ use std::{error::Error, fmt};
 
 use crate::{BoxFuture, CallError, HostBound, InvocationContext, Vals};
 
+/// The engine-provided implementation at the end of an imported call's middleware chain.
+pub trait ImportTarget: HostBound {
+    /// Invokes the implementation with middleware's final arguments.
+    fn call(
+        &self,
+        context: InvocationContext,
+        args: Vals,
+    ) -> BoxFuture<'static, Result<Vals, CallError>>;
+}
+
 /// A compiled component whose exports can be invoked by an application dispatcher.
 ///
 /// Implement this in an engine crate. Each call must run in a fresh component instance.
@@ -30,6 +40,17 @@ pub trait ImportDispatcher: HostBound {
         interface: Arc<str>,
         function: Arc<str>,
         args: Vals,
+    ) -> BoxFuture<'_, Result<Vals, CallError>>;
+
+    /// Invokes an engine-provided import through the application middleware chain.
+    fn call_engine(
+        &self,
+        context: InvocationContext,
+        caller: Arc<str>,
+        interface: Arc<str>,
+        function: Arc<str>,
+        args: Vals,
+        target: Arc<dyn ImportTarget>,
     ) -> BoxFuture<'_, Result<Vals, CallError>>;
 }
 

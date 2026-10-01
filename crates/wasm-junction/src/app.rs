@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use crate::middleware::{CallTarget, ErasedMiddleware};
 use crate::{
     BoxFuture, Call, CallContext, CallError, Caller, CompiledComponent, Component, Engine,
-    EngineError, Event, ImportDispatcher, InvocationContext, Middleware, Provided, Provider, Vals,
-    WasiConfig,
+    EngineError, Event, ImportDispatcher, ImportTarget, InvocationContext, Middleware, Provided,
+    Provider, Vals, WasiConfig,
 };
 
 /// An application assembled from host providers, middleware, and WebAssembly components.
@@ -216,6 +216,22 @@ impl App {
         .await
     }
 
+    async fn call_engine_import(
+        &self,
+        context: InvocationContext,
+        caller: Arc<str>,
+        interface: Arc<str>,
+        function: Arc<str>,
+        args: Vals,
+        target: Arc<dyn ImportTarget>,
+    ) -> Result<Vals, CallError> {
+        self.dispatch(
+            Arc::new(EngineTarget { target, context }),
+            Call::new(Caller::Component(caller), "host", interface, function, args),
+        )
+        .await
+    }
+
     async fn dispatch(&self, target: Arc<dyn CallTarget>, call: Call) -> Result<Vals, CallError> {
         self.emit(&Event::InvocationStart {
             component: call.callee.clone(),
@@ -262,6 +278,18 @@ impl ImportDispatcher for App {
     ) -> BoxFuture<'_, Result<Vals, CallError>> {
         Box::pin(self.call_import(context, caller, interface, function, args))
     }
+
+    fn call_engine(
+        &self,
+        context: InvocationContext,
+        caller: Arc<str>,
+        interface: Arc<str>,
+        function: Arc<str>,
+        args: Vals,
+        target: Arc<dyn ImportTarget>,
+    ) -> BoxFuture<'_, Result<Vals, CallError>> {
+        Box::pin(self.call_engine_import(context, caller, interface, function, args, target))
+    }
 }
 
 struct HostTarget {
@@ -285,6 +313,17 @@ struct ComponentTarget {
     imports: Arc<dyn ImportDispatcher>,
     context: InvocationContext,
     component: Arc<str>,
+}
+
+struct EngineTarget {
+    target: Arc<dyn ImportTarget>,
+    context: InvocationContext,
+}
+
+impl CallTarget for EngineTarget {
+    fn call(&self, call: Call) -> BoxFuture<'static, Result<Vals, CallError>> {
+        self.target.call(self.context.clone(), call.args)
+    }
 }
 
 impl CallTarget for ComponentTarget {
@@ -592,10 +631,36 @@ fn interfaces_compatible(requested: &str, provided: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
+    use std::future::Future;
+    use std::task::{Context, Poll, Waker};
 
     use super::*;
 
     struct ExplicitEngine;
+
+    struct EchoTarget;
+
+    impl ImportTarget for EchoTarget {
+        fn call(
+            &self,
+            _context: InvocationContext,
+            args: Vals,
+        ) -> BoxFuture<'static, Result<Vals, CallError>> {
+            Box::pin(async move { Ok(args) })
+        }
+    }
+
+    struct RewriteEngineImport;
+
+    impl Middleware for RewriteEngineImport {
+        async fn call(&self, mut call: Call, next: crate::Next) -> Result<Vals, CallError> {
+            assert_eq!(call.caller, Caller::Component(Arc::from("guest")));
+            assert_eq!(call.interface.as_ref(), "system:settings/config@1.0.0");
+            assert_eq!(call.function.as_ref(), "read");
+            call.args = vec!["rewritten".into()];
+            next.run(call).await
+        }
+    }
 
     impl Engine for ExplicitEngine {
         fn compile(
@@ -619,6 +684,37 @@ mod tests {
             .unwrap();
 
         assert_eq!(default_calls.get(), 0);
+    }
+
+    #[test]
+    fn engine_import_targets_run_through_middleware() {
+        let app = App::builder()
+            .engine(ExplicitEngine)
+            .middleware(RewriteEngineImport)
+            .build()
+            .unwrap();
+        let values = ready(app.call_engine(
+            InvocationContext::default(),
+            Arc::from("guest"),
+            Arc::from("system:settings/config@1.0.0"),
+            Arc::from("read"),
+            vec!["original".into()],
+            Arc::new(EchoTarget),
+        ))
+        .unwrap();
+
+        assert_eq!(values, [crate::Val::from("rewritten")]);
+    }
+
+    fn ready<F: Future>(future: F) -> F::Output {
+        let mut future = std::pin::pin!(future);
+        match future
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+        {
+            Poll::Ready(output) => output,
+            Poll::Pending => panic!("future unexpectedly suspended"),
+        }
     }
 
     #[test]
