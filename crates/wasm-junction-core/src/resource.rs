@@ -135,6 +135,81 @@ impl<T: HostBound> ResourceTable<T> {
             id,
         ))
     }
+
+    /// Borrows the value identified by `resource` while running `operation`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CallError`] for the wrong resource type or an unknown id.
+    pub fn with<R>(
+        &self,
+        resource: &Resource,
+        operation: impl FnOnce(&T) -> R,
+    ) -> Result<R, CallError> {
+        self.validate(resource)?;
+        #[cfg(target_arch = "wasm32")]
+        let state = self
+            .state
+            .try_borrow()
+            .map_err(|_| CallError::trap("resource table is already borrowed"))?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| CallError::trap("resource table lock is poisoned"))?;
+        state
+            .values
+            .get(&resource.id)
+            .map(operation)
+            .ok_or_else(|| self.unknown(resource.id))
+    }
+
+    /// Removes and returns a value whose owned handle crossed back to the provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CallError`] for a borrow, the wrong resource type, or an unknown id.
+    pub fn take(&self, resource: &Resource) -> Result<T, CallError> {
+        self.validate(resource)?;
+        if resource.ownership != ResourceOwnership::Own {
+            return Err(CallError::trap(format!(
+                "cannot take borrowed resource `{}/{}`",
+                self.interface, self.name
+            )));
+        }
+        #[cfg(target_arch = "wasm32")]
+        let mut state = self
+            .state
+            .try_borrow_mut()
+            .map_err(|_| CallError::trap("resource table is already borrowed"))?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| CallError::trap("resource table lock is poisoned"))?;
+        state
+            .values
+            .remove(&resource.id)
+            .ok_or_else(|| self.unknown(resource.id))
+    }
+
+    fn validate(&self, resource: &Resource) -> Result<(), CallError> {
+        if resource.interface == self.interface && resource.name == self.name {
+            Ok(())
+        } else {
+            Err(CallError::trap(format!(
+                "expected resource `{}/{}`, got `{}/{}`",
+                self.interface, self.name, resource.interface, resource.name
+            )))
+        }
+    }
+
+    fn unknown(&self, id: u32) -> CallError {
+        CallError::trap(format!(
+            "unknown resource `{}/{}` id {id}",
+            self.interface, self.name
+        ))
+    }
 }
 
 impl<T> TableState<T> {
@@ -156,7 +231,7 @@ impl<T> TableState<T> {
 #[cfg(test)]
 mod tests {
     use super::TableState;
-    use crate::{Resource, ResourceOwnership, Val};
+    use crate::{Resource, ResourceOwnership, ResourceTable, Val};
 
     #[test]
     fn resource_value_preserves_identity_and_ownership() {
@@ -174,5 +249,41 @@ mod tests {
         state.next = Some(u32::MAX);
         assert_eq!(state.insert("last"), Some(u32::MAX));
         assert_eq!(state.insert("overflow"), None);
+    }
+
+    #[test]
+    fn table_keeps_borrows_and_consumes_owned_values() {
+        let table = ResourceTable::new("example:host/api@1.0.0", "session");
+        let owned = table.insert(String::from("Ada")).unwrap();
+        let borrowed = Resource::borrowed(owned.interface(), owned.name(), owned.id());
+        assert_eq!(table.with(&borrowed, String::len).unwrap(), 3);
+        assert!(
+            table
+                .take(&borrowed)
+                .unwrap_err()
+                .to_string()
+                .contains("borrowed")
+        );
+        assert_eq!(table.take(&owned).unwrap(), "Ada");
+        assert!(
+            table
+                .with(&owned, String::len)
+                .unwrap_err()
+                .to_string()
+                .contains("unknown")
+        );
+    }
+
+    #[test]
+    fn table_rejects_other_resource_types() {
+        let table: ResourceTable<()> = ResourceTable::new("example:host/api@1.0.0", "session");
+        let wrong = Resource::owned("example:host/api@1.0.0", "file", 0);
+        assert!(
+            table
+                .with(&wrong, |()| ())
+                .unwrap_err()
+                .to_string()
+                .contains("file")
+        );
     }
 }
