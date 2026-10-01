@@ -7,6 +7,7 @@ mod collisions;
 mod definitions;
 mod display;
 mod errors;
+mod functions;
 mod reachability;
 mod types;
 mod validate;
@@ -72,12 +73,18 @@ impl Generator<'_> {
                 }
             })
             .collect::<syn::Result<Vec<_>>>()?;
+        let calls = self.resolve.interfaces[id]
+            .functions
+            .values()
+            .map(|function| self.typed_call(name, function))
+            .collect::<syn::Result<Vec<_>>>()?;
         Ok(quote! {
             #[doc = concat!("Bindings for the `", #interface, "` interface.")]
             pub mod #module {
                 /// The fully qualified WIT interface name.
                 pub const INTERFACE: &str = #interface;
                 #(#types)*
+                #(#calls)*
             }
         })
     }

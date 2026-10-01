@@ -1,0 +1,10 @@
+package test:journal@1.0.0;
+
+interface notes {
+  record note { title: string, body: option<string> }
+  enum access-error { missing, denied }
+
+  read: func(name: string) -> result<note, access-error>;
+  search: async func(query: string, limit: u32) -> list<note>;
+  clear: func();
+}
