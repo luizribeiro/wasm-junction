@@ -5,27 +5,26 @@ use wasm_junction_core::{
     BoxFuture, CallError, CompiledComponent, Engine, EngineError, ImportDispatcher,
     InvocationContext, Vals, WasiConfig,
 };
-use wasmtime::component::ResourceTable;
 use wasmtime::component::{Component, InstancePre, Linker, Val as WasmtimeVal};
 use wasmtime::{Config, Engine as RuntimeEngine, Store};
-use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+use wasmtime_wasi::{WasiCtxBuilder, WasiCtxView, WasiView};
 
 use crate::imports::define_imports;
 use crate::values::{from_wasmtime, to_wasmtime};
+use crate::wasi::WasiState;
 
 pub(crate) struct StoreData {
     pub(crate) imports: Arc<dyn ImportDispatcher>,
     pub(crate) context: InvocationContext,
     pub(crate) component: Arc<str>,
-    wasi: WasiCtx,
-    table: ResourceTable,
+    wasi: WasiState,
 }
 
 impl WasiView for StoreData {
     fn ctx(&mut self) -> WasiCtxView<'_> {
         WasiCtxView {
-            ctx: &mut self.wasi,
-            table: &mut self.table,
+            ctx: &mut self.wasi.context,
+            table: &mut self.wasi.table,
         }
     }
 }
@@ -132,7 +131,6 @@ impl Compiled {
                 context,
                 component,
                 wasi: wasi_context(&self.wasi),
-                table: ResourceTable::new(),
             },
         );
         self.instantiations.fetch_add(1, Ordering::Relaxed);
@@ -162,12 +160,12 @@ impl Compiled {
     }
 }
 
-fn wasi_context(configuration: &WasiConfig) -> WasiCtx {
+fn wasi_context(configuration: &WasiConfig) -> WasiState {
     let mut builder = WasiCtxBuilder::new();
     for (name, value) in configuration.environment() {
         builder.env(name, value);
     }
-    builder.build()
+    WasiState::new(builder.build())
 }
 
 #[cfg(test)]

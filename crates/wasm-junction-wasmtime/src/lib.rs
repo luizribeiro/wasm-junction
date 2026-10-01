@@ -6,5 +6,6 @@
 mod engine;
 mod imports;
 mod values;
+mod wasi;
 
 pub use engine::WasmtimeEngine;
