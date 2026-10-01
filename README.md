@@ -10,6 +10,7 @@ components. It is early in development and its API is not yet stable.
 - [`examples/translate`](examples/translate) routes calls from one component to either of two
   component providers.
 - [`examples/audit`](examples/audit) combines host resources, byte streams, and per-call data.
+- [`examples/reload`](examples/reload) replaces a component while an earlier call is still running.
 
 Run all checks with:
 
