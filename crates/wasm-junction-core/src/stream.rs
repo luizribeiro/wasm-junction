@@ -1,10 +1,12 @@
 use std::collections::VecDeque;
 use std::error::Error;
-use std::fmt::{self, Display};
+use std::fmt::{self, Debug, Display};
 use std::future::poll_fn;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::Poll;
+
+use crate::{TypeError, Val};
 
 static NEXT_STREAM_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -44,6 +46,23 @@ impl StreamHandle {
         }
     }
 }
+
+impl Debug for StreamHandle {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("StreamHandle")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for StreamHandle {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for StreamHandle {}
 
 /// A byte stream consumed by a host provider.
 pub struct InputStream {
@@ -89,6 +108,17 @@ impl TryFrom<StreamHandle> for InputStream {
     }
 }
 
+impl TryFrom<Val> for InputStream {
+    type Error = TypeError;
+
+    fn try_from(value: Val) -> Result<Self, Self::Error> {
+        let Val::Stream(handle) = value else {
+            return Err(TypeError::new("expected stream<u8>"));
+        };
+        Self::try_from(handle).map_err(|error| TypeError::new(error.to_string()))
+    }
+}
+
 /// A byte stream produced by a host provider.
 pub struct OutputStream(StreamHandle);
 
@@ -103,6 +133,12 @@ impl OutputStream {
 impl From<OutputStream> for StreamHandle {
     fn from(stream: OutputStream) -> Self {
         stream.0
+    }
+}
+
+impl From<OutputStream> for Val {
+    fn from(stream: OutputStream) -> Self {
+        Self::Stream(stream.into())
     }
 }
 
@@ -144,12 +180,12 @@ mod tests {
 
     #[test]
     fn byte_stream_has_one_reader() {
-        let handle = StreamHandle::from(OutputStream::from_bytes(b"hello"));
-        let mut input = InputStream::try_from(handle.clone()).unwrap();
+        let value = Val::from(OutputStream::from_bytes(b"hello"));
+        let mut input = InputStream::try_from(value.clone()).unwrap();
         assert_eq!(ready(input.read()).unwrap(), Some(b"hello".to_vec()));
         assert_eq!(ready(input.read()).unwrap(), None);
 
-        let Err(error) = InputStream::try_from(handle) else {
+        let Err(error) = InputStream::try_from(value) else {
             panic!("cloned handle gained another reader");
         };
         assert_eq!(error.to_string(), "stream already has a reader");
