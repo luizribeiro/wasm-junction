@@ -1,7 +1,7 @@
 use heck::ToSnakeCase;
 use proc_macro2::TokenStream;
 use quote::quote;
-use wit_parser::{Function, InterfaceId};
+use wit_parser::{Function, Handle, InterfaceId, Type, TypeDefKind};
 
 use super::Generator;
 use super::collisions::{call_ident, host_method_ident, host_parameter_idents, parameter_ident};
@@ -122,10 +122,18 @@ impl Generator<'_> {
             .iter()
             .zip(&parameters)
             .map(|(field, parameter)| quote!(#field: #parameter));
+        let arguments = function
+            .params
+            .iter()
+            .zip(&parameters)
+            .map(|(param, name)| self.provider_argument(param.ty, name))
+            .collect::<syn::Result<Vec<_>>>()?;
+        let preparations = arguments.iter().map(|(preparation, _)| preparation);
+        let arguments = arguments.iter().map(|(_, argument)| argument);
         let invoke = quote!(<T as Host>::#method(
             &self.host,
             __wasm_junction_cx,
-            #(#parameters),*
+            #(#arguments),*
         ));
         let invoke = if function.kind.is_async() {
             quote!(#invoke.await)
@@ -138,10 +146,92 @@ impl Generator<'_> {
                     <#call as ::wasm_junction::TypedCall>::from_vals(
                         &__wasm_junction_call.args,
                     )?;
+                #(#preparations)*
                 Ok(<#call as ::wasm_junction::TypedCall>::output(#invoke))
             }
         })
     }
+
+    fn provider_argument(
+        &self,
+        ty: Type,
+        name: &proc_macro2::Ident,
+    ) -> syn::Result<(TokenStream, TokenStream)> {
+        let Type::Id(id) = ty else {
+            return Ok((quote!(), quote!(#name)));
+        };
+        match &self.resolve.types[id].kind {
+            TypeDefKind::Type(ty) => self.provider_argument(*ty, name),
+            TypeDefKind::Handle(_) => self.map_handle(id, name),
+            TypeDefKind::Option(ty) => {
+                let Some(resource) = self.direct_resource(*ty)? else {
+                    return Ok((quote!(), quote!(#name)));
+                };
+                let table = resource.table;
+                if resource.borrowed {
+                    let storage = super::rust_ident(&format!("__wasm_junction_{name}_borrow"))?;
+                    Ok((
+                        quote!(let #storage = #name.as_ref()
+                            .map(|value| self.#table.borrow(value)).transpose()?;),
+                        quote!(#storage.as_deref()),
+                    ))
+                } else {
+                    Ok((
+                        quote!(),
+                        quote!(#name.map(|value| self.#table.take(&value)).transpose()?),
+                    ))
+                }
+            }
+            _ => Ok((quote!(), quote!(#name))),
+        }
+    }
+
+    fn map_handle(
+        &self,
+        id: wit_parser::TypeId,
+        name: &proc_macro2::Ident,
+    ) -> syn::Result<(TokenStream, TokenStream)> {
+        let resource = self
+            .direct_resource(Type::Id(id))?
+            .ok_or_else(|| Self::unsupported(&name.to_string(), "resource handle"))?;
+        let table = resource.table;
+        if resource.borrowed {
+            let storage = super::rust_ident(&format!("__wasm_junction_{name}_borrow"))?;
+            Ok((
+                quote!(let #storage = self.#table.borrow(&#name)?;),
+                quote!(#storage.as_ref()),
+            ))
+        } else {
+            Ok((quote!(), quote!(self.#table.take(&#name)?)))
+        }
+    }
+
+    fn direct_resource(&self, ty: Type) -> syn::Result<Option<ResourceUse>> {
+        let Type::Id(id) = ty else { return Ok(None) };
+        match &self.resolve.types[id].kind {
+            TypeDefKind::Type(ty) => self.direct_resource(*ty),
+            TypeDefKind::Handle(handle) => {
+                let (id, borrowed) = match handle {
+                    Handle::Own(id) => (*id, false),
+                    Handle::Borrow(id) => (*id, true),
+                };
+                let name = self.resolve.types[id]
+                    .name
+                    .as_deref()
+                    .ok_or_else(|| Self::unsupported("resource", "anonymous resource"))?;
+                Ok(Some(ResourceUse {
+                    table: super::rust_ident(&name.to_snake_case())?,
+                    borrowed,
+                }))
+            }
+            _ => Ok(None),
+        }
+    }
+}
+
+struct ResourceUse {
+    table: proc_macro2::Ident,
+    borrowed: bool,
 }
 
 #[cfg(test)]
@@ -184,5 +274,8 @@ mod tests {
         );
         assert!(tokens.contains("fn drop_resource"), "{tokens}");
         assert!(tokens.contains("Host > :: drop_session"), "{tokens}");
+        assert!(tokens.contains("self . session . borrow"), "{tokens}");
+        assert!(tokens.contains("self . session . take"), "{tokens}");
+        assert!(tokens.contains("as_deref"), "{tokens}");
     }
 }

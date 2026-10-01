@@ -8,5 +8,6 @@ interface host {
   }
 
   allowed: func(value: option<borrow<session>>) -> result<session, string>;
+  consume: func(value: session);
   bad: func(values: list<borrow<session>>);
 }
