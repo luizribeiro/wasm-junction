@@ -9,6 +9,7 @@ members = [
   "crates/wasm-junction-wasmtime",
   "examples/greeter",
   "examples/clock",
+  "examples/translate",
 ]
 
 [workspace.package]
