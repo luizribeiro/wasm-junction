@@ -28,8 +28,8 @@ pub use provider::{Provided, Provider};
 pub use wasm_junction_core::{
     BoxFuture, CallError, CallErrorKind, CompiledComponent, Engine, EngineError, Extensions,
     HostBound, ImportDispatcher, ImportTarget, InputStream, InvocationContext, MaybeSend,
-    OutputStream, Resource, ResourceOwnership, ResourceTable, StreamError, StreamHandle, TypeError,
-    Val, Vals, WasiConfig,
+    OutputStream, OutputStreamWriter, Resource, ResourceOwnership, ResourceTable, StreamError,
+    StreamHandle, TypeError, Val, Vals, WasiConfig,
 };
 /// Generates bindings for every interface in a local WIT package.
 ///

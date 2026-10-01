@@ -18,5 +18,5 @@ pub use engine::{
 pub use error::{CallError, CallErrorKind};
 pub use future::{BoxFuture, HostBound, MaybeSend};
 pub use resource::{Resource, ResourceOwnership, ResourceTable};
-pub use stream::{InputStream, OutputStream, StreamError, StreamHandle};
+pub use stream::{InputStream, OutputStream, OutputStreamWriter, StreamError, StreamHandle};
 pub use values::{TypeError, Val, Vals};

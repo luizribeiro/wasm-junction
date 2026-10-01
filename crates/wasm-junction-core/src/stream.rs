@@ -4,7 +4,7 @@ use std::fmt::{self, Debug, Display};
 use std::future::poll_fn;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::task::Poll;
+use std::task::{Poll, Waker};
 
 use crate::{TypeError, Val};
 
@@ -12,7 +12,19 @@ static NEXT_STREAM_ID: AtomicU64 = AtomicU64::new(1);
 
 struct StreamState {
     chunks: VecDeque<Vec<u8>>,
+    end: StreamEnd,
     reader_taken: bool,
+    reader_waker: Option<Waker>,
+    writers: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StreamEnd {
+    Open,
+    Closed,
+    ReaderClosed,
+    Aborted,
+    Abandoned,
 }
 
 /// An opaque, cloneable reference to a byte stream.
@@ -23,12 +35,15 @@ pub struct StreamHandle {
 }
 
 impl StreamHandle {
-    fn new(chunks: VecDeque<Vec<u8>>) -> Self {
+    fn new(chunks: VecDeque<Vec<u8>>, end: StreamEnd, writers: usize) -> Self {
         Self {
             id: NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed),
             state: Arc::new(Mutex::new(StreamState {
                 chunks,
+                end,
                 reader_taken: false,
+                reader_waker: None,
+                writers,
             })),
         }
     }
@@ -67,6 +82,7 @@ impl Eq for StreamHandle {}
 /// A byte stream consumed by a host provider.
 pub struct InputStream {
     handle: StreamHandle,
+    finished: bool,
 }
 
 impl InputStream {
@@ -76,7 +92,25 @@ impl InputStream {
     ///
     /// Returns an error if the stream cannot be read.
     pub async fn read(&mut self) -> Result<Option<Vec<u8>>, StreamError> {
-        poll_fn(|_| Poll::Ready(Ok(self.handle.state().chunks.pop_front()))).await
+        let result = poll_fn(|context| {
+            let mut state = self.handle.state();
+            if let Some(chunk) = state.chunks.pop_front() {
+                return Poll::Ready(Ok(Some(chunk)));
+            }
+            match state.end {
+                StreamEnd::Open => {
+                    state.reader_waker = Some(context.waker().clone());
+                    Poll::Pending
+                }
+                StreamEnd::Closed | StreamEnd::ReaderClosed | StreamEnd::Abandoned => {
+                    Poll::Ready(Ok(None))
+                }
+                StreamEnd::Aborted => Poll::Ready(Err(StreamError::aborted())),
+            }
+        })
+        .await;
+        self.finished = !matches!(result, Ok(Some(_)));
+        result
     }
 
     /// Collects every remaining chunk into one byte vector.
@@ -91,6 +125,28 @@ impl InputStream {
         }
         Ok(bytes)
     }
+    /// Closes the reader while preserving the reason for subsequent writer failures.
+    #[doc(hidden)]
+    pub fn close_reader(mut self) {
+        let mut state = self.handle.state();
+        if state.end == StreamEnd::Open {
+            state.end = StreamEnd::ReaderClosed;
+            state.chunks.clear();
+        }
+        self.finished = true;
+    }
+}
+
+impl Drop for InputStream {
+    fn drop(&mut self) {
+        if !self.finished {
+            let mut state = self.handle.state();
+            if state.end == StreamEnd::Open {
+                state.end = StreamEnd::Abandoned;
+                state.chunks.clear();
+            }
+        }
+    }
 }
 
 impl TryFrom<StreamHandle> for InputStream {
@@ -104,7 +160,10 @@ impl TryFrom<StreamHandle> for InputStream {
             }
             state.reader_taken = true;
         }
-        Ok(Self { handle })
+        Ok(Self {
+            handle,
+            finished: false,
+        })
     }
 }
 
@@ -126,7 +185,95 @@ impl OutputStream {
     /// Creates a stream containing one byte chunk and a clean end marker.
     #[must_use]
     pub fn from_bytes(bytes: impl Into<Vec<u8>>) -> Self {
-        Self(StreamHandle::new(VecDeque::from([bytes.into()])))
+        Self(StreamHandle::new(
+            VecDeque::from([bytes.into()]),
+            StreamEnd::Closed,
+            0,
+        ))
+    }
+
+    /// Creates an open stream and the writer used to produce its chunks.
+    ///
+    /// The channel is unbounded. A slow or absent reader leaves every written chunk buffered in
+    /// memory until it is read or the reader is dropped.
+    #[must_use]
+    pub fn channel() -> (OutputStreamWriter, Self) {
+        let handle = StreamHandle::new(VecDeque::new(), StreamEnd::Open, 1);
+        (OutputStreamWriter(handle.clone()), Self(handle))
+    }
+}
+
+/// A cloneable producer for an [`OutputStream`].
+pub struct OutputStreamWriter(StreamHandle);
+
+impl Clone for OutputStreamWriter {
+    fn clone(&self) -> Self {
+        self.0.state().writers += 1;
+        Self(self.0.clone())
+    }
+}
+
+impl OutputStreamWriter {
+    /// Appends one chunk without blocking on the reader.
+    ///
+    /// The channel is unbounded, so a slow or absent reader leaves every written chunk buffered
+    /// in memory until it is read or the reader is dropped.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the reader abandoned the stream or the stream was aborted.
+    pub async fn write(&self, chunk: impl Into<Vec<u8>>) -> Result<(), StreamError> {
+        let (result, waker) = {
+            let mut state = self.0.state();
+            match state.end {
+                StreamEnd::Open => {
+                    state.chunks.push_back(chunk.into());
+                    (Ok(()), state.reader_waker.take())
+                }
+                StreamEnd::Closed => (Err(StreamError::closed()), None),
+                StreamEnd::ReaderClosed => (Err(StreamError::reader_closed()), None),
+                StreamEnd::Aborted => (Err(StreamError::aborted()), None),
+                StreamEnd::Abandoned => (Err(StreamError::abandoned()), None),
+            }
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+        std::future::ready(result).await
+    }
+
+    /// Marks the stream as cut off and wakes its reader.
+    pub fn abort(&self) {
+        let waker = {
+            let mut state = self.0.state();
+            if state.end == StreamEnd::Open {
+                state.end = StreamEnd::Aborted;
+                state.reader_waker.take()
+            } else {
+                None
+            }
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+}
+
+impl Drop for OutputStreamWriter {
+    fn drop(&mut self) {
+        let waker = {
+            let mut state = self.0.state();
+            state.writers -= 1;
+            if state.writers == 0 && state.end == StreamEnd::Open {
+                state.end = StreamEnd::Closed;
+                state.reader_waker.take()
+            } else {
+                None
+            }
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
     }
 }
 
@@ -147,8 +294,24 @@ impl From<OutputStream> for Val {
 pub struct StreamError(&'static str);
 
 impl StreamError {
+    const fn aborted() -> Self {
+        Self("stream was aborted when its invocation ended")
+    }
+
     const fn already_read() -> Self {
         Self("stream already has a reader")
+    }
+
+    const fn closed() -> Self {
+        Self("stream is closed")
+    }
+
+    const fn reader_closed() -> Self {
+        Self("stream reader is closed")
+    }
+
+    const fn abandoned() -> Self {
+        Self("stream reader abandoned the stream")
     }
 }
 
@@ -189,5 +352,39 @@ mod tests {
             panic!("cloned handle gained another reader");
         };
         assert_eq!(error.to_string(), "stream already has a reader");
+    }
+
+    #[test]
+    fn channel_delivers_chunks_and_reports_close_or_abort() {
+        let (writer, output) = OutputStream::channel();
+        let second = writer.clone();
+        let mut input = InputStream::try_from(StreamHandle::from(output)).unwrap();
+        ready(writer.write(b"hello ")).unwrap();
+        drop(writer);
+        ready(second.write(b"world")).unwrap();
+        assert_eq!(ready(input.read()).unwrap(), Some(b"hello ".to_vec()));
+        assert_eq!(ready(input.read()).unwrap(), Some(b"world".to_vec()));
+        drop(second);
+        assert_eq!(ready(input.read()).unwrap(), None);
+
+        let (writer, output) = OutputStream::channel();
+        let input = InputStream::try_from(StreamHandle::from(output)).unwrap();
+        drop(input);
+        assert_eq!(ready(writer.write(b"late")), Err(StreamError::abandoned()));
+
+        let (writer, output) = OutputStream::channel();
+        InputStream::try_from(StreamHandle::from(output))
+            .unwrap()
+            .close_reader();
+        assert_eq!(
+            ready(writer.write(b"late")),
+            Err(StreamError::reader_closed())
+        );
+
+        let (writer, output) = OutputStream::channel();
+        let mut input = InputStream::try_from(StreamHandle::from(output)).unwrap();
+        writer.abort();
+        assert_eq!(ready(input.read()), Err(StreamError::aborted()));
+        assert_eq!(ready(writer.write(b"late")), Err(StreamError::aborted()));
     }
 }
