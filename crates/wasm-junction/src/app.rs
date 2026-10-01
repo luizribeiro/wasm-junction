@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{self, Display};
 use std::panic::Location;
@@ -97,7 +97,7 @@ impl App {
     ///
     /// # Errors
     ///
-    /// Returns [`LoadError`] without loading any component when a component is unnamed,
+    /// Returns [`LoadError`] without loading any component when a name is invalid or duplicated,
     /// resolution would fail or become ambiguous, or an engine compilation fails.
     pub async fn load_all(
         &self,
@@ -146,6 +146,12 @@ impl App {
         pending: &[PendingComponent],
         loaded: &BTreeMap<String, LoadedComponent>,
     ) -> Result<(), LoadError> {
+        let mut names = HashSet::new();
+        for component in pending {
+            if loaded.contains_key(&component.name) || !names.insert(component.name.as_str()) {
+                return Err(LoadError::DuplicateName(component.name.clone()));
+            }
+        }
         let added_candidates = |interface: &str, excluded: Option<&str>| {
             pending
                 .iter()

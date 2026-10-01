@@ -334,6 +334,24 @@ fn load_all_refuses_batch_providers_that_ambiguate_a_batch_import() {
 }
 
 #[test]
+fn load_all_refuses_repeated_and_already_loaded_names() {
+    let app = App::builder().engine(FakeEngine).build().unwrap();
+    let first = wit_component(TRANSLATOR_WIT, "service", "translator");
+    let repeated = wit_component(TRANSLATOR_WIT, "service", "translator");
+    assert!(matches!(
+        block_on(app.load_all([first, repeated])),
+        Err(LoadError::DuplicateName(name)) if name == "translator"
+    ));
+
+    block_on(app.load(wit_component(TRANSLATOR_WIT, "service", "loaded"))).unwrap();
+    let duplicate = wit_component(TRANSLATOR_WIT, "service", "loaded");
+    assert!(matches!(
+        block_on(app.load_all([duplicate])),
+        Err(LoadError::DuplicateName(name)) if name == "loaded"
+    ));
+}
+
+#[test]
 fn load_all_inserts_nothing_when_a_later_compile_fails() {
     let app = App::builder()
         .engine(FailingEngine::after(1))
