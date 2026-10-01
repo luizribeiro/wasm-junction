@@ -22,12 +22,17 @@ pub(crate) fn generate(
     package_id: PackageId,
     span: Span,
 ) -> syn::Result<TokenStream> {
-    validate::package(resolve, package_id, span)?;
-    collisions::check(resolve, package_id, span)?;
-    let selected = reachability::find(resolve, package_id)?;
+    let roots = resolve.packages[package_id]
+        .interfaces
+        .values()
+        .copied()
+        .collect::<Vec<_>>();
+    validate::interfaces(resolve, &roots, span)?;
+    collisions::check(resolve, &roots, span)?;
+    let selected = reachability::find(resolve, &roots)?;
     let generator = Generator {
         resolve,
-        errors: errors::find(resolve, package_id)?,
+        errors: errors::find(resolve, &roots)?,
         selected,
     };
     let modules = resolve

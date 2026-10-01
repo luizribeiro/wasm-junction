@@ -1,10 +1,10 @@
 use proc_macro2::Span;
-use wit_parser::{PackageId, Resolve, Type, TypeDefKind};
+use wit_parser::{InterfaceId, Resolve, Type, TypeDefKind};
 
 use super::walk;
 
-pub(super) fn package(resolve: &Resolve, package: PackageId, span: Span) -> syn::Result<()> {
-    walk::package(resolve, package, |type_use| {
+pub(super) fn interfaces(resolve: &Resolve, roots: &[InterfaceId], span: Span) -> syn::Result<()> {
+    walk::interfaces(resolve, roots.iter().copied(), |type_use| {
         let shape = match type_use.ty {
             Type::ErrorContext => Some("error-context"),
             Type::Id(id) => match resolve.types[id].kind {
@@ -36,7 +36,12 @@ mod tests {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative);
         let mut resolve = Resolve::default();
         let (package, _) = resolve.push_path(path).unwrap();
-        super::package(&resolve, package, Span::call_site())
+        let roots = resolve.packages[package]
+            .interfaces
+            .values()
+            .copied()
+            .collect::<Vec<_>>();
+        super::interfaces(&resolve, &roots, Span::call_site())
             .unwrap_err()
             .to_string()
     }

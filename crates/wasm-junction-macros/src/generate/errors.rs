@@ -1,12 +1,12 @@
 use std::collections::HashSet;
 
-use wit_parser::{PackageId, Resolve, Type, TypeDefKind, TypeId};
+use wit_parser::{InterfaceId, Resolve, Type, TypeDefKind, TypeId};
 
 use super::walk::{self, Position};
 
-pub(super) fn find(resolve: &Resolve, package: PackageId) -> syn::Result<HashSet<TypeId>> {
+pub(super) fn find(resolve: &Resolve, roots: &[InterfaceId]) -> syn::Result<HashSet<TypeId>> {
     let mut errors = HashSet::new();
-    walk::package(resolve, package, |type_use| {
+    walk::interfaces(resolve, roots.iter().copied(), |type_use| {
         if type_use.position != Position::Error {
             return Ok(());
         }

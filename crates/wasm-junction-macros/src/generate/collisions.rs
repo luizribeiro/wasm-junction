@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::Span;
-use wit_parser::{InterfaceId, PackageId, Resolve, Type, TypeDefKind, TypeId, TypeOwner};
+use wit_parser::{InterfaceId, Resolve, Type, TypeDefKind, TypeId, TypeOwner};
 
 use super::{rust_ident, walk};
 
@@ -44,8 +44,8 @@ fn fixed_names(interface: &str) -> [String; 4] {
     ]
 }
 
-pub(super) fn check(resolve: &Resolve, package: PackageId, span: Span) -> syn::Result<()> {
-    let (interfaces, types) = reachable(resolve, package)?;
+pub(super) fn check(resolve: &Resolve, roots: &[InterfaceId], span: Span) -> syn::Result<()> {
+    let (interfaces, types) = reachable(resolve, roots)?;
     let mut names = HashMap::new();
     for id in &interfaces {
         let interface = &resolve.interfaces[*id];
@@ -137,15 +137,11 @@ fn check_members<'a>(
 
 fn reachable(
     resolve: &Resolve,
-    package: PackageId,
+    roots: &[InterfaceId],
 ) -> syn::Result<(HashSet<InterfaceId>, HashSet<TypeId>)> {
-    let mut interfaces = resolve.packages[package]
-        .interfaces
-        .values()
-        .copied()
-        .collect::<HashSet<_>>();
+    let mut interfaces = roots.iter().copied().collect::<HashSet<_>>();
     let mut types = HashSet::new();
-    walk::package(resolve, package, |type_use| {
+    walk::interfaces(resolve, roots.iter().copied(), |type_use| {
         let Type::Id(id) = type_use.ty else {
             return Ok(());
         };
@@ -185,7 +181,12 @@ mod tests {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative);
         let mut resolve = Resolve::default();
         let (package, _) = resolve.push_path(path).unwrap();
-        super::check(&resolve, package, Span::call_site())
+        let roots = resolve.packages[package]
+            .interfaces
+            .values()
+            .copied()
+            .collect::<Vec<_>>();
+        super::check(&resolve, &roots, Span::call_site())
             .unwrap_err()
             .to_string()
     }

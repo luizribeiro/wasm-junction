@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use wit_parser::{PackageId, Resolve, Type, TypeDefKind, TypeId};
+use wit_parser::{InterfaceId, Resolve, Type, TypeDefKind, TypeId};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Position {
@@ -15,14 +15,14 @@ pub(super) struct TypeUse<'a> {
     pub(super) position: Position,
 }
 
-pub(super) fn package(
+pub(super) fn interfaces(
     resolve: &Resolve,
-    package: PackageId,
+    interfaces: impl IntoIterator<Item = InterfaceId>,
     mut callback: impl FnMut(TypeUse<'_>) -> syn::Result<()>,
 ) -> syn::Result<()> {
     let mut seen = HashSet::new();
-    for interface_id in resolve.packages[package].interfaces.values() {
-        let interface = &resolve.interfaces[*interface_id];
+    for interface_id in interfaces {
+        let interface = &resolve.interfaces[interface_id];
         for (name, id) in &interface.types {
             visit(
                 resolve,

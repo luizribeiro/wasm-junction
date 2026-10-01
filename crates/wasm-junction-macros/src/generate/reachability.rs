@@ -1,18 +1,18 @@
 use std::collections::{HashMap, HashSet};
 
-use wit_parser::{InterfaceId, PackageId, Resolve, Type, TypeId, TypeOwner};
+use wit_parser::{InterfaceId, Resolve, Type, TypeId, TypeOwner};
 
 use super::walk;
 
 pub(super) fn find(
     resolve: &Resolve,
-    package: PackageId,
+    roots: &[InterfaceId],
 ) -> syn::Result<HashMap<InterfaceId, HashSet<TypeId>>> {
     let mut selected: HashMap<InterfaceId, HashSet<TypeId>> = HashMap::new();
-    for interface in resolve.packages[package].interfaces.values() {
+    for interface in roots {
         selected.entry(*interface).or_default();
     }
-    walk::package(resolve, package, |type_use| {
+    walk::interfaces(resolve, roots.iter().copied(), |type_use| {
         let Type::Id(id) = type_use.ty else {
             return Ok(());
         };
