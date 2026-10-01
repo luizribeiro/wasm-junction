@@ -26,10 +26,32 @@ impl Generator<'_> {
             .iter()
             .all(|field| self.has_eq(field.ty))
             .then(|| quote!(Eq, Hash,));
+        let field_names = record
+            .fields
+            .iter()
+            .map(|field| rust_ident(&field.name.to_snake_case()))
+            .collect::<syn::Result<Vec<_>>>()?;
+        let values = record
+            .fields
+            .iter()
+            .zip(&field_names)
+            .map(|(field, field_name)| {
+                let wit_name = &field.name;
+                let value = self.encode(field.ty, quote!(#field_name), name)?;
+                Ok(quote!((#wit_name.to_owned(), #value)))
+            })
+            .collect::<syn::Result<Vec<_>>>()?;
         Ok(quote! {
             #[doc = concat!("The WIT `", #name, "` record.")]
             #[derive(Debug, Clone, PartialEq, #eq_hash)]
             pub struct #ident { #(#fields,)* }
+
+            impl ::std::convert::From<#ident> for ::wasm_junction::Val {
+                fn from(value: #ident) -> Self {
+                    let #ident { #(#field_names,)* } = value;
+                    Self::Record(::std::vec![#(#values,)*])
+                }
+            }
         })
     }
 

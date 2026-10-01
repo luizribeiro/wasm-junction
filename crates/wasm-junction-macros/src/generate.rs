@@ -5,6 +5,7 @@ use wit_parser::{InterfaceId, PackageId, Resolve};
 
 mod definitions;
 mod types;
+mod values;
 
 pub(crate) fn generate(resolve: &Resolve, package_id: PackageId) -> syn::Result<TokenStream> {
     let package = &resolve.packages[package_id];
