@@ -5,6 +5,7 @@ use wasm_junction_guest_build::build;
 fn main() -> std::io::Result<()> {
     println!("cargo::rerun-if-changed=guest");
     println!("cargo::rerun-if-changed=resource-wit");
+    println!("cargo::rerun-if-changed=stream-wit");
     println!("cargo::rerun-if-changed=wit");
     build(
         "guest/Cargo.toml",
@@ -24,5 +25,6 @@ fn main() -> std::io::Result<()> {
             "resource_client_guest.wasm",
             "resource-client.wasm",
         )
-    })
+    })?;
+    build("guest/Cargo.toml", "streams_guest.wasm", "streams.wasm")
 }

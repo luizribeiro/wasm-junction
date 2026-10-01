@@ -37,6 +37,10 @@ pub const CYCLE_B: &str = cycle_b::INTERFACE;
 pub const RESOURCE_HOST: &str = "example:resources/host@1.0.0";
 /// The host-resource fixture's exported interface.
 pub const RESOURCE_CLIENT: &str = "example:resources/client@1.0.0";
+/// The byte-stream fixture's imported host interface.
+pub const STREAM_HOST: &str = "example:streams/host@0.1.0";
+/// The byte-stream fixture's exported interface.
+pub const STREAM_PROBE: &str = "example:streams/probe@0.1.0";
 
 pub(crate) struct SessionId(pub u32);
 pub(crate) struct TranslatorHop;
@@ -75,6 +79,12 @@ pub fn cycle_b_component() -> &'static [u8] {
 #[must_use]
 pub fn resource_component() -> &'static [u8] {
     include_bytes!(concat!(env!("OUT_DIR"), "/resource-client.wasm"))
+}
+
+/// Returns the component that exchanges byte streams with its host.
+#[must_use]
+pub fn stream_component() -> &'static [u8] {
+    include_bytes!(concat!(env!("OUT_DIR"), "/streams.wasm"))
 }
 
 #[cfg(test)]
@@ -116,5 +126,12 @@ mod tests {
         let component = Component::from_bytes(resource_component()).unwrap();
         assert_eq!(component.imports(), [RESOURCE_HOST]);
         assert_eq!(component.exports(), [RESOURCE_CLIENT]);
+    }
+
+    #[test]
+    fn stream_component_has_complementary_interfaces() {
+        let component = Component::from_bytes(stream_component()).unwrap();
+        assert_eq!(component.imports(), [STREAM_HOST]);
+        assert_eq!(component.exports(), [STREAM_PROBE]);
     }
 }

@@ -1,0 +1,23 @@
+package example:streams@0.1.0;
+
+interface host {
+  motd: func() -> stream<u8>;
+  audit: async func(lines: stream<u8>);
+  chunks: func() -> stream<u8>;
+  advance: func();
+}
+
+interface probe {
+  motd: async func() -> string;
+  audit: async func();
+  incremental: async func() -> string;
+  drop-early: async func();
+  accept: async func(bytes: stream<u8>) -> string;
+  return-host: func() -> stream<u8>;
+  return-guest: func() -> stream<u8>;
+}
+
+world streams {
+  import host;
+  export probe;
+}
