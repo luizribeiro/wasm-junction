@@ -13,7 +13,6 @@ mod values;
 #[cfg(all(test, target_family = "wasm"))]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_dedicated_worker);
 
-#[cfg_attr(any(not(test), target_family = "wasm"), allow(dead_code))]
 #[derive(Debug)]
 struct TranspiledComponent {
     source: String,
@@ -22,7 +21,6 @@ struct TranspiledComponent {
     signatures: types::Signatures,
 }
 
-#[cfg_attr(any(not(test), target_family = "wasm"), allow(dead_code))]
 fn transpile_component(bytes: &[u8]) -> Result<TranspiledComponent, String> {
     #[cfg(any(test, target_family = "wasm"))]
     let signatures = types::Signatures::from_component(bytes)
@@ -65,6 +63,10 @@ fn transpile_component(bytes: &[u8]) -> Result<TranspiledComponent, String> {
         })
         .ok_or_else(|| "jco did not generate a JavaScript module".to_owned())
 }
+
+mod native;
+
+pub use native::JcoEngine;
 
 #[cfg(all(test, not(target_family = "wasm")))]
 mod tests {
