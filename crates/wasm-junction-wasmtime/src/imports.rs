@@ -9,6 +9,7 @@ use wasmtime::component::{
 };
 
 use crate::engine::{StoreData, lift_resource, lower_resource};
+use crate::streams::lower_stream;
 use crate::values::{from_wasmtime, to_wasmtime};
 
 pub(crate) fn define_imports(
@@ -141,9 +142,15 @@ fn define_concurrent(
             });
             let values = call(imports, context, component, interface, function, args).await?;
             set_results(results, values, &result_types, &mut |value, expected| {
-                to_wasmtime(value, expected, &mut |resource, expected| {
-                    accessor.with(|store| lower_resource(&resource, expected, store))
-                })
+                if let Val::Stream(stream) = value {
+                    accessor
+                        .with(|store| lower_stream(stream, store))
+                        .map(WasmtimeVal::Stream)
+                } else {
+                    to_wasmtime(value, expected, &mut |resource, expected| {
+                        accessor.with(|store| lower_resource(&resource, expected, store))
+                    })
+                }
             })
         })
     })
@@ -175,9 +182,13 @@ fn define_plain(
             };
             let values = call(imports, context, component, interface, function, args).await?;
             set_results(results, values, &result_types, &mut |value, expected| {
-                to_wasmtime(value, expected, &mut |resource, expected| {
-                    lower_resource(&resource, expected, store.as_context_mut())
-                })
+                if let Val::Stream(stream) = value {
+                    lower_stream(stream, store.as_context_mut()).map(WasmtimeVal::Stream)
+                } else {
+                    to_wasmtime(value, expected, &mut |resource, expected| {
+                        lower_resource(&resource, expected, store.as_context_mut())
+                    })
+                }
             })
         })
     })

@@ -9,6 +9,7 @@
 
 mod engine;
 mod imports;
+mod streams;
 mod values;
 mod wasi;
 
