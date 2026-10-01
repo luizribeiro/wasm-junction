@@ -26,5 +26,5 @@ esac
 
 repo_dir=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 for current in $browsers; do
-  node "$repo_dir/scripts/browser-test.mjs" "$current" "$@"
+  node "$repo_dir/scripts/browser-test.ts" "$current" "$@"
 done

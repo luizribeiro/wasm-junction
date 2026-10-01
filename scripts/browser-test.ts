@@ -4,14 +4,26 @@ import { join } from "node:path";
 import { once } from "node:events";
 import { tmpdir } from "node:os";
 import process from "node:process";
+import type { Buffer } from "node:buffer";
+import type { Browser } from "playwright-core";
 
 const [browserName, ...cargoArgs] = process.argv.slice(2);
-const playwrightRoot = process.env.PLAYWRIGHT_NODE_PATH;
-if (!playwrightRoot) throw new Error("run this command inside `nix develop`");
+const configuredPlaywrightRoot = process.env.PLAYWRIGHT_NODE_PATH;
+if (!configuredPlaywrightRoot) throw new Error("run this command inside `nix develop`");
+if (
+  browserName !== "chromium" &&
+  browserName !== "firefox" &&
+  browserName !== "webkit"
+) {
+  throw new Error("browser and cargo test arguments are required");
+}
+if (cargoArgs.length === 0) throw new Error("browser and cargo test arguments are required");
+const playwrightRoot = configuredPlaywrightRoot;
+const selectedBrowserName = browserName;
 
 const commandEnv = { ...process.env };
 const diagnosticsDirectory = mkdtempSync(join(tmpdir(), "wasm-junction-browser-"));
-const diagnosticsPath = join(diagnosticsDirectory, `${browserName}.log`);
+const diagnosticsPath = join(diagnosticsDirectory, `${selectedBrowserName}.log`);
 process.env.DEBUG = "pw:browser";
 process.env.DEBUG_FILE = diagnosticsPath;
 if (process.platform === "linux") {
@@ -20,30 +32,32 @@ if (process.platform === "linux") {
   process.env.PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS = "1";
 }
 
-const playwright = await import(join(playwrightRoot, "index.mjs"));
-const browserType = playwright[browserName];
-if (!browserType || cargoArgs.length === 0) {
-  throw new Error("browser and cargo test arguments are required");
-}
+// The runtime path and declarations both come from the flake's playwright-driver package.
+const playwright: typeof import("playwright-core") = await import(join(playwrightRoot, "index.mjs"));
+const browserType = playwright[selectedBrowserName];
 
 // The dev shell points XDG_DATA_DIRS at the Nix store only, which hides the system's GSettings
 // schemas; WebKit's network process aborts without them.
 const browserEnv = { ...process.env };
 delete browserEnv.XDG_DATA_DIRS;
 
-function delay(milliseconds) {
+function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, milliseconds);
     timer.unref();
   });
 }
 
-async function installBrowser() {
+async function installBrowser(): Promise<void> {
   if (existsSync(browserType.executablePath())) return;
-  const installer = spawn(process.execPath, [join(playwrightRoot, "cli.js"), "install", browserName], {
-    env: commandEnv,
-    stdio: "inherit",
-  });
+  const installer = spawn(
+    process.execPath,
+    [join(playwrightRoot, "cli.js"), "install", selectedBrowserName],
+    {
+      env: commandEnv,
+      stdio: "inherit",
+    },
+  );
   const [code, signal] = await once(installer, "exit");
   if (code !== 0) throw new Error(`browser installation failed (${code ?? signal})`);
 }
@@ -66,14 +80,10 @@ const child = spawn(
 );
 
 let output = "";
-let settleServer;
-let rejectServer;
-const server = new Promise((resolve, reject) => {
-  settleServer = resolve;
-  rejectServer = reject;
-});
+const { promise: server, resolve: settleServer, reject: rejectServer } =
+  Promise.withResolvers<string>();
 
-function capture(chunk, destination) {
+function capture(chunk: Buffer, destination: NodeJS.WritableStream): void {
   destination.write(chunk);
   output = (output + chunk).slice(-8192);
   const match = output.match(/Interactive browsers tests are now available at (http:\/\/\S+)/);
@@ -87,34 +97,34 @@ child.once("exit", (code, signal) => {
   rejectServer(new Error(`test runner exited before serving (${code ?? signal})`));
 });
 
-let browser;
+let browser: Browser | undefined;
 let stopping = false;
 let resultArrived = false;
 let reportBrowserDiagnostics = false;
-async function stop() {
+async function stop(): Promise<void> {
   if (stopping) return;
   stopping = true;
   if (browser) await browser.close().catch(() => {});
   if (child.exitCode === null && child.signalCode === null) {
-    process.kill(-child.pid, "SIGTERM");
+    if (child.pid !== undefined) process.kill(-child.pid, "SIGTERM");
     await Promise.race([once(child, "exit"), delay(3000)]);
     if (child.exitCode === null && child.signalCode === null) {
-      process.kill(-child.pid, "SIGKILL");
+      if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
       await once(child, "exit");
     }
   }
 }
 
-async function printBrowserDiagnostics() {
+async function printBrowserDiagnostics(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 50));
   const diagnostics = existsSync(diagnosticsPath)
     ? readFileSync(diagnosticsPath, "utf8").trimEnd()
     : "";
-  console.error(`\n${browserName} browser diagnostics:`);
+  console.error(`\n${selectedBrowserName} browser diagnostics:`);
   console.error(diagnostics || "(no browser output captured)");
 }
 
-for (const [signal, status] of [["SIGINT", 130], ["SIGTERM", 143]]) {
+for (const [signal, status] of [["SIGINT", 130], ["SIGTERM", 143]] as const) {
   process.once(signal, async () => {
     await stop();
     process.exit(status);
@@ -126,23 +136,26 @@ try {
     server,
     delay(600_000).then(() => { throw new Error("timed out waiting for the test server"); }),
   ]);
-  browser = await browserType.launch({ headless: true, env: browserEnv });
-  console.log(`${browserName} ${browser.version()} (Playwright 1.63.0)`);
-  const page = await browser.newPage();
+  const launchedBrowser = await browserType.launch({ headless: true, env: browserEnv });
+  browser = launchedBrowser;
+  console.log(`${selectedBrowserName} ${launchedBrowser.version()} (Playwright 1.63.0)`);
+  const page = await launchedBrowser.newPage();
   page.on("console", (message) => console.log(message.text()));
   page.on("pageerror", (error) => console.error(`page error: ${error.message}`));
   await page.goto(url);
+  // Keep this a string because the runner's Node and WebWorker types don't declare document.
   await page.waitForFunction(
-    () => document.querySelector("#output")?.textContent.includes("test result: "),
+    'document.querySelector("#output")?.textContent.includes("test result: ")',
     undefined,
     { timeout: 180_000 },
   );
   const result = await page.locator("#output").textContent();
+  if (result === null) throw new Error(`${selectedBrowserName} returned no test output`);
   resultArrived = true;
   process.stdout.write(`${result}\n`);
   const summary = result.match(/test result: ok\.\s+(\d+) passed;/);
-  if (!summary) throw new Error(`${browserName} tests did not report a passing result`);
-  if (Number(summary[1]) === 0) throw new Error(`${browserName} ran zero tests`);
+  if (!summary) throw new Error(`${selectedBrowserName} tests did not report a passing result`);
+  if (Number(summary[1]) === 0) throw new Error(`${selectedBrowserName} ran zero tests`);
 } catch (error) {
   reportBrowserDiagnostics = !resultArrived;
   throw error;
