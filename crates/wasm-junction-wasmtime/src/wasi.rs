@@ -1,8 +1,7 @@
-use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use wasm_junction_core::{BoxFuture, CallError, ImportTarget, InvocationContext, Val, Vals};
-use wasmtime::component::{HasData, Linker, ResourceTable};
+use wasmtime::component::{Linker, ResourceTable};
 use wasmtime::{AsContextMut, StoreContextMut};
 use wasmtime_wasi::cli::WasiCliView;
 use wasmtime_wasi::p2::bindings::cli;
@@ -38,37 +37,6 @@ impl WasiView for WasiState {
             ctx: &mut self.context,
             table: &mut self.table,
         }
-    }
-}
-
-struct Gate<'a>(&'a mut StoreData);
-struct GateData(PhantomData<StoreData>);
-
-impl HasData for GateData {
-    type Data<'a> = Gate<'a>;
-}
-
-fn project(state: &mut StoreData) -> Gate<'_> {
-    Gate(state)
-}
-
-impl Gate<'_> {
-    fn dispatch(
-        &mut self,
-        interface: impl Into<Arc<str>>,
-        function: impl Into<Arc<str>>,
-        args: Vals,
-        target: Arc<dyn ImportTarget>,
-    ) -> wasmtime::Result<Vals> {
-        futures::executor::block_on(self.0.imports.call_engine(
-            self.0.context.clone(),
-            self.0.component.clone(),
-            interface.into(),
-            function.into(),
-            args,
-            target,
-        ))
-        .map_err(wasmtime::Error::new)
     }
 }
 

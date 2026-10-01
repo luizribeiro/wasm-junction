@@ -7,7 +7,7 @@ use wasmtime_wasi::clocks::WasiClocksView;
 use wasmtime_wasi::p2::DynPollable;
 use wasmtime_wasi::p2::bindings::clocks::{monotonic_clock, wall_clock};
 
-use super::{Gate, GateData, StoreData, WasiState, dispatch, lock, project};
+use super::{StoreData, WasiState, dispatch, lock};
 use crate::GATED_WASI_INTERFACES;
 
 const MONOTONIC_INTERFACE: &str = GATED_WASI_INTERFACES[1];
@@ -48,12 +48,12 @@ impl ImportTarget for WallTarget {
 }
 
 #[derive(Clone, Copy)]
-enum MonotonicRead {
+enum MonotonicOperation {
     Now,
     Resolution,
 }
 
-struct MonotonicTarget(Arc<Mutex<WasiState>>, MonotonicRead);
+struct MonotonicTarget(Arc<Mutex<WasiState>>, MonotonicOperation);
 
 impl ImportTarget for MonotonicTarget {
     fn call(
@@ -69,57 +69,14 @@ impl ImportTarget for MonotonicTarget {
             }
             let mut state = lock(&state);
             let value = match operation {
-                MonotonicRead::Now => monotonic_clock::Host::now(&mut state.clocks()),
-                MonotonicRead::Resolution => monotonic_clock::Host::resolution(&mut state.clocks()),
+                MonotonicOperation::Now => monotonic_clock::Host::now(&mut state.clocks()),
+                MonotonicOperation::Resolution => {
+                    monotonic_clock::Host::resolution(&mut state.clocks())
+                }
             }
             .map_err(|error| CallError::trap(error.to_string()))?;
             Ok(vec![Val::U64(value)])
         })
-    }
-}
-
-impl monotonic_clock::Host for Gate<'_> {
-    fn now(&mut self) -> wasmtime::Result<monotonic_clock::Instant> {
-        self.call_monotonic("now", MonotonicRead::Now)
-    }
-
-    fn resolution(&mut self) -> wasmtime::Result<monotonic_clock::Instant> {
-        self.call_monotonic("resolution", MonotonicRead::Resolution)
-    }
-
-    fn subscribe_instant(
-        &mut self,
-        when: monotonic_clock::Instant,
-    ) -> wasmtime::Result<Resource<DynPollable>> {
-        self.subscribe("subscribe-instant", Subscription::Instant, when)
-    }
-
-    fn subscribe_duration(
-        &mut self,
-        duration: monotonic_clock::Duration,
-    ) -> wasmtime::Result<Resource<DynPollable>> {
-        self.subscribe("subscribe-duration", Subscription::Duration, duration)
-    }
-}
-
-impl Gate<'_> {
-    fn call_monotonic(
-        &mut self,
-        function: &'static str,
-        operation: MonotonicRead,
-    ) -> wasmtime::Result<u64> {
-        let values = self.dispatch(
-            MONOTONIC_INTERFACE,
-            function,
-            Vec::new(),
-            Arc::new(MonotonicTarget(self.0.gated_wasi.clone(), operation)),
-        )?;
-        match values.as_slice() {
-            [Val::U64(value)] => Ok(*value),
-            _ => Err(wasmtime::Error::msg(
-                "monotonic clock returned the wrong shape",
-            )),
-        }
     }
 }
 
@@ -146,35 +103,6 @@ impl ImportTarget for SubscriptionTarget {
     }
 }
 
-impl Gate<'_> {
-    fn subscribe(
-        &mut self,
-        function: &'static str,
-        operation: Subscription,
-        value: u64,
-    ) -> wasmtime::Result<Resource<DynPollable>> {
-        let values = self.dispatch(
-            MONOTONIC_INTERFACE,
-            function,
-            vec![Val::U64(value)],
-            Arc::new(SubscriptionTarget),
-        )?;
-        let [Val::U64(value)] = values.as_slice() else {
-            return Err(wasmtime::Error::msg(
-                "clock subscription returned the wrong shape",
-            ));
-        };
-        match operation {
-            Subscription::Instant => {
-                monotonic_clock::Host::subscribe_instant(&mut self.0.clocks(), *value)
-            }
-            Subscription::Duration => {
-                monotonic_clock::Host::subscribe_duration(&mut self.0.clocks(), *value)
-            }
-        }
-    }
-}
-
 pub(super) fn add_wall_clock_gate(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let mut instance = linker.instance(WALL_INTERFACE)?;
     instance.func_wrap_async("now", |mut store, (): ()| {
@@ -185,7 +113,32 @@ pub(super) fn add_wall_clock_gate(linker: &mut Linker<StoreData>) -> wasmtime::R
             Ok((call_wall(&mut store, "resolution", WallOperation::Resolution).await?,))
         })
     })?;
-    monotonic_clock::add_to_linker::<StoreData, GateData>(linker, project)
+    add_monotonic_clock_gate(linker)
+}
+
+fn add_monotonic_clock_gate(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    let mut instance = linker.instance(MONOTONIC_INTERFACE)?;
+    instance.func_wrap_async("now", |mut store, (): ()| {
+        Box::new(
+            async move { Ok((call_monotonic(&mut store, "now", MonotonicOperation::Now).await?,)) },
+        )
+    })?;
+    instance.func_wrap_async("resolution", |mut store, (): ()| {
+        Box::new(async move {
+            Ok(
+                (
+                    call_monotonic(&mut store, "resolution", MonotonicOperation::Resolution)
+                        .await?,
+                ),
+            )
+        })
+    })?;
+    instance.func_wrap_async("subscribe-instant", |mut store, (value,): (u64,)| {
+        Box::new(async move { Ok((subscribe(&mut store, Subscription::Instant, value).await?,)) })
+    })?;
+    instance.func_wrap_async("subscribe-duration", |mut store, (value,): (u64,)| {
+        Box::new(async move { Ok((subscribe(&mut store, Subscription::Duration, value).await?,)) })
+    })
 }
 
 async fn call_wall(
@@ -218,5 +171,62 @@ fn decode_datetime(values: &[Val]) -> wasmtime::Result<wall_clock::Datetime> {
         _ => Err(wasmtime::Error::msg(
             "wall clock record has the wrong shape",
         )),
+    }
+}
+
+async fn call_monotonic(
+    store: &mut StoreContextMut<'_, StoreData>,
+    function: &'static str,
+    operation: MonotonicOperation,
+) -> wasmtime::Result<u64> {
+    let target = {
+        let mut context = store.as_context_mut();
+        let data = context.data_mut();
+        Arc::new(MonotonicTarget(data.gated_wasi.clone(), operation))
+    };
+    let values = dispatch(store, MONOTONIC_INTERFACE, function, Vec::new(), target).await?;
+    match values.as_slice() {
+        [Val::U64(value)] => Ok(*value),
+        _ => Err(wasmtime::Error::msg(
+            "monotonic clock returned the wrong shape",
+        )),
+    }
+}
+
+async fn subscribe(
+    store: &mut StoreContextMut<'_, StoreData>,
+    operation: Subscription,
+    value: u64,
+) -> wasmtime::Result<Resource<DynPollable>> {
+    let function = match operation {
+        Subscription::Instant => "subscribe-instant",
+        Subscription::Duration => "subscribe-duration",
+    };
+    let values = dispatch(
+        store,
+        MONOTONIC_INTERFACE,
+        function,
+        vec![Val::U64(value)],
+        Arc::new(SubscriptionTarget),
+    )
+    .await?;
+    let [Val::U64(value)] = values.as_slice() else {
+        return Err(wasmtime::Error::msg(
+            "clock subscription returned the wrong shape",
+        ));
+    };
+
+    // Clock reads can be faked completely because their values fit in `Val`. A pollable
+    // resource does not, so subscriptions gate only their scalar input before resolving
+    // against the real clock and primary resource table.
+    let mut context = store.as_context_mut();
+    let data = context.data_mut();
+    match operation {
+        Subscription::Instant => {
+            monotonic_clock::Host::subscribe_instant(&mut data.clocks(), *value)
+        }
+        Subscription::Duration => {
+            monotonic_clock::Host::subscribe_duration(&mut data.clocks(), *value)
+        }
     }
 }
