@@ -1,0 +1,30 @@
+#!/bin/sh
+set -eu
+
+usage() {
+  echo "usage: scripts/browser-test [chromium|firefox|webkit|all] -- <cargo test arguments>" >&2
+  exit 2
+}
+
+[ "$#" -ge 3 ] || usage
+browser=$1
+shift
+[ "$1" = "--" ] || usage
+shift
+
+case "$browser" in
+  chromium|firefox|webkit)
+    browsers=$browser
+    ;;
+  all)
+    browsers="chromium firefox webkit"
+    ;;
+  *)
+    usage
+    ;;
+esac
+
+repo_dir=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+for current in $browsers; do
+  node "$repo_dir/scripts/browser-test.mjs" "$current" "$@"
+done
