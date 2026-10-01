@@ -222,7 +222,7 @@ impl Generator<'_> {
             .collect::<syn::Result<Vec<_>>>()?;
         let host = self.host_trait(name, id, self.resolve.interfaces[id].functions.values())?;
         let handle = self.handle(name, self.resolve.interfaces[id].functions.values())?;
-        let provider = self.provider(name, self.resolve.interfaces[id].functions.values())?;
+        let provider = self.provider(name, id, self.resolve.interfaces[id].functions.values())?;
         Ok(quote! {
             #[doc = concat!("Bindings for the `", #interface, "` interface.")]
             pub mod #module {
