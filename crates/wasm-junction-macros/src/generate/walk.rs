@@ -59,6 +59,22 @@ pub(super) fn interfaces(
     Ok(())
 }
 
+pub(super) fn type_(
+    resolve: &Resolve,
+    ty: Type,
+    item: &str,
+    mut callback: impl FnMut(TypeUse<'_>) -> syn::Result<()>,
+) -> syn::Result<()> {
+    visit(
+        resolve,
+        ty,
+        item,
+        Position::Other,
+        &mut HashSet::new(),
+        &mut callback,
+    )
+}
+
 fn visit(
     resolve: &Resolve,
     ty: Type,

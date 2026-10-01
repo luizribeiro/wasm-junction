@@ -22,6 +22,10 @@ impl Generator<'_> {
                         quote!(<#ty as ::std::convert::TryFrom<::wasm_junction::Val>>::try_from(#value)),
                     )
                 }
+                TypeDefKind::Resource | TypeDefKind::Handle(_) => Ok(quote!(match #value {
+                    ::wasm_junction::Val::Resource(value) => Ok(value),
+                    _ => Err(::wasm_junction::TypeError::new("expected resource")),
+                })),
                 kind => self.decode_kind(kind, value, item),
             },
             Type::ErrorContext => Err(Self::unsupported(item, "error-context")),
@@ -42,6 +46,9 @@ impl Generator<'_> {
                 | TypeDefKind::Enum(_)
                 | TypeDefKind::Flags(_) => {
                     Ok(quote!(::std::convert::Into::<::wasm_junction::Val>::into(#value)))
+                }
+                TypeDefKind::Resource | TypeDefKind::Handle(_) => {
+                    Ok(quote!(::wasm_junction::Val::Resource(#value)))
                 }
                 kind => self.encode_kind(kind, value, item),
             },

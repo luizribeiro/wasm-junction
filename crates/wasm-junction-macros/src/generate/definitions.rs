@@ -306,7 +306,10 @@ impl Generator<'_> {
                     result.ok.is_none_or(|ty| self.has_eq(ty))
                         && result.err.is_none_or(|ty| self.has_eq(ty))
                 }
-                TypeDefKind::Enum(_) | TypeDefKind::Flags(_) => true,
+                TypeDefKind::Enum(_)
+                | TypeDefKind::Flags(_)
+                | TypeDefKind::Resource
+                | TypeDefKind::Handle(_) => true,
                 _ => false,
             },
             _ => true,

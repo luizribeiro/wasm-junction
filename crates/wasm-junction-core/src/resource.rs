@@ -97,13 +97,30 @@ impl<T: HostBound> ResourceTable<T> {
     /// Creates an empty table for one resource from its defining interface.
     #[must_use]
     pub fn new(interface: impl Into<Arc<str>>, name: impl Into<Arc<str>>) -> Self {
+        Self::with_next_id(interface, name, Some(0))
+    }
+
+    #[doc(hidden)]
+    pub fn __new_with_next_id(
+        interface: impl Into<Arc<str>>,
+        name: impl Into<Arc<str>>,
+        next: u32,
+    ) -> Self {
+        Self::with_next_id(interface, name, Some(next))
+    }
+
+    fn with_next_id(
+        interface: impl Into<Arc<str>>,
+        name: impl Into<Arc<str>>,
+        next: Option<u32>,
+    ) -> Self {
         Self {
             interface: interface.into(),
             name: name.into(),
             #[cfg(target_arch = "wasm32")]
-            state: RefCell::new(TableState::new()),
+            state: RefCell::new(TableState::with_next_id(next)),
             #[cfg(not(target_arch = "wasm32"))]
-            state: Mutex::new(TableState::new()),
+            state: Mutex::new(TableState::with_next_id(next)),
         }
     }
 
@@ -213,9 +230,9 @@ impl<T: HostBound> ResourceTable<T> {
 }
 
 impl<T> TableState<T> {
-    fn new() -> Self {
+    fn with_next_id(next: Option<u32>) -> Self {
         Self {
-            next: Some(0),
+            next,
             values: HashMap::new(),
         }
     }
@@ -245,8 +262,7 @@ mod tests {
 
     #[test]
     fn table_ids_do_not_wrap() {
-        let mut state = TableState::new();
-        state.next = Some(u32::MAX);
+        let mut state = TableState::with_next_id(Some(u32::MAX));
         assert_eq!(state.insert("last"), Some(u32::MAX));
         assert_eq!(state.insert("overflow"), None);
     }

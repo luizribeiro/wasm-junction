@@ -40,7 +40,7 @@ pub use wasm_junction_core::{
 /// Typed handles use the interface's `UpperCamelCase` name. When that name is reserved by the
 /// generated surface, `Handle` is appended: `host` generates `host::HostHandle`, for example.
 ///
-/// Resources, futures, and streams are rejected until their runtime support is available.
+/// Futures and streams are rejected until their runtime support is available.
 ///
 /// ```compile_fail
 /// wasm_junction::bindgen!({ path: "tests/fixtures/unsupported/wit" });

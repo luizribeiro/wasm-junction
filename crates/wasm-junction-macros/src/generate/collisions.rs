@@ -98,7 +98,7 @@ pub(super) fn check(
             names.insert(fixed.clone(), format!("generated `{fixed}`"));
         }
         for (name, id) in &interface.types {
-            if !types.contains(id) {
+            if !types.contains(id) || matches!(resolve.types[*id].kind, TypeDefKind::Resource) {
                 continue;
             }
             let rust = rust_ident(&name.to_upper_camel_case())?.to_string();

@@ -171,6 +171,12 @@ impl Generator<'_> {
             .types
             .iter()
             .filter(|(_, type_id)| self.selected[&id].contains(*type_id))
+            .filter(|(_, type_id)| {
+                !matches!(
+                    self.resolve.types[**type_id].kind,
+                    wit_parser::TypeDefKind::Resource
+                )
+            })
             .map(|(export, type_id)| {
                 let definition = &self.resolve.types[*type_id];
                 if definition.owner == wit_parser::TypeOwner::Interface(id) {

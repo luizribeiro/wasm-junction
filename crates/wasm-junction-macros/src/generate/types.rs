@@ -56,6 +56,7 @@ impl Generator<'_> {
                     .collect::<syn::Result<Vec<_>>>()?;
                 Ok(quote!((#(#types,)*)))
             }
+            TypeDefKind::Resource | TypeDefKind::Handle(_) => Ok(quote!(::wasm_junction::Resource)),
             other => Err(Self::unsupported(item, other.as_str())),
         }
     }

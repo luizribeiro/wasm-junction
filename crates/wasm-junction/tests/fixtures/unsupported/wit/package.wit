@@ -2,4 +2,5 @@ package test:unsupported;
 
 interface sessions {
   resource session;
+  delayed: func() -> future<u32>;
 }
