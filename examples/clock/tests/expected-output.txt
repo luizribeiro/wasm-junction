@@ -1,0 +1,4 @@
+call host → clock example:clock/clock@0.1.0.run()
+call clock → host wasi:cli/environment@0.2.12.get-environment()
+call clock → host wasi:clocks/wall-clock@0.2.12.now()
+Hello from WASI at 1700000000.123456789
