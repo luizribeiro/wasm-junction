@@ -7,7 +7,7 @@ use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
 
 use wasm_junction::{
-    App, Call, CallError, CallErrorKind, Component, Engine, Middleware, Next, Val, Vals,
+    App, Call, CallError, CallErrorKind, Component, Engine, Middleware, Next, Val, Vals, WasiConfig,
 };
 use wasm_junction_conformance::{Fixture, FixtureHost, SUMMARIZER, component, run, sample_note};
 use wasm_junction_wasmtime::WasmtimeEngine;
@@ -74,7 +74,8 @@ fn typed_refusal_and_guest_trap_remain_distinct() {
 #[test]
 fn malformed_component_has_a_typed_compilation_error() {
     let engine = WasmtimeEngine::new().unwrap();
-    let result = block_on(engine.compile(Arc::from(&b"not a component"[..])));
+    let result =
+        block_on(engine.compile(Arc::from(&b"not a component"[..]), WasiConfig::default()));
     let Err(error) = result else {
         panic!("malformed bytes compiled");
     };

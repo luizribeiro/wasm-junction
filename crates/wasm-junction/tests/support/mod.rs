@@ -11,7 +11,7 @@ use std::task::{Context, Poll, Waker};
 
 use wasm_junction::{
     BoxFuture, Call, CallContext, CallError, Caller, CompiledComponent, Engine, EngineError,
-    ImportDispatcher, InvocationContext, Provider, TypeError, TypedCall, Val, Vals,
+    ImportDispatcher, InvocationContext, Provider, TypeError, TypedCall, Val, Vals, WasiConfig,
 };
 use wit_component::{ComponentEncoder, StringEncoding, dummy_module, embed_component_metadata};
 use wit_parser::{ManglingAndAbi, Resolve};
@@ -60,6 +60,7 @@ impl Engine for FakeEngine {
     fn compile(
         &self,
         _bytes: Arc<[u8]>,
+        _wasi: WasiConfig,
     ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
         Box::pin(async { Ok(Arc::new(UnusedComponent) as Arc<dyn CompiledComponent>) })
     }

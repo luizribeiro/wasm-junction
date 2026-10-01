@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use wasm_junction_core::{
     BoxFuture, CallError, CompiledComponent, Engine, EngineError, ImportDispatcher,
-    InvocationContext, Vals,
+    InvocationContext, Vals, WasiConfig,
 };
 use wasmtime::component::{Component, InstancePre, Linker, Val as WasmtimeVal};
 use wasmtime::{Config, Engine as RuntimeEngine, Store};
@@ -52,6 +52,7 @@ impl Engine for WasmtimeEngine {
     fn compile(
         &self,
         bytes: Arc<[u8]>,
+        _wasi: WasiConfig,
     ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
         Box::pin(async move {
             let component = Component::new(&self.engine, bytes)
@@ -161,7 +162,7 @@ mod tests {
     #[test]
     fn compiles_component_once_without_instantiating_it() {
         let engine = WasmtimeEngine::new().unwrap();
-        ready(engine.compile(Arc::from(component()))).unwrap();
+        ready(engine.compile(Arc::from(component()), WasiConfig::default())).unwrap();
         assert_eq!(engine.instantiations(), 0);
     }
 }

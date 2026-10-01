@@ -10,7 +10,7 @@ use support::{
 use wasm_junction::{
     App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Caller, CompiledComponent,
     Component, Engine, EngineError, GetError, InterfaceHandle, LoadError, Middleware, Next,
-    Provided, Provider, TypedCall, Vals,
+    Provided, Provider, TypedCall, Vals, WasiConfig,
 };
 
 const CLOCK: &str = "example:journal/clock@0.1.0";
@@ -96,6 +96,7 @@ impl Engine for FailingEngine {
     fn compile(
         &self,
         _bytes: Arc<[u8]>,
+        _wasi: WasiConfig,
     ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
         Box::pin(async { Err(EngineError::new("invalid adapter")) })
     }

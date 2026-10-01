@@ -8,6 +8,7 @@ use crate::middleware::{CallTarget, ErasedMiddleware};
 use crate::{
     BoxFuture, Call, CallContext, CallError, Caller, CompiledComponent, Component, Engine,
     EngineError, Event, ImportDispatcher, InvocationContext, Middleware, Provided, Provider, Vals,
+    WasiConfig,
 };
 
 /// An application assembled from host providers, middleware, and WebAssembly components.
@@ -19,6 +20,7 @@ pub(crate) struct AppInner {
     providers: HashMap<&'static str, Arc<dyn Provider>>,
     #[allow(dead_code, reason = "export dispatch runs the middleware chain")]
     middleware: Arc<[Arc<dyn ErasedMiddleware>]>,
+    wasi: WasiConfig,
     components: Mutex<BTreeMap<String, LoadedComponent>>,
 }
 
@@ -73,7 +75,7 @@ impl App {
         let compiled = self
             .0
             .engine
-            .compile(bytes)
+            .compile(bytes, self.0.wasi.clone())
             .await
             .map_err(LoadError::Compile)?;
         let mut components = self.lock_components();
@@ -417,6 +419,7 @@ pub struct AppBuilder {
     engine: Option<Arc<dyn Engine>>,
     providers: Vec<ProviderRegistration>,
     middleware: Vec<Arc<dyn ErasedMiddleware>>,
+    wasi: WasiConfig,
 }
 
 impl AppBuilder {
@@ -442,6 +445,13 @@ impl AppBuilder {
     #[must_use]
     pub fn middleware(mut self, middleware: impl Middleware + 'static) -> Self {
         self.middleware.push(Arc::new(middleware));
+        self
+    }
+
+    /// Sets the WASI capabilities available to component invocations.
+    #[must_use]
+    pub fn wasi(mut self, wasi: WasiConfig) -> Self {
+        self.wasi = wasi;
         self
     }
 
@@ -482,6 +492,7 @@ impl AppBuilder {
             engine,
             providers,
             middleware: self.middleware.into(),
+            wasi: self.wasi,
             components: Mutex::new(BTreeMap::new()),
         })))
     }
@@ -588,6 +599,7 @@ mod tests {
         fn compile(
             &self,
             _bytes: Arc<[u8]>,
+            _wasi: WasiConfig,
         ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
             Box::pin(async { Err(EngineError::new("unused engine")) })
         }
