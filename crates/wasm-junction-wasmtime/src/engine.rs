@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -22,6 +23,7 @@ pub(crate) struct StoreData {
     wasi: WasiState,
     pub(crate) gated_wasi: Arc<std::sync::Mutex<WasiState>>,
     pub(crate) resources: Arc<[ResourceDefinition]>,
+    pub(crate) owned_resources: HashSet<Resource>,
 }
 
 impl WasiView for StoreData {
@@ -145,43 +147,55 @@ impl Compiled {
                 wasi: wasi_context(&self.wasi),
                 gated_wasi: Arc::new(std::sync::Mutex::new(wasi_context(&self.wasi))),
                 resources: self.resources.clone(),
+                owned_resources: HashSet::new(),
             },
         );
-        self.instantiations.fetch_add(1, Ordering::Relaxed);
-        let instance = self.pre.instantiate_async(&mut store).await?;
-        let interface = instance
-            .get_export_index(&mut store, None, interface)
-            .ok_or_else(|| wasmtime::Error::msg("missing exported interface"))?;
-        let function = instance
-            .get_export_index(&mut store, Some(&interface), function)
-            .ok_or_else(|| wasmtime::Error::msg("missing exported function"))?;
-        let function = instance
-            .get_func(&mut store, function)
-            .ok_or_else(|| wasmtime::Error::msg("export is not a function"))?;
-        let params = args
-            .into_iter()
-            .map(|value| {
-                to_wasmtime(value, &mut |resource| {
-                    lower_resource(&resource, store.as_context_mut())
+        let result = async {
+            self.instantiations.fetch_add(1, Ordering::Relaxed);
+            let instance = self.pre.instantiate_async(&mut store).await?;
+            let interface = instance
+                .get_export_index(&mut store, None, interface)
+                .ok_or_else(|| wasmtime::Error::msg("missing exported interface"))?;
+            let function = instance
+                .get_export_index(&mut store, Some(&interface), function)
+                .ok_or_else(|| wasmtime::Error::msg("missing exported function"))?;
+            let function = instance
+                .get_func(&mut store, function)
+                .ok_or_else(|| wasmtime::Error::msg("export is not a function"))?;
+            let params = args
+                .into_iter()
+                .map(|value| {
+                    to_wasmtime(value, &mut |resource| {
+                        lower_resource(&resource, store.as_context_mut())
+                    })
                 })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut results = vec![WasmtimeVal::Bool(false); function.ty(&store).results().len()];
-        store
-            .run_concurrent(async |accessor| {
-                function
-                    .call_concurrent(accessor, &params, &mut results)
-                    .await
-            })
-            .await??;
-        results
-            .into_iter()
-            .map(|value| {
-                from_wasmtime(value, &mut |resource| {
-                    lift_resource(resource, store.as_context_mut())
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut results = vec![WasmtimeVal::Bool(false); function.ty(&store).results().len()];
+            store
+                .run_concurrent(async |accessor| {
+                    function
+                        .call_concurrent(accessor, &params, &mut results)
+                        .await
                 })
-            })
-            .collect()
+                .await??;
+            results
+                .into_iter()
+                .map(|value| {
+                    from_wasmtime(value, &mut |resource| {
+                        lift_resource(resource, store.as_context_mut())
+                    })
+                })
+                .collect()
+        }
+        .await;
+        let cleanup = cleanup_resources(&mut store).await;
+        match result {
+            Ok(values) => cleanup.map(|()| values),
+            Err(error) => match cleanup {
+                Ok(()) => Err(error),
+                Err(cleanup) => Err(wasmtime::Error::msg(format!("{error:#}; {cleanup:#}"))),
+            },
+        }
     }
 }
 
@@ -203,11 +217,19 @@ pub(crate) fn lift_resource(
     } else {
         Resource::borrowed
     };
-    Ok(make(
+    let resource = make(
         definition.interface.clone(),
         definition.name.clone(),
         resource.rep(),
-    ))
+    );
+    if owned {
+        store
+            .as_context_mut()
+            .data_mut()
+            .owned_resources
+            .remove(&resource);
+    }
+    Ok(resource)
 }
 
 pub(crate) fn lower_resource(
@@ -236,7 +258,46 @@ pub(crate) fn lower_resource(
             ResourceDynamic::new_borrow(resource.id(), definition.runtime_type)
         }
     };
-    dynamic.try_into_resource_any(store.as_context_mut())
+    let dynamic = dynamic.try_into_resource_any(store.as_context_mut())?;
+    if resource.ownership() == ResourceOwnership::Own {
+        store
+            .as_context_mut()
+            .data_mut()
+            .owned_resources
+            .insert(resource.clone());
+    }
+    Ok(dynamic)
+}
+
+async fn cleanup_resources(store: &mut Store<StoreData>) -> Result<(), wasmtime::Error> {
+    let (imports, caller, mut resources) = {
+        let data = store.data_mut();
+        (
+            data.imports.clone(),
+            data.component.clone(),
+            data.owned_resources.drain().collect::<Vec<_>>(),
+        )
+    };
+    resources.sort_by(|left, right| {
+        (left.interface(), left.name(), left.id()).cmp(&(
+            right.interface(),
+            right.name(),
+            right.id(),
+        ))
+    });
+    let mut failures = Vec::new();
+    for resource in resources {
+        if let Err(error) = imports.drop_resource(caller.clone(), resource).await {
+            failures.push(error.to_string());
+        }
+    }
+    if !failures.is_empty() {
+        return Err(wasmtime::Error::msg(format!(
+            "resource cleanup failed: {}",
+            failures.join("; ")
+        )));
+    }
+    Ok(())
 }
 
 fn wasi_context(configuration: &WasiConfig) -> WasiState {

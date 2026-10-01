@@ -74,6 +74,12 @@ pub(crate) fn define_imports(
                     Box::pin(async move {
                         let (imports, caller) = accessor.with(|mut store| {
                             let data = store.get();
+                            let resource = Resource::owned(
+                                definition.interface.clone(),
+                                definition.name.clone(),
+                                id,
+                            );
+                            data.owned_resources.remove(&resource);
                             (data.imports.clone(), data.component.clone())
                         });
                         imports

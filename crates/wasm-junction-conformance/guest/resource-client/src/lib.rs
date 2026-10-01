@@ -16,6 +16,9 @@ impl bindings::exports::example::resources::client::Guest for Component {
     fn run(trap: bool) -> String {
         let session = Session::new("Ada");
         let profile = session.profile();
+        if trap {
+            core::mem::forget(Session::new("cleanup"));
+        }
         assert!(!trap, "resource fixture trap");
         profile
     }

@@ -95,6 +95,16 @@ fn host_resource_calls_cross_middleware_and_the_engine() {
     );
     assert!(trace.iter().any(|entry| entry.contains("resource drop")));
     assert!(!trace.iter().any(|entry| entry.contains("[drop]session")));
+
+    let error = block_on(app.call(
+        "resource-client",
+        RESOURCE_CLIENT,
+        "run",
+        vec![Val::Bool(true)],
+    ))
+    .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Trap);
+    assert_eq!(host.active_resources(), 0);
 }
 
 #[test]
