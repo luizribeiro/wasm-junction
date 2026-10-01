@@ -1,0 +1,12 @@
+package test:records;
+
+interface notes {
+  record coordinates { x: s32, y: s32 }
+  record note {
+    title: string,
+    lines: list<string>,
+    marker: option<char>,
+    score: f32,
+    position: coordinates,
+  }
+}

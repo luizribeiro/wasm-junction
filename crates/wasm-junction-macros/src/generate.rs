@@ -3,6 +3,7 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use wit_parser::{InterfaceId, PackageId, Resolve};
 
+mod definitions;
 mod types;
 
 pub(crate) fn generate(resolve: &Resolve, package_id: PackageId) -> syn::Result<TokenStream> {
@@ -52,6 +53,9 @@ impl Generator<'_> {
     }
 
     fn type_definition(&self, name: &str, id: wit_parser::TypeId) -> syn::Result<TokenStream> {
+        if let wit_parser::TypeDefKind::Record(record) = &self.resolve.types[id].kind {
+            return self.record(name, record);
+        }
         let ident = rust_ident(&name.to_upper_camel_case())?;
         let ty = self.type_kind(&self.resolve.types[id].kind, name)?;
         Ok(quote! {
