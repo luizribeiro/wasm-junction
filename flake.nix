@@ -37,6 +37,29 @@
             "wasm32-wasip2"
           ];
         };
+        nodeTypes = pkgs.fetchzip {
+          url = "https://registry.npmjs.org/@types/node/-/node-24.19.1.tgz";
+          hash = "sha256-E93EuH2zDUf92WfYtJ4Zjr+FaWbvtmngSBNUsskK0Gc=";
+        };
+        typescriptDependencies = pkgs.linkFarm "typescript-dependencies" [
+          {
+            name = "@types/node";
+            path = nodeTypes;
+          }
+          {
+            name = "playwright-core";
+            path = pkgs.playwright-driver;
+          }
+        ];
+        typescriptCheck = pkgs.writeShellApplication {
+          name = "typescript-check";
+          runtimeInputs = [ pkgs.typescript ];
+          text = ''
+            rm -f .typescript
+            ln -s ${typescriptDependencies} .typescript
+            tsc --noEmit
+          '';
+        };
         cargoHook =
           {
             name,
@@ -116,9 +139,17 @@
             stages = [ "pre-push" ];
           };
         };
+        toolingHooks = {
+          typescript = {
+            enable = true;
+            entry = "${typescriptCheck}/bin/typescript-check";
+            files = "(^|/)(scripts|crates)/.*\\.[cm]?[jt]sx?$|^(flake\\.nix|tsconfig\\.json)$";
+            pass_filenames = false;
+          };
+        };
         gitHooks = git-hooks.lib.${system}.run {
           src = ./.;
-          hooks = offlineHooks // cargoHooks;
+          hooks = offlineHooks // toolingHooks // cargoHooks;
         };
       in
       {
@@ -138,6 +169,7 @@
             pkgs.nodejs_24
             pkgs.playwright-driver
             pkgs.wasm-bindgen-cli
+            typescriptCheck
           ]
           ++ gitHooks.enabledPackages;
           PLAYWRIGHT_NODE_PATH = "${pkgs.playwright-driver}";

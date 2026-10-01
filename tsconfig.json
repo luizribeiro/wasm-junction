@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "erasableSyntaxOnly": true,
+    "lib": ["ES2024", "WebWorker"],
+    "module": "ESNext",
+    "moduleDetection": "force",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "paths": {
+      "playwright-core": ["./.typescript/playwright-core"]
+    },
+    "skipLibCheck": true,
+    "strict": true,
+    "target": "ES2024",
+    "typeRoots": ["./.typescript/@types"],
+    "types": ["node"]
+  },
+  "include": ["crates/**/*", "scripts/**/*"],
+  "exclude": ["**/node_modules", "**/target"]
+}
