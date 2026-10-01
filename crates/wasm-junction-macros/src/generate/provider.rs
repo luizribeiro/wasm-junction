@@ -33,6 +33,7 @@ impl Generator<'_> {
         let tables = resources.iter().map(|(name, field, _)| {
             quote!(#field: ::wasm_junction::ResourceTable::new(INTERFACE, #name))
         });
+        let test_provider = test_provider(&resources);
         let drops = resources
             .iter()
             .map(|(name, field, associated)| {
@@ -71,6 +72,8 @@ impl Generator<'_> {
                     #(#tables,)*
                 })
             }
+
+            #test_provider
 
             struct HostProvider<T: Host> {
                 host: T,
@@ -371,6 +374,34 @@ impl Generator<'_> {
             Ok(quote!(#constructor(value) => #constructor(self.#table.take(&value)?)))
         }
     }
+}
+
+fn test_provider<N: quote::ToTokens>(
+    resources: &[(N, proc_macro2::Ident, proc_macro2::Ident)],
+) -> Option<TokenStream> {
+    (!resources.is_empty()).then(|| {
+        let tables = resources.iter().map(|(name, field, _)| {
+            quote!(
+                #field: ::wasm_junction::ResourceTable::__new_with_next_id(
+                    INTERFACE,
+                    #name,
+                    __wasm_junction_next_resource_id,
+                )
+            )
+        });
+        quote! {
+            #[cfg(test)]
+            pub(crate) fn __provider_with_next_resource_id(
+                host: impl Host,
+                __wasm_junction_next_resource_id: u32,
+            ) -> ::wasm_junction::Provided {
+                ::wasm_junction::Provided::new(INTERFACE, HostProvider {
+                    host,
+                    #(#tables,)*
+                })
+            }
+        }
+    })
 }
 
 struct ResourceUse {

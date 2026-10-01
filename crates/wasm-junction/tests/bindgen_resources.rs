@@ -6,9 +6,27 @@ mod support;
 
 use std::sync::{Arc, Mutex};
 
-use wasm_junction::{CallContext, Resource, TypedCall, Val};
+use wasm_junction::{
+    App, CallContext, CallErrorKind, Component, ImportDispatcher, InvocationContext, Provided,
+    Resource, TypedCall, Val,
+};
 
 wasm_junction::bindgen!({ path: "tests/fixtures/resources/wit" });
+
+const PLUGIN_WIT: &str = r"
+    package test:resource-plugin@1.0.0;
+    interface client {
+      use test:resources/resources@1.0.0.{session};
+      open: func(user: string) -> session;
+      profile: func(value: borrow<session>) -> string;
+      new: func(value: borrow<session>) -> string;
+      lookup: func(user: string) -> option<session>;
+      consume: func(value: session) -> string;
+      maybe: func(value: option<session>) -> option<session>;
+      choose: func(value: result<session, string>) -> result<session, string>;
+    }
+    world plugin { import test:resources/resources@1.0.0; export client; }
+";
 
 #[derive(Debug, PartialEq, Eq)]
 struct SessionState(String);
@@ -94,4 +112,150 @@ fn typed_surfaces_keep_resource_ids() {
         .value,
         resource
     );
+}
+
+#[test]
+fn app_dispatch_maps_resource_values_and_stale_ids() {
+    let host = Arc::new(ResourceHost::default());
+    let app = resource_app(host.clone());
+    let call = |function, args| {
+        support::block_on(app.call("plugin", support::RESOURCE_BINDGEN_CLIENT, function, args))
+    };
+
+    let session = one_resource(&call("open", vec![Val::from("Ada")]).unwrap());
+    let borrowed = Resource::borrowed(session.interface(), session.name(), session.id());
+    assert_eq!(
+        call("profile", vec![Val::Resource(borrowed.clone())]).unwrap(),
+        [Val::from("profile:Ada")]
+    );
+    assert_eq!(
+        call("new", vec![Val::Resource(borrowed)]).unwrap(),
+        [Val::from("new:Ada")]
+    );
+
+    let found = one_optional_resource(&call("lookup", vec![Val::from("Grace")]).unwrap());
+    let found = one_optional_resource(
+        &call(
+            "maybe",
+            vec![Val::Option(Some(Box::new(Val::Resource(found))))],
+        )
+        .unwrap(),
+    );
+    let found = one_result_resource(
+        &call(
+            "choose",
+            vec![Val::Result(Ok(Some(Box::new(Val::Resource(found)))))],
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        call("consume", vec![Val::Resource(found)]).unwrap(),
+        [Val::from("Grace")]
+    );
+
+    support::block_on(ImportDispatcher::drop_resource(
+        &app,
+        InvocationContext::default(),
+        Arc::from("plugin"),
+        session.clone(),
+    ))
+    .unwrap();
+    assert_eq!(*host.dropped.lock().unwrap(), ["Ada"]);
+    let stale = Resource::borrowed(session.interface(), session.name(), session.id());
+    let error = call("profile", vec![Val::Resource(stale)]).unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Trap);
+    assert!(error.to_string().contains("unknown resource"));
+}
+
+#[test]
+fn generated_provider_rejects_the_wrong_resource_type() {
+    let app = resource_app(Arc::new(ResourceHost::default()));
+    let wrong = Resource::borrowed(resources::INTERFACE, "host", 0);
+    let error = support::block_on(app.call(
+        "plugin",
+        support::RESOURCE_BINDGEN_CLIENT,
+        "profile",
+        vec![Val::Resource(wrong)],
+    ))
+    .unwrap_err();
+
+    assert!(error.to_string().contains("expected resource"), "{error}");
+    assert!(error.to_string().contains("/host"), "{error}");
+}
+
+#[test]
+fn generated_provider_reports_resource_id_exhaustion() {
+    let provider =
+        resources::__provider_with_next_resource_id(Arc::new(ResourceHost::default()), u32::MAX);
+    let app = resource_app_with(provider);
+    let last = one_resource(
+        &support::block_on(app.call(
+            "plugin",
+            support::RESOURCE_BINDGEN_CLIENT,
+            "open",
+            vec![Val::from("Ada")],
+        ))
+        .unwrap(),
+    );
+    assert_eq!(last.id(), u32::MAX);
+
+    let error = support::block_on(app.call(
+        "plugin",
+        support::RESOURCE_BINDGEN_CLIENT,
+        "open",
+        vec![Val::from("Grace")],
+    ))
+    .unwrap_err();
+    assert!(error.to_string().contains("is exhausted"), "{error}");
+}
+
+fn resource_app(host: Arc<ResourceHost>) -> App {
+    resource_app_with(resources::provider(host))
+}
+
+fn resource_app_with(provider: Provided) -> App {
+    let app = App::builder()
+        .engine(support::FakeEngine)
+        .provide(provider)
+        .build()
+        .unwrap();
+    let bytes = support::component_bytes_from(
+        &[
+            (
+                "resources.wit",
+                include_str!("fixtures/resources/wit/package.wit"),
+            ),
+            ("plugin.wit", PLUGIN_WIT),
+        ],
+        "test:resource-plugin/plugin@1.0.0",
+    );
+    support::block_on(app.load(Component::from_bytes(bytes).unwrap().named("plugin"))).unwrap();
+    app
+}
+
+fn one_resource(values: &[Val]) -> Resource {
+    let [Val::Resource(resource)] = values else {
+        panic!("expected resource")
+    };
+    resource.clone()
+}
+
+fn one_optional_resource(values: &[Val]) -> Resource {
+    let [Val::Option(Some(value))] = values else {
+        panic!("expected optional resource")
+    };
+    let Val::Resource(resource) = value.as_ref() else {
+        panic!("expected optional resource")
+    };
+    resource.clone()
+}
+
+fn one_result_resource(values: &[Val]) -> Resource {
+    let [Val::Result(Ok(Some(value)))] = values else {
+        panic!("expected result resource")
+    };
+    let Val::Resource(resource) = value.as_ref() else {
+        panic!("expected result resource")
+    };
+    resource.clone()
 }

@@ -28,6 +28,12 @@ pub const RESERVED_HOST: &str = "test:keywords/host";
 /// The interface used to verify invocation context propagation.
 pub const CONTEXT_TARGET: &str = "example:context/target@1.0.0";
 
+/// The host-resource bindgen fixture's exported interface.
+pub const RESOURCE_BINDGEN_CLIENT: &str = "test:resource-plugin/client@1.0.0";
+
+/// The host-resource bindgen fixture's imported interface.
+pub const RESOURCE_BINDGEN_HOST: &str = "test:resources/resources@1.0.0";
+
 /// Per-invocation data checked by the context propagation fixture.
 pub struct ContextMarker(pub u32);
 
@@ -145,6 +151,18 @@ impl CompiledComponent for UnusedComponent {
                         .map_or(0, |marker| marker.0);
                     Ok(vec![Val::U32(marker.0), Val::U32(added)])
                 }
+                RESOURCE_BINDGEN_CLIENT => {
+                    let import = resource_import(&function)?;
+                    imports
+                        .call(
+                            context,
+                            component,
+                            Arc::from(RESOURCE_BINDGEN_HOST),
+                            Arc::from(import),
+                            args,
+                        )
+                        .await
+                }
                 RESERVED_HOST => {
                     imports
                         .call(context, component, interface, function, args)
@@ -176,6 +194,17 @@ impl CompiledComponent for UnusedComponent {
                 _ => Err(CallError::trap("engine received an unresolved export")),
             }
         })
+    }
+}
+
+fn resource_import(function: &str) -> Result<&str, CallError> {
+    match function {
+        "open" => Ok("[constructor]session"),
+        "profile" => Ok("[method]session.profile"),
+        "new" => Ok("[method]session.new"),
+        "lookup" => Ok("[static]session.lookup"),
+        "consume" | "maybe" | "choose" => Ok(function),
+        _ => Err(CallError::trap("unknown resource fixture function")),
     }
 }
 
