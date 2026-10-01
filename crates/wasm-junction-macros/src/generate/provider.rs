@@ -3,15 +3,16 @@ use quote::quote;
 use wit_parser::Function;
 
 use super::Generator;
-use super::collisions::{call_ident, method_ident, parameter_ident};
+use super::collisions::{call_ident, host_method_ident, host_parameter_idents, parameter_ident};
 
 impl Generator<'_> {
     pub(super) fn provider<'a>(
+        &self,
         interface: &str,
         functions: impl Iterator<Item = &'a Function>,
     ) -> syn::Result<TokenStream> {
         let arms = functions
-            .map(|function| Self::provider_arm(interface, function))
+            .map(|function| self.provider_arm(interface, function))
             .collect::<syn::Result<Vec<_>>>()?;
         Ok(quote! {
             #[doc = concat!("Wraps a `", #interface, "` host for registration with an app.")]
@@ -47,15 +48,24 @@ impl Generator<'_> {
         })
     }
 
-    fn provider_arm(interface: &str, function: &Function) -> syn::Result<TokenStream> {
+    fn provider_arm(&self, interface: &str, function: &Function) -> syn::Result<TokenStream> {
         let wit_name = &function.name;
-        let method = method_ident(wit_name)?;
+        let resource = function
+            .kind
+            .resource()
+            .and_then(|id| self.resolve.types[id].name.as_deref());
+        let method = host_method_ident(function, resource)?;
         let call = call_ident(interface, wit_name)?;
-        let parameters = function
+        let fields = function
             .params
             .iter()
             .map(|param| parameter_ident(&param.name))
             .collect::<syn::Result<Vec<_>>>()?;
+        let parameters = host_parameter_idents(function, resource)?;
+        let bindings = fields
+            .iter()
+            .zip(&parameters)
+            .map(|(field, parameter)| quote!(#field: #parameter));
         let invoke = quote!(<T as Host>::#method(
             &self.0,
             __wasm_junction_cx,
@@ -68,7 +78,7 @@ impl Generator<'_> {
         };
         Ok(quote! {
             #wit_name => {
-                let #call { #(#parameters,)* } =
+                let #call { #(#bindings,)* } =
                     <#call as ::wasm_junction::TypedCall>::from_vals(
                         &__wasm_junction_call.args,
                     )?;

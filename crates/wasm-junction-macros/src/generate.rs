@@ -2,7 +2,7 @@ use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use syn::{LitStr, Path};
-use wit_parser::{InterfaceId, PackageId, Resolve};
+use wit_parser::{InterfaceId, PackageId, Resolve, TypeDefKind};
 
 mod collisions;
 mod definitions;
@@ -160,7 +160,30 @@ struct Generator<'a> {
     with: std::collections::HashMap<PackageId, Path>,
 }
 
+struct ResourceBinding<'a> {
+    name: &'a str,
+    ident: Ident,
+}
+
 impl Generator<'_> {
+    fn resources<'a>(
+        &'a self,
+        interface: &str,
+        interface_id: InterfaceId,
+    ) -> syn::Result<Vec<ResourceBinding<'a>>> {
+        self.resolve.interfaces[interface_id]
+            .types
+            .iter()
+            .filter(|(_, id)| matches!(self.resolve.types[**id].kind, TypeDefKind::Resource))
+            .map(|(name, _)| {
+                Ok(ResourceBinding {
+                    name,
+                    ident: collisions::resource_ident(interface, name)?,
+                })
+            })
+            .collect()
+    }
+
     fn interface(&self, name: &str, id: InterfaceId) -> syn::Result<TokenStream> {
         let module = rust_ident(&name.to_snake_case())?;
         let package_id = self.resolve.interfaces[id]
@@ -197,9 +220,9 @@ impl Generator<'_> {
             .values()
             .map(|function| self.typed_call(name, function))
             .collect::<syn::Result<Vec<_>>>()?;
-        let host = self.host_trait(name, self.resolve.interfaces[id].functions.values())?;
+        let host = self.host_trait(name, id, self.resolve.interfaces[id].functions.values())?;
         let handle = self.handle(name, self.resolve.interfaces[id].functions.values())?;
-        let provider = Self::provider(name, self.resolve.interfaces[id].functions.values())?;
+        let provider = self.provider(name, self.resolve.interfaces[id].functions.values())?;
         Ok(quote! {
             #[doc = concat!("Bindings for the `", #interface, "` interface.")]
             pub mod #module {
