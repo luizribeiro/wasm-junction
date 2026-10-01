@@ -67,38 +67,41 @@ fn normalize(args: Vals) -> Result<Vals, Trap> {
 #[must_use]
 pub fn sample_note() -> Val {
     Val::Record(vec![
-        ("title", Val::String("Daily".to_owned())),
-        ("published", Val::Bool(true)),
-        ("signed-8", Val::S8(-8)),
-        ("unsigned-8", Val::U8(8)),
-        ("signed-16", Val::S16(-16)),
-        ("unsigned-16", Val::U16(16)),
-        ("signed-32", Val::S32(-32)),
-        ("unsigned-32", Val::U32(32)),
-        ("signed-64", Val::S64(-64)),
-        ("unsigned-64", Val::U64(64)),
-        ("score-32", Val::F32(3.5)),
-        ("score-64", Val::F64(7.25)),
-        ("marker", Val::Char('§')),
-        (
+        field("title", Val::String("Daily".to_owned())),
+        field("published", Val::Bool(true)),
+        field("signed-8", Val::S8(-8)),
+        field("unsigned-8", Val::U8(8)),
+        field("signed-16", Val::S16(-16)),
+        field("unsigned-16", Val::U16(16)),
+        field("signed-32", Val::S32(-32)),
+        field("unsigned-32", Val::U32(32)),
+        field("signed-64", Val::S64(-64)),
+        field("unsigned-64", Val::U64(64)),
+        field("score-32", Val::F32(3.5)),
+        field("score-64", Val::F64(7.25)),
+        field("marker", Val::Char('§')),
+        field(
             "tags",
             Val::List(vec![Val::from("rust"), Val::from("wasm")]),
         ),
-        ("location", Val::Tuple(vec![Val::S32(-71), Val::S32(42)])),
-        (
+        field("location", Val::Tuple(vec![Val::S32(-71), Val::S32(42)])),
+        field(
             "attachment",
             Val::Variant {
-                case: "text",
+                case: "text".to_owned(),
                 value: Some(Box::new(Val::from("diagram"))),
             },
         ),
-        ("mood", Val::Enum("upbeat")),
-        ("emphasis", Val::Flags(vec!["concise", "detailed"])),
-        (
+        field("mood", Val::Enum("upbeat".to_owned())),
+        field(
+            "emphasis",
+            Val::Flags(vec!["concise".to_owned(), "detailed".to_owned()]),
+        ),
+        field(
             "subtitle",
             Val::Option(Some(Box::new(Val::from("Engine notes")))),
         ),
-        ("revision", Val::Result(Ok(Some(Box::new(Val::U64(7)))))),
+        field("revision", Val::Result(Ok(Some(Box::new(Val::U64(7)))))),
     ])
 }
 
@@ -106,9 +109,13 @@ pub fn sample_note() -> Val {
 #[must_use]
 pub fn sample_summary() -> Val {
     Val::Result(Ok(Some(Box::new(Val::Record(vec![
-        ("text", Val::from("Daily: 2 tags")),
-        ("source", sample_note()),
+        field("text", Val::from("Daily: 2 tags")),
+        field("source", sample_note()),
     ])))))
+}
+
+fn field(name: &str, value: Val) -> (String, Val) {
+    (name.to_owned(), value)
 }
 
 #[cfg(test)]

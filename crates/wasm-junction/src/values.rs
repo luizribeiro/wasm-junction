@@ -39,18 +39,18 @@ pub enum Val {
     /// A WIT `tuple`, in element order.
     Tuple(Vec<Self>),
     /// A WIT `record`, in field declaration order.
-    Record(Vec<(&'static str, Self)>),
+    Record(Vec<(String, Self)>),
     /// A WIT `variant` case with its optional payload.
     Variant {
         /// The case name from the WIT definition.
-        case: &'static str,
+        case: String,
         /// The case payload, or `None` for a payload-free case.
         value: Option<Box<Self>>,
     },
     /// A WIT `enum` case name.
-    Enum(&'static str),
+    Enum(String),
     /// The active names in a WIT `flags` value.
-    Flags(Vec<&'static str>),
+    Flags(Vec<String>),
     /// A WIT `option` payload.
     Option(Option<Box<Self>>),
     /// A WIT `result`, whose success and error payloads may each be absent.

@@ -11,9 +11,9 @@ struct Note {
 impl From<Note> for Val {
     fn from(note: Note) -> Self {
         Self::Record(vec![
-            ("title", note.title.into()),
+            ("title".to_owned(), note.title.into()),
             (
-                "lines",
+                "lines".to_owned(),
                 Self::List(note.lines.into_iter().map(Into::into).collect()),
             ),
         ])
@@ -30,7 +30,7 @@ impl TryFrom<Val> for Note {
         let mut title = None;
         let mut lines = None;
         for (field, value) in fields {
-            match (field, value) {
+            match (field.as_str(), value) {
                 ("title", value) => title = Some(value.try_into()?),
                 ("lines", Val::List(values)) => {
                     lines = Some(
@@ -79,15 +79,15 @@ impl From<Selection> for Val {
     fn from(selection: Selection) -> Self {
         match selection {
             Selection::Text(text) => Self::Variant {
-                case: "text",
+                case: "text".to_owned(),
                 value: Some(Box::new(text.into())),
             },
             Selection::Line(line) => Self::Variant {
-                case: "line",
+                case: "line".to_owned(),
                 value: Some(Box::new(line.into())),
             },
             Selection::All => Self::Variant {
-                case: "all",
+                case: "all".to_owned(),
                 value: None,
             },
         }
@@ -99,19 +99,12 @@ impl TryFrom<Val> for Selection {
 
     fn try_from(value: Val) -> Result<Self, Self::Error> {
         match value {
-            Val::Variant {
-                case: "text",
-                value: Some(value),
-            } => Ok(Self::Text((*value).try_into()?)),
-            Val::Variant {
-                case: "line",
-                value: Some(value),
-            } => Ok(Self::Line((*value).try_into()?)),
-            Val::Variant {
-                case: "all",
-                value: None,
-            } => Ok(Self::All),
-            Val::Variant { case, .. } => Err(TypeError::new(format!("unknown case `{case}`"))),
+            Val::Variant { case, value } => match (case.as_str(), value) {
+                ("text", Some(value)) => Ok(Self::Text((*value).try_into()?)),
+                ("line", Some(value)) => Ok(Self::Line((*value).try_into()?)),
+                ("all", None) => Ok(Self::All),
+                _ => Err(TypeError::new(format!("unknown case `{case}`"))),
+            },
             _ => Err(TypeError::new("expected selection variant")),
         }
     }
@@ -125,10 +118,10 @@ enum Format {
 
 impl From<Format> for Val {
     fn from(format: Format) -> Self {
-        Self::Enum(match format {
+        Self::Enum(String::from(match format {
             Format::Plain => "plain",
             Format::Markdown => "markdown",
-        })
+        }))
     }
 }
 
@@ -137,9 +130,11 @@ impl TryFrom<Val> for Format {
 
     fn try_from(value: Val) -> Result<Self, Self::Error> {
         match value {
-            Val::Enum("plain") => Ok(Self::Plain),
-            Val::Enum("markdown") => Ok(Self::Markdown),
-            Val::Enum(case) => Err(TypeError::new(format!("unknown case `{case}`"))),
+            Val::Enum(case) => match case.as_str() {
+                "plain" => Ok(Self::Plain),
+                "markdown" => Ok(Self::Markdown),
+                _ => Err(TypeError::new(format!("unknown case `{case}`"))),
+            },
             _ => Err(TypeError::new("expected format enum")),
         }
     }
@@ -155,10 +150,10 @@ impl From<Permissions> for Val {
     fn from(permissions: Permissions) -> Self {
         let mut flags = Vec::new();
         if permissions.read {
-            flags.push("read");
+            flags.push("read".to_owned());
         }
         if permissions.summarize {
-            flags.push("summarize");
+            flags.push("summarize".to_owned());
         }
         Self::Flags(flags)
     }
@@ -176,7 +171,7 @@ impl TryFrom<Val> for Permissions {
             summarize: false,
         };
         for flag in flags {
-            match flag {
+            match flag.as_str() {
                 "read" => permissions.read = true,
                 "summarize" => permissions.summarize = true,
                 flag => return Err(TypeError::new(format!("unknown flag `{flag}`"))),
@@ -231,8 +226,8 @@ fn list_record_and_tuple_shapes_round_trip() {
 #[test]
 fn record_fields_and_tuple_arity_are_checked() {
     assert!(pair_from_val(Val::Tuple(vec![1_u32.into()])).is_err());
-    assert!(Note::try_from(Val::Record(vec![("subject", "news".into())])).is_err());
-    assert!(Note::try_from(Val::Record(vec![("title", "News".into())])).is_err());
+    assert!(Note::try_from(Val::Record(vec![("subject".to_owned(), "news".into())])).is_err());
+    assert!(Note::try_from(Val::Record(vec![("title".to_owned(), "News".into())])).is_err());
 }
 
 #[test]
@@ -254,10 +249,10 @@ fn every_variant_and_enum_case_round_trips() {
 
 #[test]
 fn enum_and_variant_cases_are_checked() {
-    assert!(Format::try_from(Val::Enum("html")).is_err());
+    assert!(Format::try_from(Val::Enum("html".to_owned())).is_err());
     assert!(
         Selection::try_from(Val::Variant {
-            case: "range",
+            case: "range".to_owned(),
             value: None
         })
         .is_err()
@@ -311,5 +306,5 @@ fn flags_option_and_result_shapes_round_trip() {
 
 #[test]
 fn flag_names_are_checked() {
-    assert!(Permissions::try_from(Val::Flags(vec!["delete"])).is_err());
+    assert!(Permissions::try_from(Val::Flags(vec!["delete".to_owned()])).is_err());
 }

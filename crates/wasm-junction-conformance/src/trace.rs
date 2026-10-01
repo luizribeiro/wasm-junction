@@ -84,11 +84,10 @@ fn val(value: &Val) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
-        Val::Variant { case, value } => value.as_deref().map_or_else(
-            || (*case).to_owned(),
-            |value| format!("{case}({})", val(value)),
-        ),
-        Val::Enum(case) => (*case).to_owned(),
+        Val::Variant { case, value } => value
+            .as_deref()
+            .map_or_else(|| case.clone(), |value| format!("{case}({})", val(value))),
+        Val::Enum(case) => case.clone(),
         Val::Flags(names) => format!("[{}]", names.join("|")),
         Val::Option(value) => value.as_deref().map_or_else(
             || "none".to_owned(),
