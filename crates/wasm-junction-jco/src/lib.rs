@@ -5,15 +5,23 @@
 
 use js_component_bindgen::{AsyncMode, InstantiationMode, TranspileOpts, transpile};
 
+#[cfg(any(test, target_family = "wasm"))]
+mod types;
+
 #[cfg_attr(any(not(test), target_family = "wasm"), allow(dead_code))]
 #[derive(Debug)]
 struct TranspiledComponent {
     source: String,
     modules: Vec<(String, Vec<u8>)>,
+    #[cfg(any(test, target_family = "wasm"))]
+    signatures: types::Signatures,
 }
 
 #[cfg_attr(any(not(test), target_family = "wasm"), allow(dead_code))]
 fn transpile_component(bytes: &[u8]) -> Result<TranspiledComponent, String> {
+    #[cfg(any(test, target_family = "wasm"))]
+    let signatures = types::Signatures::from_component(bytes)
+        .map_err(|error| format!("could not transpile WebAssembly component: {error}"))?;
     let output = transpile(
         bytes,
         TranspileOpts {
@@ -44,7 +52,12 @@ fn transpile_component(bytes: &[u8]) -> Result<TranspiledComponent, String> {
         }
     }
     source
-        .map(|source| TranspiledComponent { source, modules })
+        .map(|source| TranspiledComponent {
+            source,
+            modules,
+            #[cfg(any(test, target_family = "wasm"))]
+            signatures,
+        })
         .ok_or_else(|| "jco did not generate a JavaScript module".to_owned())
 }
 
@@ -93,6 +106,14 @@ mod tests {
             .source;
         assert!(source.contains("WebAssembly.Suspending"));
         assert!(source.contains("WebAssembly.promising"));
+        let output = transpile_component(wasm_junction_conformance::component()).unwrap();
+        let signature = output
+            .signatures
+            .export(wasm_junction_conformance::SUMMARIZER, "echo")
+            .unwrap();
+        assert!(!signature.params.is_empty());
+        assert!(signature.result.is_some());
+        assert_eq!(types::ValueType::String.name(), "string");
     }
 
     #[test]

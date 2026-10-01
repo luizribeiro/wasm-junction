@@ -14,6 +14,8 @@ workspace = true
 [dependencies]
 js-component-bindgen = "=2.13.0"
 wasm-junction-core = { path = "../wasm-junction-core", version = "=0.0.0" }
+wit-component = "=0.259.0"
+wit-parser = "=0.259.0"
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 js-sys = "=0.3.104"
