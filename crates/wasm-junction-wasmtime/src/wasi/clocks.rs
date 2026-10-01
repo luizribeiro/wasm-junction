@@ -2,25 +2,26 @@ use std::sync::{Arc, Mutex};
 
 use wasm_junction_core::{BoxFuture, CallError, ImportTarget, InvocationContext, Val, Vals};
 use wasmtime::component::{Linker, Resource};
+use wasmtime::{AsContextMut, StoreContextMut};
 use wasmtime_wasi::clocks::WasiClocksView;
 use wasmtime_wasi::p2::DynPollable;
 use wasmtime_wasi::p2::bindings::clocks::{monotonic_clock, wall_clock};
 
-use super::{Gate, GateData, StoreData, WasiState, lock, project};
+use super::{Gate, GateData, StoreData, WasiState, dispatch, lock, project};
 use crate::GATED_WASI_INTERFACES;
 
 const MONOTONIC_INTERFACE: &str = GATED_WASI_INTERFACES[1];
-const INTERFACE: &str = GATED_WASI_INTERFACES[2];
+const WALL_INTERFACE: &str = GATED_WASI_INTERFACES[2];
 
 #[derive(Clone, Copy)]
-enum Operation {
+enum WallOperation {
     Now,
     Resolution,
 }
 
-struct Target(Arc<Mutex<WasiState>>, Operation);
+struct WallTarget(Arc<Mutex<WasiState>>, WallOperation);
 
-impl ImportTarget for Target {
+impl ImportTarget for WallTarget {
     fn call(
         &self,
         _context: InvocationContext,
@@ -34,8 +35,8 @@ impl ImportTarget for Target {
             }
             let mut state = lock(&state);
             let datetime = match operation {
-                Operation::Now => wall_clock::Host::now(&mut state.clocks()),
-                Operation::Resolution => wall_clock::Host::resolution(&mut state.clocks()),
+                WallOperation::Now => wall_clock::Host::now(&mut state.clocks()),
+                WallOperation::Resolution => wall_clock::Host::resolution(&mut state.clocks()),
             }
             .map_err(|error| CallError::trap(error.to_string()))?;
             Ok(vec![Val::Record(vec![
@@ -43,47 +44,6 @@ impl ImportTarget for Target {
                 ("nanoseconds".to_owned(), Val::U32(datetime.nanoseconds)),
             ])])
         })
-    }
-}
-
-impl wall_clock::Host for Gate<'_> {
-    fn now(&mut self) -> wasmtime::Result<wall_clock::Datetime> {
-        self.call_wall("now", Operation::Now)
-    }
-
-    fn resolution(&mut self) -> wasmtime::Result<wall_clock::Datetime> {
-        self.call_wall("resolution", Operation::Resolution)
-    }
-}
-
-impl Gate<'_> {
-    fn call_wall(
-        &mut self,
-        function: &'static str,
-        operation: Operation,
-    ) -> wasmtime::Result<wall_clock::Datetime> {
-        let values = self.dispatch(
-            INTERFACE,
-            function,
-            Vec::new(),
-            Arc::new(Target(self.0.gated_wasi.clone(), operation)),
-        )?;
-        let [Val::Record(fields)] = values.as_slice() else {
-            return Err(wasmtime::Error::msg("wall clock returned the wrong shape"));
-        };
-        match fields.as_slice() {
-            [(seconds, Val::U64(value)), (nanoseconds, Val::U32(nanos))]
-                if seconds == "seconds" && nanoseconds == "nanoseconds" =>
-            {
-                Ok(wall_clock::Datetime {
-                    seconds: *value,
-                    nanoseconds: *nanos,
-                })
-            }
-            _ => Err(wasmtime::Error::msg(
-                "wall clock record has the wrong shape",
-            )),
-        }
     }
 }
 
@@ -216,6 +176,47 @@ impl Gate<'_> {
 }
 
 pub(super) fn add_wall_clock_gate(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
-    wall_clock::add_to_linker::<StoreData, GateData>(linker, project)?;
+    let mut instance = linker.instance(WALL_INTERFACE)?;
+    instance.func_wrap_async("now", |mut store, (): ()| {
+        Box::new(async move { Ok((call_wall(&mut store, "now", WallOperation::Now).await?,)) })
+    })?;
+    instance.func_wrap_async("resolution", |mut store, (): ()| {
+        Box::new(async move {
+            Ok((call_wall(&mut store, "resolution", WallOperation::Resolution).await?,))
+        })
+    })?;
     monotonic_clock::add_to_linker::<StoreData, GateData>(linker, project)
+}
+
+async fn call_wall(
+    store: &mut StoreContextMut<'_, StoreData>,
+    function: &'static str,
+    operation: WallOperation,
+) -> wasmtime::Result<wall_clock::Datetime> {
+    let target = {
+        let mut context = store.as_context_mut();
+        let data = context.data_mut();
+        Arc::new(WallTarget(data.gated_wasi.clone(), operation))
+    };
+    let values = dispatch(store, WALL_INTERFACE, function, Vec::new(), target).await?;
+    decode_datetime(&values)
+}
+
+fn decode_datetime(values: &[Val]) -> wasmtime::Result<wall_clock::Datetime> {
+    let [Val::Record(fields)] = values else {
+        return Err(wasmtime::Error::msg("wall clock returned the wrong shape"));
+    };
+    match fields.as_slice() {
+        [(seconds, Val::U64(value)), (nanoseconds, Val::U32(nanos))]
+            if seconds == "seconds" && nanoseconds == "nanoseconds" =>
+        {
+            Ok(wall_clock::Datetime {
+                seconds: *value,
+                nanoseconds: *nanos,
+            })
+        }
+        _ => Err(wasmtime::Error::msg(
+            "wall clock record has the wrong shape",
+        )),
+    }
 }

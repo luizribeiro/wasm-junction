@@ -2,6 +2,7 @@
 
 use std::future::{Future, poll_fn};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
@@ -201,6 +202,45 @@ impl Middleware for AwaitTimer {
         }
         next.run(call).await
     }
+}
+
+struct AwaitTokioTimer;
+
+impl Middleware for AwaitTokioTimer {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.interface.as_ref() == WALL_CLOCK && call.function.as_ref() == "now" {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        next.run(call).await
+    }
+}
+
+#[test]
+fn wasi_gate_can_await_on_a_current_thread_tokio_runtime() {
+    let (sender, receiver) = mpsc::channel();
+    let _worker = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let result = runtime.block_on(async {
+            let app = App::builder()
+                .engine(WasmtimeEngine::new().unwrap())
+                .middleware(AwaitTokioTimer)
+                .build()
+                .unwrap();
+            app.load(Component::from_bytes(WASI_COMPONENT).unwrap().named("wasi"))
+                .await
+                .unwrap();
+            app.call("wasi", ENVIRONMENT, "wall-time", Vec::new()).await
+        });
+        sender.send(result).unwrap();
+    });
+
+    let result = receiver
+        .recv_timeout(Duration::from_secs(2))
+        .expect("WASI middleware deadlocked the current-thread Tokio runtime");
+    assert!(result.is_ok(), "{result:?}");
 }
 
 async fn timer(duration: Duration) {
