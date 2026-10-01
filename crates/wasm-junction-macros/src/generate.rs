@@ -28,7 +28,7 @@ pub(crate) fn generate(
     let roots = select_interfaces(resolve, package_id, requested)?;
     let with = resolve_with(resolve, with)?;
     validate::interfaces(resolve, &roots, span)?;
-    collisions::check(resolve, &roots, span)?;
+    collisions::check(resolve, &roots, &with.keys().copied().collect(), span)?;
     let mut selected = reachability::find(resolve, &roots)?;
     selected.retain(|id, _| {
         resolve.interfaces[*id]
@@ -73,20 +73,56 @@ fn resolve_with(
                 "`with` keys must name WIT packages; interface keys are not supported",
             ));
         }
-        let package = available
-            .iter()
-            .find(|(candidate, _)| {
-                candidate == &value || candidate.split('@').next() == Some(&value)
-            })
-            .map(|(_, id)| *id)
-            .ok_or_else(|| {
-                syn::Error::new(name.span(), format!("unknown WIT package `{value}`"))
-            })?;
+        let package = match_available(name, &available, "WIT package")?.ok_or_else(|| {
+            let names = available_names(&available);
+            syn::Error::new(
+                name.span(),
+                format!("unknown WIT package `{value}`; available packages: {names}"),
+            )
+        })?;
         if result.insert(package, path.clone()).is_some() {
             return Err(syn::Error::new(name.span(), "duplicate `with` package"));
         }
     }
     Ok(result)
+}
+
+fn match_available<T: Copy>(
+    requested: &LitStr,
+    available: &[(String, T)],
+    kind: &str,
+) -> syn::Result<Option<T>> {
+    let value = requested.value();
+    let matches = available
+        .iter()
+        .filter(|(candidate, _)| {
+            if value.contains('@') {
+                candidate == &value
+            } else {
+                candidate.split('@').next() == Some(&value)
+            }
+        })
+        .collect::<Vec<_>>();
+    if matches.len() > 1 {
+        let candidates = matches
+            .iter()
+            .map(|(name, _)| format!("`{name}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(syn::Error::new(
+            requested.span(),
+            format!("ambiguous {kind} `{value}`; candidates: {candidates}; use `name@version`"),
+        ));
+    }
+    Ok(matches.first().map(|(_, id)| *id))
+}
+
+fn available_names<T>(available: &[(String, T)]) -> String {
+    available
+        .iter()
+        .map(|(name, _)| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn select_interfaces(
@@ -106,23 +142,13 @@ fn select_interfaces(
         .iter()
         .map(|name| {
             let value = name.value();
-            available
-                .iter()
-                .find(|(candidate, _)| {
-                    candidate == &value || candidate.split('@').next() == Some(&value)
-                })
-                .map(|(_, id)| *id)
-                .ok_or_else(|| {
-                    let names = available
-                        .iter()
-                        .map(|(name, _)| format!("`{name}`"))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    syn::Error::new(
-                        name.span(),
-                        format!("unknown interface `{value}`; available interfaces: {names}"),
-                    )
-                })
+            match_available(name, &available, "interface")?.ok_or_else(|| {
+                let names = available_names(&available);
+                syn::Error::new(
+                    name.span(),
+                    format!("unknown interface `{value}`; available interfaces: {names}"),
+                )
+            })
         })
         .collect()
 }

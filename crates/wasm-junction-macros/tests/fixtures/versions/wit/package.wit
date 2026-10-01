@@ -1,0 +1,7 @@
+package test:consumer;
+
+interface consumer {
+  use test:shared/types@1.0.0.{item as item-v1};
+  use test:shared/types@2.0.0.{item as item-v2};
+  compare: func(left: item-v1, right: item-v2);
+}

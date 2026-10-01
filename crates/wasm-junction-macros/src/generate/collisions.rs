@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::Span;
-use wit_parser::{InterfaceId, Resolve, Type, TypeDefKind, TypeId, TypeOwner};
+use wit_parser::{InterfaceId, PackageId, Resolve, Type, TypeDefKind, TypeId, TypeOwner};
 
 use super::{rust_ident, walk};
 
@@ -44,8 +44,22 @@ fn fixed_names(interface: &str) -> [String; 4] {
     ]
 }
 
-pub(super) fn check(resolve: &Resolve, roots: &[InterfaceId], span: Span) -> syn::Result<()> {
-    let (interfaces, types) = reachable(resolve, roots)?;
+pub(super) fn check(
+    resolve: &Resolve,
+    roots: &[InterfaceId],
+    excluded: &HashSet<PackageId>,
+    span: Span,
+) -> syn::Result<()> {
+    let (mut interfaces, mut types) = reachable(resolve, roots)?;
+    interfaces.retain(|id| {
+        resolve.interfaces[*id]
+            .package
+            .is_none_or(|package| !excluded.contains(&package))
+    });
+    types.retain(|id| match resolve.types[*id].owner {
+        TypeOwner::Interface(owner) => interfaces.contains(&owner),
+        TypeOwner::World(_) | TypeOwner::None => true,
+    });
     let mut names = HashMap::new();
     for id in &interfaces {
         let interface = &resolve.interfaces[*id];
@@ -172,6 +186,7 @@ fn unique(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::path::Path;
 
     use proc_macro2::Span;
@@ -186,7 +201,7 @@ mod tests {
             .values()
             .copied()
             .collect::<Vec<_>>();
-        super::check(&resolve, &roots, Span::call_site())
+        super::check(&resolve, &roots, &HashSet::new(), Span::call_site())
             .unwrap_err()
             .to_string()
     }

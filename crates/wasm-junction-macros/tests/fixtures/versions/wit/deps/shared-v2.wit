@@ -1,0 +1,5 @@
+package test:shared@2.0.0;
+
+interface types {
+  record item { value: string }
+}

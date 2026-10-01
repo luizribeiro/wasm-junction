@@ -234,4 +234,51 @@ mod tests {
         let error = expand(&config).unwrap_err().to_string();
         assert!(error.contains("keys must name WIT packages"));
     }
+
+    #[test]
+    fn with_requires_a_version_when_packages_are_ambiguous() {
+        let config = syn::parse_str::<Config>(
+            r#"{
+                path: "tests/fixtures/versions/wit",
+                with: { "test:shared": crate::shared }
+            }"#,
+        )
+        .unwrap();
+        let error = expand(&config).unwrap_err().to_string();
+        assert!(error.contains("ambiguous WIT package `test:shared`"));
+        assert!(error.contains("`test:shared@1.0.0`"));
+        assert!(error.contains("`test:shared@2.0.0`"));
+        assert!(error.contains("use `name@version`"));
+    }
+
+    #[test]
+    fn with_accepts_a_qualified_ambiguous_package() {
+        let config = syn::parse_str::<Config>(
+            r#"{
+                path: "tests/fixtures/versions/wit",
+                with: { "test:shared@1.0.0": crate::shared }
+            }"#,
+        )
+        .unwrap();
+        let tokens = expand(&config).unwrap().to_string();
+        assert!(
+            tokens.contains("crate :: shared :: types :: Item"),
+            "{tokens}"
+        );
+    }
+
+    #[test]
+    fn unknown_with_package_lists_available_packages() {
+        let config = syn::parse_str::<Config>(
+            r#"{
+                path: "../wasm-junction/tests/fixtures/dependencies/wit",
+                with: { "test:missing": crate::shared }
+            }"#,
+        )
+        .unwrap();
+        let error = expand(&config).unwrap_err().to_string();
+        assert!(error.contains("unknown WIT package `test:missing`"));
+        assert!(error.contains("`test:common`"));
+        assert!(error.contains("`test:notes`"));
+    }
 }
