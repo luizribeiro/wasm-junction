@@ -369,7 +369,7 @@ fn environment_gate_traces_refuses_and_rewrites() {
 }
 
 #[test]
-fn typed_refusal_and_guest_trap_remain_distinct() {
+fn wit_error_provider_refusal_and_guest_trap_remain_distinct() {
     let fixture = loaded(&WasmtimeEngine::new().unwrap());
     let refusal = block_on(fixture.call("summarize", vec![Val::from("private")])).unwrap();
     assert_eq!(
@@ -377,6 +377,14 @@ fn typed_refusal_and_guest_trap_remain_distinct() {
         [Val::Result(Err(Some(Box::new(Val::from(
             "permission denied"
         )))))]
+    );
+
+    let provider_refusal =
+        block_on(fixture.call("summarize", vec![Val::from("provider-refusal")])).unwrap_err();
+    assert_eq!(provider_refusal.kind(), CallErrorKind::Refused);
+    assert_eq!(
+        provider_refusal.to_string(),
+        "notes provider refused the call"
     );
 
     let trap = block_on(fixture.call("crash", Vec::new())).unwrap_err();
@@ -495,7 +503,7 @@ fn cyclic_routed_calls_stop_at_the_depth_limit() {
     block_on(app.load_all([a, b])).unwrap();
 
     let error = block_on(app.call("a", CYCLE_A, "recurse", vec![Val::U32(0)])).unwrap_err();
-    assert_eq!(error.kind(), CallErrorKind::Trap);
+    assert_eq!(error.kind(), CallErrorKind::Refused);
     assert!(
         error
             .to_string()

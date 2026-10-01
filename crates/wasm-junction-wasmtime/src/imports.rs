@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use wasm_junction_core::{CallError, ImportDispatcher, InvocationContext, Resource, Val, Vals};
+use wasm_junction_core::{ImportDispatcher, InvocationContext, Resource, Val, Vals};
 use wasmtime::AsContextMut;
 use wasmtime::bail;
 use wasmtime::component::types::ComponentItem;
@@ -94,7 +94,7 @@ pub(crate) fn define_imports(
                                 Resource::owned(definition.interface, definition.name, id),
                             )
                             .await
-                            .map_err(|error| wasmtime::Error::msg(error.to_string()))
+                            .map_err(wasmtime::Error::new)
                     })
                 },
             )?;
@@ -227,7 +227,7 @@ async fn call(
     imports
         .call(context, component, interface, function, args)
         .await
-        .map_err(|error: CallError| wasmtime::Error::msg(error.to_string()))
+        .map_err(wasmtime::Error::new)
 }
 
 fn set_results(

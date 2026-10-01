@@ -31,7 +31,11 @@ impl notes::Host for FixtureHost {
         _context: &CallContext,
         name: String,
     ) -> impl std::future::Future<Output = Result<Result<types::Note, String>, CallError>> {
-        std::future::ready(Ok(read(&name)))
+        std::future::ready(if name == "provider-refusal" {
+            Err(CallError::refused("notes provider refused the call"))
+        } else {
+            Ok(read(&name))
+        })
     }
 
     fn normalize(
