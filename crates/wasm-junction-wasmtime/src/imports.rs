@@ -5,7 +5,7 @@ use wasmtime::AsContextMut;
 use wasmtime::bail;
 use wasmtime::component::types::ComponentItem;
 use wasmtime::component::{
-    Component, Linker, LinkerInstance, ResourceAny, ResourceType, Val as WasmtimeVal,
+    Component, Linker, LinkerInstance, ResourceAny, ResourceType, Type, Val as WasmtimeVal,
 };
 
 use crate::engine::{StoreData, lift_resource, lower_resource};
@@ -118,9 +118,10 @@ fn define_concurrent(
 ) -> Result<(), wasmtime::Error> {
     let interface: Arc<str> = Arc::from(interface);
     let function: Arc<str> = Arc::from(function);
-    instance.func_new_concurrent(&function.clone(), move |accessor, _, params, results| {
+    instance.func_new_concurrent(&function.clone(), move |accessor, ty, params, results| {
         let interface = interface.clone();
         let function = function.clone();
+        let result_types = ty.results().collect::<Vec<_>>();
         Box::pin(async move {
             let args = convert_params(params, &mut |resource| {
                 accessor.with(|store| lift_resource(resource, store))
@@ -134,8 +135,8 @@ fn define_concurrent(
                 )
             });
             let values = call(imports, context, component, interface, function, args).await?;
-            set_results(results, values, &mut |resource| {
-                accessor.with(|store| lower_resource(&resource, store))
+            set_results(results, values, &result_types, &mut |resource, expected| {
+                accessor.with(|store| lower_resource(&resource, expected, store))
             })
         })
     })
@@ -148,9 +149,10 @@ fn define_plain(
 ) -> Result<(), wasmtime::Error> {
     let interface: Arc<str> = Arc::from(interface);
     let function: Arc<str> = Arc::from(function);
-    instance.func_new_async(&function.clone(), move |mut store, _, params, results| {
+    instance.func_new_async(&function.clone(), move |mut store, ty, params, results| {
         let interface = interface.clone();
         let function = function.clone();
+        let result_types = ty.results().collect::<Vec<_>>();
         Box::new(async move {
             let args = convert_params(params, &mut |resource| {
                 lift_resource(resource, store.as_context_mut())
@@ -165,8 +167,8 @@ fn define_plain(
                 )
             };
             let values = call(imports, context, component, interface, function, args).await?;
-            set_results(results, values, &mut |resource| {
-                lower_resource(&resource, store.as_context_mut())
+            set_results(results, values, &result_types, &mut |resource, expected| {
+                lower_resource(&resource, expected, store.as_context_mut())
             })
         })
     })
@@ -200,7 +202,11 @@ async fn call(
 fn set_results(
     results: &mut [WasmtimeVal],
     values: Vals,
-    resource: &mut impl FnMut(Resource) -> Result<ResourceAny, wasmtime::Error>,
+    result_types: &[Type],
+    resource: &mut impl FnMut(
+        Resource,
+        Option<crate::values::ExpectedResource>,
+    ) -> Result<ResourceAny, wasmtime::Error>,
 ) -> Result<(), wasmtime::Error> {
     if results.len() != values.len() {
         bail!(
@@ -209,8 +215,8 @@ fn set_results(
             results.len()
         );
     }
-    for (result, value) in results.iter_mut().zip(values) {
-        *result = to_wasmtime(value, resource)?;
+    for (index, (result, value)) in results.iter_mut().zip(values).enumerate() {
+        *result = to_wasmtime(value, result_types.get(index), resource)?;
     }
     Ok(())
 }

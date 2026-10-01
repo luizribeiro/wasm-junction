@@ -7,13 +7,13 @@ use wasm_junction_core::{
     InvocationContext, Resource, ResourceOwnership, Vals, WasiConfig,
 };
 use wasmtime::component::{
-    Component, InstancePre, Linker, ResourceAny, ResourceDynamic, Val as WasmtimeVal,
+    Component, InstancePre, Linker, ResourceAny, ResourceDynamic, ResourceType, Val as WasmtimeVal,
 };
 use wasmtime::{AsContextMut, Config, Engine as RuntimeEngine, Store};
 use wasmtime_wasi::{WasiCtxBuilder, WasiCtxView, WasiView};
 
 use crate::imports::{ResourceDefinition, define_imports};
-use crate::values::{from_wasmtime, to_wasmtime};
+use crate::values::{ExpectedResource, from_wasmtime, to_wasmtime};
 use crate::wasi::{WasiState, add_gates, add_ungated_interfaces};
 
 pub(crate) struct StoreData {
@@ -162,30 +162,40 @@ impl Compiled {
             let function = instance
                 .get_func(&mut store, function)
                 .ok_or_else(|| wasmtime::Error::msg("export is not a function"))?;
-            let params = args
-                .into_iter()
-                .map(|value| {
-                    to_wasmtime(value, &mut |resource| {
-                        lower_resource(&resource, store.as_context_mut())
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            let mut results = vec![WasmtimeVal::Bool(false); function.ty(&store).results().len()];
-            store
+            let function_type = function.ty(&store);
+            let parameter_types = function_type.params().map(|(_, ty)| ty).collect::<Vec<_>>();
+            let result_count = function_type.results().len();
+            let values = store
                 .run_concurrent(async |accessor| {
+                    let params = args
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, value)| {
+                            to_wasmtime(
+                                value,
+                                parameter_types.get(index),
+                                &mut |resource, expected| {
+                                    accessor
+                                        .with(|store| lower_resource(&resource, expected, store))
+                                },
+                            )
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let mut results = vec![WasmtimeVal::Bool(false); result_count];
                     function
                         .call_concurrent(accessor, &params, &mut results)
-                        .await
+                        .await?;
+                    results
+                        .into_iter()
+                        .map(|value| {
+                            from_wasmtime(value, &mut |resource| {
+                                accessor.with(|store| lift_resource(resource, store))
+                            })
+                        })
+                        .collect::<Result<Vals, wasmtime::Error>>()
                 })
                 .await??;
-            results
-                .into_iter()
-                .map(|value| {
-                    from_wasmtime(value, &mut |resource| {
-                        lift_resource(resource, store.as_context_mut())
-                    })
-                })
-                .collect()
+            Ok(values)
         }
         .await;
         let cleanup = cleanup_resources(&mut store).await;
@@ -234,8 +244,28 @@ pub(crate) fn lift_resource(
 
 pub(crate) fn lower_resource(
     resource: &Resource,
+    expected: Option<ExpectedResource>,
     mut store: impl AsContextMut<Data = StoreData>,
 ) -> Result<ResourceAny, wasmtime::Error> {
+    let expected = expected.ok_or_else(|| {
+        wasmtime::Error::new(CallError::refused(format!(
+            "resource `{}/{}#{}` does not match the declared value type",
+            resource.interface(),
+            resource.name(),
+            resource.id()
+        )))
+    })?;
+    if resource.ownership() != expected.ownership {
+        return Err(wasmtime::Error::new(CallError::refused(format!(
+            "resource `{}/{}#{}` has {:?} ownership but the call requires {:?} for {:?}",
+            resource.interface(),
+            resource.name(),
+            resource.id(),
+            resource.ownership(),
+            expected.ownership,
+            expected.ty
+        ))));
+    }
     let definition = store
         .as_context()
         .data()
@@ -246,20 +276,24 @@ pub(crate) fn lower_resource(
                 && definition.name.as_ref() == resource.name()
         })
         .ok_or_else(|| {
-            wasmtime::Error::msg(format!(
+            wasmtime::Error::new(CallError::refused(format!(
                 "component does not import resource `{}/{}`",
                 resource.interface(),
                 resource.name()
-            ))
+            )))
         })?;
-    let dynamic = match resource.ownership() {
-        ResourceOwnership::Own => ResourceDynamic::new_own(resource.id(), definition.runtime_type),
-        ResourceOwnership::Borrow => {
-            ResourceDynamic::new_borrow(resource.id(), definition.runtime_type)
-        }
-    };
+    if expected.ty != ResourceType::host_dynamic(definition.runtime_type) {
+        return Err(wasmtime::Error::new(CallError::refused(format!(
+            "resource `{}/{}` does not match the resource type declared by the call",
+            resource.interface(),
+            resource.name()
+        ))));
+    }
+    // Constructing a Wasmtime borrow is valid here, but registering it in the host table requires
+    // a canonical call scope that does not exist until Wasmtime lowers the declared borrow.
+    let dynamic = ResourceDynamic::new_own(resource.id(), definition.runtime_type);
     let dynamic = dynamic.try_into_resource_any(store.as_context_mut())?;
-    if resource.ownership() == ResourceOwnership::Own {
+    if expected.ownership == ResourceOwnership::Own {
         store
             .as_context_mut()
             .data_mut()

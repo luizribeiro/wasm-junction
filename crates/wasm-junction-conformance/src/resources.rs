@@ -14,6 +14,7 @@ pub struct ResourceHost(Arc<ResourceProvider>);
 impl Default for ResourceHost {
     fn default() -> Self {
         Self(Arc::new(ResourceProvider {
+            files: ResourceTable::new(RESOURCE_HOST, "file"),
             sessions: ResourceTable::new(RESOURCE_HOST, "session"),
             active: AtomicUsize::new(0),
         }))
@@ -33,6 +34,39 @@ impl ResourceHost {
         self.0.active.load(Ordering::Relaxed)
     }
 
+    /// Creates a provider-owned session for a host-to-guest export call.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CallError`] when the resource id space is exhausted.
+    pub fn open(&self, user: impl Into<String>) -> Result<wasm_junction::Resource, CallError> {
+        self.insert(&self.0.sessions, user.into())
+    }
+
+    /// Creates a provider-owned file for resource-type mismatch checks.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CallError`] when the resource id space is exhausted.
+    pub fn open_file(&self, name: impl Into<String>) -> Result<wasm_junction::Resource, CallError> {
+        self.insert(&self.0.files, name.into())
+    }
+
+    /// Returns an owned session to the provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CallError`] when the resource was already returned or dropped.
+    pub fn close(&self, resource: &wasm_junction::Resource) -> Result<(), CallError> {
+        if resource.name() == "file" {
+            drop(self.0.files.take(resource)?);
+        } else {
+            drop(self.0.sessions.take(resource)?);
+        }
+        self.0.active.fetch_sub(1, Ordering::Relaxed);
+        Ok(())
+    }
+
     /// Reads a session directly to verify stale-id failures in conformance tests.
     ///
     /// # Errors
@@ -44,9 +78,20 @@ impl ResourceHost {
             .sessions
             .with(&resource, |user| format!("profile:{user}"))
     }
+
+    fn insert(
+        &self,
+        table: &ResourceTable<String>,
+        value: String,
+    ) -> Result<wasm_junction::Resource, CallError> {
+        let resource = table.insert(value)?;
+        self.0.active.fetch_add(1, Ordering::Relaxed);
+        Ok(resource)
+    }
 }
 
 struct ResourceProvider {
+    files: ResourceTable<String>,
     sessions: ResourceTable<String>,
     active: AtomicUsize,
 }
@@ -63,8 +108,7 @@ impl Provider for ResourceHost {
                     let [Val::String(user)] = call.args.as_slice() else {
                         return Err(CallError::trap("session constructor expects a user"));
                     };
-                    let resource = self.0.sessions.insert(user.clone())?;
-                    self.0.active.fetch_add(1, Ordering::Relaxed);
+                    let resource = self.open(user.clone())?;
                     Ok(vec![Val::Resource(resource)])
                 }
                 "[method]session.profile" => {
@@ -85,9 +129,7 @@ impl Provider for ResourceHost {
     }
 
     fn drop_resource(&self, resource: wasm_junction::Resource) -> Result<(), CallError> {
-        drop(self.0.sessions.take(&resource)?);
-        self.0.active.fetch_sub(1, Ordering::Relaxed);
-        Ok(())
+        self.close(&resource)
     }
 }
 

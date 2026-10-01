@@ -1,6 +1,8 @@
 package example:resources@1.0.0;
 
 interface host {
+    resource file;
+
     resource session {
         constructor(user: string);
         profile: func() -> string;
@@ -8,8 +10,13 @@ interface host {
 }
 
 interface client {
+    use host.{file, session};
+
     run: func(trap: bool) -> string;
     retain: func() -> string;
+    inspect: func(value: borrow<session>) -> string;
+    round-trip-file: func(value: file) -> file;
+    round-trip: func(value: session) -> session;
 }
 
 world resource-client {

@@ -1,5 +1,11 @@
-use wasm_junction_core::{Resource, Val};
-use wasmtime::component::{ResourceAny, Val as WasmtimeVal};
+use wasm_junction_core::{Resource, ResourceOwnership, Val};
+use wasmtime::component::{ResourceAny, ResourceType, Type, Val as WasmtimeVal};
+
+#[derive(Clone, Copy)]
+pub(crate) struct ExpectedResource {
+    pub(crate) ownership: ResourceOwnership,
+    pub(crate) ty: ResourceType,
+}
 
 pub(crate) fn from_wasmtime(
     value: WasmtimeVal,
@@ -64,7 +70,11 @@ pub(crate) fn from_wasmtime(
 
 pub(crate) fn to_wasmtime(
     value: Val,
-    resource: &mut impl FnMut(Resource) -> Result<ResourceAny, wasmtime::Error>,
+    expected: Option<&Type>,
+    resource: &mut impl FnMut(
+        Resource,
+        Option<ExpectedResource>,
+    ) -> Result<ResourceAny, wasmtime::Error>,
 ) -> Result<WasmtimeVal, wasmtime::Error> {
     match value {
         Val::Bool(value) => Ok(WasmtimeVal::Bool(value)),
@@ -80,48 +90,126 @@ pub(crate) fn to_wasmtime(
         Val::F64(value) => Ok(WasmtimeVal::Float64(value)),
         Val::Char(value) => Ok(WasmtimeVal::Char(value)),
         Val::String(value) => Ok(WasmtimeVal::String(value)),
-        Val::List(values) => convert_values(values, resource).map(WasmtimeVal::List),
-        Val::Tuple(values) => convert_values(values, resource).map(WasmtimeVal::Tuple),
+        Val::List(values) => {
+            let ty = list_element_type(expected);
+            convert_values(values, ty.as_ref(), resource).map(WasmtimeVal::List)
+        }
+        Val::Tuple(values) => {
+            let types = match expected {
+                Some(Type::Tuple(ty)) => ty.types().collect(),
+                _ => Vec::new(),
+            };
+            values
+                .into_iter()
+                .enumerate()
+                .map(|(index, value)| to_wasmtime(value, types.get(index), resource))
+                .collect::<Result<_, _>>()
+                .map(WasmtimeVal::Tuple)
+        }
         Val::Record(fields) => fields
             .into_iter()
-            .map(|(name, value)| Ok((name, to_wasmtime(value, resource)?)))
+            .map(|(name, value)| {
+                let ty = match expected {
+                    Some(Type::Record(ty)) => ty
+                        .fields()
+                        .find(|field| field.name == name)
+                        .map(|field| field.ty),
+                    _ => None,
+                };
+                Ok((name, to_wasmtime(value, ty.as_ref(), resource)?))
+            })
             .collect::<Result<_, _>>()
             .map(WasmtimeVal::Record),
-        Val::Variant { case, value } => Ok(WasmtimeVal::Variant(
-            case,
-            value
-                .map(|value| to_wasmtime(*value, resource).map(Box::new))
-                .transpose()?,
-        )),
+        Val::Variant { case, value } => {
+            let ty = match expected {
+                Some(Type::Variant(ty)) => ty
+                    .cases()
+                    .find(|candidate| candidate.name == case)
+                    .and_then(|case| case.ty),
+                _ => None,
+            };
+            Ok(WasmtimeVal::Variant(
+                case,
+                value
+                    .map(|value| to_wasmtime(*value, ty.as_ref(), resource).map(Box::new))
+                    .transpose()?,
+            ))
+        }
         Val::Enum(case) => Ok(WasmtimeVal::Enum(case)),
         Val::Flags(names) => Ok(WasmtimeVal::Flags(names)),
-        Val::Option(value) => Ok(WasmtimeVal::Option(
-            value
-                .map(|value| to_wasmtime(*value, resource).map(Box::new))
-                .transpose()?,
-        )),
+        Val::Option(value) => {
+            let ty = match expected {
+                Some(Type::Option(ty)) => Some(ty.ty()),
+                _ => None,
+            };
+            Ok(WasmtimeVal::Option(
+                value
+                    .map(|value| to_wasmtime(*value, ty.as_ref(), resource).map(Box::new))
+                    .transpose()?,
+            ))
+        }
         Val::Result(result) => Ok(WasmtimeVal::Result(match result {
             Ok(value) => Ok(value
-                .map(|value| to_wasmtime(*value, resource).map(Box::new))
+                .map(|value| {
+                    let ty = match expected {
+                        Some(Type::Result(ty)) => ty.ok(),
+                        _ => None,
+                    };
+                    to_wasmtime(*value, ty.as_ref(), resource).map(Box::new)
+                })
                 .transpose()?),
             Err(value) => Err(value
-                .map(|value| to_wasmtime(*value, resource).map(Box::new))
+                .map(|value| {
+                    let ty = match expected {
+                        Some(Type::Result(ty)) => ty.err(),
+                        _ => None,
+                    };
+                    to_wasmtime(*value, ty.as_ref(), resource).map(Box::new)
+                })
                 .transpose()?),
         })),
-        Val::Resource(value) => resource(value).map(WasmtimeVal::Resource),
+        Val::Resource(value) => {
+            resource(value, expected_resource(expected)).map(WasmtimeVal::Resource)
+        }
         other => Err(wasmtime::Error::msg(format!(
             "unsupported framework value: {other:?}"
         ))),
     }
 }
 
+fn list_element_type(expected: Option<&Type>) -> Option<Type> {
+    match expected {
+        Some(Type::List(ty)) => Some(ty.ty()),
+        Some(Type::FixedLengthList(ty)) => Some(ty.ty()),
+        _ => None,
+    }
+}
+
+fn expected_resource(expected: Option<&Type>) -> Option<ExpectedResource> {
+    match expected {
+        Some(Type::Own(ty)) => Some(ExpectedResource {
+            ownership: ResourceOwnership::Own,
+            ty: *ty,
+        }),
+        Some(Type::Borrow(ty)) => Some(ExpectedResource {
+            ownership: ResourceOwnership::Borrow,
+            ty: *ty,
+        }),
+        _ => None,
+    }
+}
+
 fn convert_values(
     values: Vec<Val>,
-    resource: &mut impl FnMut(Resource) -> Result<ResourceAny, wasmtime::Error>,
+    expected: Option<&Type>,
+    resource: &mut impl FnMut(
+        Resource,
+        Option<ExpectedResource>,
+    ) -> Result<ResourceAny, wasmtime::Error>,
 ) -> Result<Vec<WasmtimeVal>, wasmtime::Error> {
     values
         .into_iter()
-        .map(|value| to_wasmtime(value, resource))
+        .map(|value| to_wasmtime(value, expected, resource))
         .collect()
 }
 
@@ -132,7 +220,7 @@ mod tests {
     use wasm_junction_core::Resource;
 
     fn round_trip(value: Val) -> Val {
-        let value = to_wasmtime(value, &mut |_| unreachable!()).unwrap();
+        let value = to_wasmtime(value, None, &mut |_, _| unreachable!()).unwrap();
         from_wasmtime(value, &mut |_| unreachable!()).unwrap()
     }
 
@@ -232,7 +320,7 @@ mod tests {
             "session",
             4,
         )))));
-        let error = to_wasmtime(value, &mut |resource| {
+        let error = to_wasmtime(value, None, &mut |resource, _| {
             Err(wasmtime::Error::msg(format!(
                 "saw {}/{}:{}",
                 resource.interface(),

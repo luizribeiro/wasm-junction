@@ -8,7 +8,7 @@ mod bindings {
     });
 }
 
-use bindings::example::resources::host::Session;
+use bindings::example::resources::host::{File, Session};
 
 struct Component;
 
@@ -29,6 +29,18 @@ impl bindings::exports::example::resources::client::Guest for Component {
         core::mem::forget(session);
         core::mem::forget(Session::new("cleanup"));
         profile
+    }
+
+    fn inspect(value: &Session) -> String {
+        value.profile()
+    }
+
+    fn round_trip_file(value: File) -> File {
+        value
+    }
+
+    fn round_trip(value: Session) -> Session {
+        value
     }
 }
 

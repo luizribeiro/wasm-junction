@@ -8,13 +8,13 @@ use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
 
 use wasm_junction::{
-    App, Call, CallError, CallErrorKind, Caller, Component, Engine, Middleware, Next, Val, Vals,
-    WasiConfig,
+    App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Caller, Component, Engine,
+    Middleware, Next, Provided, Provider, Resource, Val, Vals, WasiConfig,
 };
 use wasm_junction_conformance::{
-    CYCLE_A, Fixture, FixtureHost, RESOURCE_CLIENT, ResourceHost, RoutedFixture, RoutedHost,
-    SUMMARIZER, Trace, WRITER, component, cycle_a_component, cycle_b_component, resource_component,
-    run, run_routed, sample_note, translator_component, writer_component,
+    CYCLE_A, Fixture, FixtureHost, RESOURCE_CLIENT, RESOURCE_HOST, ResourceHost, RoutedFixture,
+    RoutedHost, SUMMARIZER, Trace, WRITER, component, cycle_a_component, cycle_b_component,
+    resource_component, run, run_routed, sample_note, translator_component, writer_component,
 };
 use wasm_junction_wasmtime::WasmtimeEngine;
 
@@ -123,6 +123,135 @@ fn completed_invocation_cleans_up_retained_host_resources() {
         block_on(app.call("resource-client", RESOURCE_CLIENT, "retain", Vec::new())).unwrap();
     assert_eq!(result, [Val::from("profile:Grace")]);
     assert_eq!(host.active_resources(), 0);
+}
+
+#[test]
+fn resources_cross_guest_exports_as_borrows_and_owned_values() {
+    let host = ResourceHost::default();
+    let app = App::builder()
+        .engine(WasmtimeEngine::new().unwrap())
+        .provide(host.clone().provided())
+        .build()
+        .unwrap();
+    let component = Component::from_bytes(resource_component())
+        .unwrap()
+        .named("resource-client");
+    block_on(app.load(component)).unwrap();
+
+    let owned = host.open("Lin").unwrap();
+    let borrowed = wasm_junction::Resource::borrowed(owned.interface(), owned.name(), owned.id());
+    let inspected = block_on(app.call(
+        "resource-client",
+        RESOURCE_CLIENT,
+        "inspect",
+        vec![Val::Resource(borrowed)],
+    ))
+    .unwrap();
+    assert_eq!(inspected, [Val::from("profile:Lin")]);
+    assert_eq!(host.active_resources(), 1);
+
+    let borrowed = Resource::borrowed(owned.interface(), owned.name(), owned.id());
+    let error = block_on(app.call(
+        "resource-client",
+        RESOURCE_CLIENT,
+        "round-trip",
+        vec![Val::Resource(borrowed)],
+    ))
+    .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert!(error.to_string().contains("requires Own"), "{error}");
+    assert_eq!(host.active_resources(), 1);
+
+    let returned = block_on(app.call(
+        "resource-client",
+        RESOURCE_CLIENT,
+        "round-trip",
+        vec![Val::Resource(owned)],
+    ))
+    .unwrap();
+    let [Val::Resource(returned)] = returned.as_slice() else {
+        panic!("guest did not return the owned session");
+    };
+    assert_eq!(host.active_resources(), 1);
+    host.close(returned).unwrap();
+    assert_eq!(host.active_resources(), 0);
+
+    let file = host.open_file("notes.txt").unwrap();
+    let error = block_on(app.call(
+        "resource-client",
+        RESOURCE_CLIENT,
+        "round-trip",
+        vec![Val::Resource(file.clone())],
+    ))
+    .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert!(
+        error
+            .to_string()
+            .contains("does not match the resource type"),
+        "{error}"
+    );
+    assert_eq!(host.active_resources(), 1);
+    host.close(&file).unwrap();
+}
+
+#[derive(Clone)]
+struct WrongResourceResult(ResourceHost);
+
+impl Provider for WrongResourceResult {
+    fn call<'a>(
+        &'a self,
+        _context: &'a CallContext,
+        call: Call,
+    ) -> BoxFuture<'a, Result<Vals, CallError>> {
+        Box::pin(async move {
+            match call.function.as_ref() {
+                "[constructor]session" => Ok(vec![Val::Resource(self.0.open_file("wrong")?)]),
+                function => Err(CallError::unavailable(format!(
+                    "wrong resource host has no `{function}` function"
+                ))),
+            }
+        })
+    }
+
+    fn drop_resource(&self, resource: Resource) -> Result<(), CallError> {
+        self.0.close(&resource)
+    }
+}
+
+#[test]
+fn provider_resource_results_match_the_import_signature() {
+    let host = ResourceHost::default();
+    let app = App::builder()
+        .engine(WasmtimeEngine::new().unwrap())
+        .provide(Provided::new(
+            RESOURCE_HOST,
+            WrongResourceResult(host.clone()),
+        ))
+        .build()
+        .unwrap();
+    let component = Component::from_bytes(resource_component())
+        .unwrap()
+        .named("resource-client");
+    block_on(app.load(component)).unwrap();
+
+    let error = block_on(app.call(
+        "resource-client",
+        RESOURCE_CLIENT,
+        "run",
+        vec![Val::Bool(false)],
+    ))
+    .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert!(
+        error
+            .to_string()
+            .contains("does not match the resource type"),
+        "{error}"
+    );
+    assert_eq!(host.active_resources(), 1);
+    host.close(&Resource::owned(RESOURCE_HOST, "file", 0))
+        .unwrap();
 }
 
 #[test]
