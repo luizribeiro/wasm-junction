@@ -1,0 +1,19 @@
+package test:handles@1.0.0;
+
+interface summaries {
+  record note { title: string }
+  variant selection { one(string), all }
+
+  summarize: func(topic: string, note: note, selection: selection, ids: list<u32>, limit: u32) -> string;
+  accepted: func() -> result<string, string>;
+  rejected: func() -> result<string, string>;
+  f: func(value: option<string>) -> option<string>;
+  g: func(values: list<string>) -> list<string>;
+  inspect: func(outcome: result<string, u32>, pair: tuple<string, u32>);
+  %clone: func(value: string) -> string;
+  %from-app: func(value: string) -> string;
+  %with: func(value: string) -> string;
+  %within: func(value: string) -> string;
+}
+
+world plugin { export summaries; }

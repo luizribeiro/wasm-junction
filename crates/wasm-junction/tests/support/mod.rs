@@ -19,6 +19,9 @@ use wit_parser::{ManglingAndAbi, Resolve};
 /// The interface implemented by the handwritten notes fixtures.
 pub const NOTES: &str = "example:journal/notes@0.1.0";
 
+/// The generated-handle fixture interface.
+pub const HANDLE_SUMMARIES: &str = "test:handles/summaries@1.0.0";
+
 /// Builds a real component from inline WIT and a matching dummy core module.
 pub fn component_bytes(wit: &str, world_name: &str) -> Vec<u8> {
     component_bytes_from(&[("fixture.wit", wit)], world_name)
@@ -79,6 +82,9 @@ impl CompiledComponent for UnusedComponent {
         args: Vals,
     ) -> BoxFuture<'_, Result<Vals, CallError>> {
         Box::pin(async move {
+            if interface.as_ref() == HANDLE_SUMMARIES {
+                return handle_call(&function, args);
+            }
             if interface.as_ref() != "example:journal/summaries@0.1.0" {
                 return Err(CallError::trap("engine received an unresolved export"));
             }
@@ -97,6 +103,47 @@ impl CompiledComponent for UnusedComponent {
                 )
                 .await
         })
+    }
+}
+
+fn handle_call(function: &str, args: Vals) -> Result<Vals, CallError> {
+    match function {
+        "summarize" => {
+            let expected = vec![
+                Val::String("today".into()),
+                Val::Record(vec![("title".into(), Val::String("project".into()))]),
+                Val::Variant {
+                    case: "one".into(),
+                    value: Some(Box::new(Val::String("open".into()))),
+                },
+                Val::List(vec![Val::U32(2), Val::U32(4)]),
+                Val::U32(10),
+            ];
+            if args != expected {
+                return Err(CallError::trap("handle arguments were encoded incorrectly"));
+            }
+            Ok(vec![Val::String("summary".into())])
+        }
+        "accepted" => Ok(vec![Val::Result(Ok(Some(Box::new(Val::String(
+            "saved".into(),
+        )))))]),
+        "rejected" => Ok(vec![Val::Result(Err(Some(Box::new(Val::String(
+            "denied".into(),
+        )))))]),
+        "clone" | "f" | "from-app" | "g" | "with" | "within" => Ok(args),
+        "inspect" => {
+            let expected = vec![
+                Val::Result(Ok(Some(Box::new(Val::String("done".into()))))),
+                Val::Tuple(vec![Val::String("pair".into()), Val::U32(7)]),
+            ];
+            if args != expected {
+                return Err(CallError::trap(
+                    "borrowed arguments were encoded incorrectly",
+                ));
+            }
+            Ok(Vec::new())
+        }
+        _ => Err(CallError::trap("engine received the wrong function")),
     }
 }
 
