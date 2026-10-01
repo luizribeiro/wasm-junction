@@ -178,6 +178,39 @@ fn loaded_component_exports_satisfy_compatible_imports() {
 }
 
 #[test]
+fn component_imports_route_through_middleware() {
+    let trace = Arc::new(Mutex::new(Vec::new()));
+    let app = App::builder()
+        .engine(FakeEngine)
+        .middleware(Trace(trace.clone()))
+        .build()
+        .unwrap();
+    block_on(app.load(wit_component(TRANSLATOR_WIT, "service", "translator"))).unwrap();
+    let writer = Component::from_bytes(component_bytes_from(
+        &[
+            ("translator.wit", TRANSLATOR_API_WIT),
+            ("writer.wit", WRITER_WIT),
+        ],
+        "example:writer/writer@1.0.0",
+    ))
+    .unwrap()
+    .named("writer");
+    block_on(app.load(writer)).unwrap();
+
+    let result = block_on(app.call(
+        "writer",
+        "example:writer/article@1.0.0",
+        "write",
+        vec!["hello".into()],
+    ))
+    .unwrap();
+    assert_eq!(result, [wasm_junction::Val::from("translated: hello")]);
+    let calls = trace.lock().unwrap();
+    assert_eq!(calls[1].caller, Caller::Component(Arc::from("writer")));
+    assert_eq!(calls[1].callee.as_ref(), "translator");
+}
+
+#[test]
 fn typed_handle_queries_report_names_and_export_mismatches() {
     let app = App::builder()
         .engine(FakeEngine)

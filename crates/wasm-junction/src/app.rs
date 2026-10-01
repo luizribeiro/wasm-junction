@@ -67,8 +67,10 @@ impl App {
         let mut missing = imports
             .iter()
             .filter(|import| {
-                matches!(self.resolve_import(import), Err(ResolveError::Missing))
-                    && !self.0.engine.supports_import(import)
+                matches!(
+                    self.resolve_import(&name, import),
+                    Err(ResolveError::Missing)
+                ) && !self.0.engine.supports_import(import)
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -203,15 +205,47 @@ impl App {
         function: Arc<str>,
         args: Vals,
     ) -> Result<Vals, CallError> {
-        let (provided_interface, provider) = self
-            .find_provider(&interface)
-            .ok_or_else(|| CallError::unavailable(format!("no provider for `{interface}`")))?;
+        let (destination, resolved_interface, target): (_, _, Arc<dyn CallTarget>) =
+            match self.resolve_import(&caller, &interface) {
+                Ok(ResolvedImport::Host {
+                    interface,
+                    provider,
+                }) => (
+                    Arc::from("host"),
+                    Arc::from(interface),
+                    Arc::new(HostTarget { provider, context }),
+                ),
+                Ok(ResolvedImport::Component {
+                    name,
+                    interface,
+                    compiled,
+                }) => (
+                    name.clone(),
+                    interface,
+                    Arc::new(ComponentTarget {
+                        compiled,
+                        imports: Arc::new(self.clone()),
+                        context,
+                        component: name,
+                    }),
+                ),
+                Err(ResolveError::Missing) => {
+                    return Err(CallError::unavailable(format!(
+                        "no provider for `{interface}`"
+                    )));
+                }
+                Err(ResolveError::Ambiguous) => {
+                    return Err(CallError::refused(format!(
+                        "more than one provider for `{interface}`"
+                    )));
+                }
+            };
         self.dispatch(
-            Arc::new(HostTarget { provider, context }),
+            target,
             Call::new(
                 Caller::Component(caller),
-                "host",
-                provided_interface,
+                destination,
+                resolved_interface,
                 function,
                 args,
             ),
@@ -254,30 +288,38 @@ impl App {
         }
     }
 
-    fn find_provider(&self, requested: &str) -> Option<(&'static str, Arc<dyn Provider>)> {
-        self.0
-            .providers
-            .iter()
-            .find(|(provided, _)| interfaces_compatible(requested, provided))
-            .map(|(interface, provider)| (*interface, provider.clone()))
-    }
-
-    fn resolve_import(&self, requested: &str) -> Result<(), ResolveError> {
-        let host_count = self
+    fn resolve_import(
+        &self,
+        caller: &str,
+        requested: &str,
+    ) -> Result<ResolvedImport, ResolveError> {
+        let hosts = self
             .0
             .providers
-            .keys()
-            .filter(|provided| interfaces_compatible(requested, provided))
-            .count();
-        let component_count = self
+            .iter()
+            .filter(|(provided, _)| interfaces_compatible(requested, provided))
+            .map(|(interface, provider)| ResolvedImport::Host {
+                interface,
+                provider: provider.clone(),
+            });
+        let components = self
             .lock_components()
             .values()
-            .filter(|component| component.exports_interface(requested))
-            .count();
-        match host_count + component_count {
-            0 => Err(ResolveError::Missing),
-            1 => Ok(()),
-            _ => Err(ResolveError::Ambiguous),
+            .filter(|component| component.name.as_ref() != caller)
+            .filter_map(|component| {
+                Some(ResolvedImport::Component {
+                    name: component.name.clone(),
+                    interface: component.export_name(requested)?,
+                    compiled: component.compiled.clone(),
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut candidates = hosts.chain(components);
+        let candidate = candidates.next().ok_or(ResolveError::Missing)?;
+        if candidates.next().is_some() {
+            Err(ResolveError::Ambiguous)
+        } else {
+            Ok(candidate)
         }
     }
 
@@ -292,6 +334,18 @@ impl App {
 enum ResolveError {
     Missing,
     Ambiguous,
+}
+
+enum ResolvedImport {
+    Host {
+        interface: &'static str,
+        provider: Arc<dyn Provider>,
+    },
+    Component {
+        name: Arc<str>,
+        interface: Arc<str>,
+        compiled: Arc<dyn CompiledComponent>,
+    },
 }
 
 impl ImportDispatcher for App {

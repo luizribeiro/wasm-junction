@@ -85,6 +85,23 @@ impl CompiledComponent for UnusedComponent {
         args: Vals,
     ) -> BoxFuture<'_, Result<Vals, CallError>> {
         Box::pin(async move {
+            if interface.as_ref() == "example:writer/article@1.0.0" {
+                return imports
+                    .call(
+                        context,
+                        component,
+                        Arc::from("example:translate/translator@0.1.0"),
+                        Arc::from("translate"),
+                        args,
+                    )
+                    .await;
+            }
+            if interface.as_ref() == "example:translate/translator@0.1.7" {
+                let [wasm_junction::Val::String(text)] = args.as_slice() else {
+                    return Err(CallError::trap("translator expected one string"));
+                };
+                return Ok(vec![format!("translated: {text}").into()]);
+            }
             if interface.as_ref() == RESERVED_HOST {
                 return imports
                     .call(context, component, interface, function, args)
