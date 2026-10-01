@@ -1067,6 +1067,13 @@ pub enum ReloadError {
     ResourceExports(Vec<String>),
     /// One or more imported interfaces have no unique provider.
     MissingImports(MissingImports),
+    /// The replacement drops exports used by other components or live handles.
+    Breaking {
+        /// The component being replaced.
+        component: String,
+        /// Human-readable descriptions of each dependent.
+        dependents: Vec<String>,
+    },
     /// Replacing the component would make existing imports ambiguous.
     WouldMakeAmbiguous {
         /// Imports whose resolution would be ambiguous.
@@ -1086,6 +1093,14 @@ impl Display for ReloadError {
                 interfaces.join(", ")
             ),
             Self::MissingImports(error) => Display::fmt(error, formatter),
+            Self::Breaking {
+                component,
+                dependents,
+            } => write!(
+                formatter,
+                "breaking reload of `{component}` refused; dependents: {}",
+                dependents.join(", ")
+            ),
             Self::WouldMakeAmbiguous { issues } => write!(
                 formatter,
                 "reload would make imports ambiguous: {}",
@@ -1107,6 +1122,7 @@ impl Error for ReloadError {
             Self::Compile(error) => Some(error),
             Self::UnknownComponent(_)
             | Self::ResourceExports(_)
+            | Self::Breaking { .. }
             | Self::WouldMakeAmbiguous { .. } => None,
         }
     }

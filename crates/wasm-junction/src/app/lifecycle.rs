@@ -67,6 +67,13 @@ impl App {
             .get(name)
             .ok_or_else(|| ReloadError::UnknownComponent(name.to_owned()))?;
         let links = retained_links(loaded, imports);
+        let dependents = breaking_dependents(&self.0.providers, components, name, exports);
+        if !dependents.is_empty() {
+            return Err(ReloadError::Breaking {
+                component: name.to_owned(),
+                dependents,
+            });
+        }
         let mut missing = Vec::new();
         let mut issues = Vec::new();
         for import in imports {
@@ -137,6 +144,46 @@ impl App {
         }
         Ok(())
     }
+}
+
+fn breaking_dependents(
+    providers: &HashMap<&'static str, Arc<dyn crate::Provider>>,
+    components: &std::collections::BTreeMap<String, LoadedComponent>,
+    name: &str,
+    exports: &[String],
+) -> Vec<String> {
+    let mut dependents = Vec::new();
+    for (consumer, component) in components {
+        if consumer == name {
+            continue;
+        }
+        for (interface, provider) in &component.links {
+            if provider == name
+                && !exports
+                    .iter()
+                    .any(|export| interfaces_compatible(interface, export))
+            {
+                dependents.push(format!("{consumer} links `{interface}`"));
+            }
+        }
+        for interface in &component.generation.imports {
+            if component.links.contains_key(interface.as_ref()) {
+                continue;
+            }
+            let candidates =
+                resolution_candidates_excluding(providers, components, interface, Some(consumer));
+            if candidates == [Candidate::Component(name.to_owned())]
+                && !exports
+                    .iter()
+                    .any(|export| interfaces_compatible(interface, export))
+            {
+                dependents.push(format!("{consumer} imports `{interface}`"));
+            }
+        }
+    }
+    dependents.sort();
+    dependents.dedup();
+    dependents
 }
 
 fn prospective_candidates(

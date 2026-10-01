@@ -148,3 +148,36 @@ fn reload_refuses_to_make_an_existing_import_ambiguous() {
     };
     assert_eq!(issues[0].component, "writer");
 }
+
+#[test]
+fn breaking_reload_names_component_dependents() {
+    let app = App::builder().engine(FakeEngine).build().unwrap();
+    block_on(
+        app.load(
+            Component::from_bytes(component_bytes(TRANSLATOR_V0_WIT, "service"))
+                .unwrap()
+                .named("translator"),
+        ),
+    )
+    .unwrap();
+    block_on(app.load(writer().named("linked-writer"))).unwrap();
+    block_on(app.load(writer().named("resolved-writer"))).unwrap();
+    app.link(
+        "linked-writer",
+        "example:translate/translator@0.1.0",
+        "translator",
+    )
+    .unwrap();
+
+    let replacement = || Component::from_bytes(component_bytes(MARKER_WIT, "service")).unwrap();
+    let error = block_on(app.reload("translator", replacement())).unwrap_err();
+    let ReloadError::Breaking { dependents, .. } = error else {
+        panic!("expected a breaking reload");
+    };
+    assert!(dependents.iter().any(|item| item.contains("linked-writer")));
+    assert!(
+        dependents
+            .iter()
+            .any(|item| item.contains("resolved-writer"))
+    );
+}
