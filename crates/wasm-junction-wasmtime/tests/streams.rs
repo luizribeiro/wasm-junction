@@ -29,6 +29,10 @@ fn host_streams_reach_the_guest_and_close_on_early_drop() {
                 .await
                 .unwrap();
             assert_eq!(output, [Val::from("Have a good day.")]);
+            app.call("streams", STREAM_PROBE, "audit", Vec::new())
+                .await
+                .unwrap();
+            assert_eq!(host.audit(), b"opened note\n");
             app.call("streams", STREAM_PROBE, "drop-early", Vec::new())
                 .await
                 .unwrap();

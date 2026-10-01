@@ -9,7 +9,7 @@ use wasmtime::component::{
 };
 
 use crate::engine::{StoreData, lift_resource, lower_resource};
-use crate::streams::lower_stream;
+use crate::streams::{lift_stream, lower_stream};
 use crate::values::{from_wasmtime, to_wasmtime};
 
 pub(crate) fn define_imports(
@@ -130,9 +130,15 @@ fn define_concurrent(
         let result_types = ty.results().collect::<Vec<_>>();
         Box::pin(async move {
             let args = convert_params(params, &mut |value| {
-                from_wasmtime(value, &mut |resource| {
-                    accessor.with(|store| lift_resource(resource, store))
-                })
+                if let WasmtimeVal::Stream(stream) = value {
+                    accessor
+                        .with(|store| lift_stream(stream, store))
+                        .map(Val::Stream)
+                } else {
+                    from_wasmtime(value, &mut |resource| {
+                        accessor.with(|store| lift_resource(resource, store))
+                    })
+                }
             })?;
             let (imports, context, component) = accessor.with(|mut store| {
                 let data = store.get();
@@ -171,9 +177,13 @@ fn define_plain(
         let result_types = ty.results().collect::<Vec<_>>();
         Box::new(async move {
             let args = convert_params(params, &mut |value| {
-                from_wasmtime(value, &mut |resource| {
-                    lift_resource(resource, store.as_context_mut())
-                })
+                if let WasmtimeVal::Stream(stream) = value {
+                    lift_stream(stream, store.as_context_mut()).map(Val::Stream)
+                } else {
+                    from_wasmtime(value, &mut |resource| {
+                        lift_resource(resource, store.as_context_mut())
+                    })
+                }
             })?;
             let (imports, context, component) = {
                 let mut store = store.as_context_mut();

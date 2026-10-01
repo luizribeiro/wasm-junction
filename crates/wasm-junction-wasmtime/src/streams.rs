@@ -2,13 +2,38 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use wasm_junction_core::{ChannelDirection, ImportDispatcher, InputStream, StreamHandle};
+use wasm_junction_core::{
+    ChannelDirection, ImportDispatcher, InputStream, OutputStream, OutputStreamWriter, StreamHandle,
+};
 use wasmtime::component::{
-    Destination, StreamAny, StreamProducer, StreamReader, StreamResult, VecBuffer,
+    Destination, Source, StreamAny, StreamConsumer, StreamProducer, StreamReader, StreamResult,
+    VecBuffer,
 };
 use wasmtime::{AsContextMut, StoreContextMut};
 
 use crate::engine::StoreData;
+
+pub(crate) fn lift_stream(
+    stream: StreamAny,
+    mut store: impl AsContextMut<Data = StoreData>,
+) -> Result<StreamHandle, wasmtime::Error> {
+    let reader = stream.try_into_stream_reader::<u8>()?;
+    let (writer, output) = OutputStream::channel();
+    let handle = StreamHandle::from(output);
+    let id = handle.id();
+    let imports = store.as_context().data().imports.clone();
+    imports.channel_open(id, ChannelDirection::GuestToHost);
+    reader.pipe(
+        store.as_context_mut(),
+        CoreConsumer {
+            writer: Some(writer),
+            id,
+            imports,
+            closed: false,
+        },
+    )?;
+    Ok(handle)
+}
 
 pub(crate) fn lower_stream(
     handle: StreamHandle,
@@ -98,6 +123,71 @@ impl StreamProducer<StoreData> for CoreProducer {
                 Poll::Ready(Err(wasmtime::Error::msg(error.to_string())))
             }
             Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+struct CoreConsumer {
+    writer: Option<OutputStreamWriter>,
+    id: u64,
+    imports: Arc<dyn ImportDispatcher>,
+    closed: bool,
+}
+
+impl CoreConsumer {
+    fn close(&mut self) {
+        self.writer.take();
+        if !self.closed {
+            self.closed = true;
+            self.imports
+                .channel_close(self.id, ChannelDirection::GuestToHost);
+        }
+    }
+}
+
+impl Drop for CoreConsumer {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+impl StreamConsumer<StoreData> for CoreConsumer {
+    type Item = u8;
+
+    fn poll_consume(
+        self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        store: StoreContextMut<'_, StoreData>,
+        source: Source<'_, Self::Item>,
+        finish: bool,
+    ) -> Poll<Result<StreamResult, wasmtime::Error>> {
+        let this = self.get_mut();
+        let mut source = source.as_direct(store);
+        let bytes = source.remaining().to_vec();
+        source.mark_read(bytes.len());
+        if !bytes.is_empty() {
+            let polled = {
+                let Some(writer) = &this.writer else {
+                    return Poll::Ready(Ok(StreamResult::Dropped));
+                };
+                let future = writer.write(bytes);
+                let mut future = std::pin::pin!(future);
+                future.as_mut().poll(context)
+            };
+            match polled {
+                Poll::Ready(Ok(())) => {}
+                Poll::Ready(Err(_)) => {
+                    this.close();
+                    return Poll::Ready(Ok(StreamResult::Dropped));
+                }
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+        if finish {
+            this.close();
+            Poll::Ready(Ok(StreamResult::Dropped))
+        } else {
+            Poll::Ready(Ok(StreamResult::Completed))
         }
     }
 }
