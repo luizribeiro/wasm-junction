@@ -92,13 +92,13 @@ impl App {
         Ok(())
     }
 
-    /// Compiles and loads a set of components.
+    /// Compiles and loads a set of components as one atomic operation.
     /// Imports may resolve to any component in the set, regardless of iteration order.
     ///
     /// # Errors
     ///
-    /// Returns [`LoadError`] when a component is unnamed, resolution would fail or become
-    /// ambiguous, or an engine compilation fails.
+    /// Returns [`LoadError`] without loading any component when a component is unnamed,
+    /// resolution would fail or become ambiguous, or an engine compilation fails.
     pub async fn load_all(
         &self,
         components: impl IntoIterator<Item = Component>,
@@ -114,14 +114,20 @@ impl App {
             });
         }
         self.validate_batch(&pending, &self.lock_components())?;
-        for component in pending {
-            let compiled = self
-                .0
-                .engine
-                .compile(component.bytes.clone(), self.0.wasi.clone())
-                .await
-                .map_err(LoadError::Compile)?;
-            self.lock_components().insert(
+        let mut compiled = Vec::with_capacity(pending.len());
+        for component in &pending {
+            compiled.push(
+                self.0
+                    .engine
+                    .compile(component.bytes.clone(), self.0.wasi.clone())
+                    .await
+                    .map_err(LoadError::Compile)?,
+            );
+        }
+        let mut loaded = self.lock_components();
+        self.validate_batch(&pending, &loaded)?;
+        for (component, compiled) in pending.into_iter().zip(compiled) {
+            loaded.insert(
                 component.name.clone(),
                 LoadedComponent {
                     name: Arc::from(component.name),

@@ -334,6 +334,31 @@ fn load_all_refuses_batch_providers_that_ambiguate_a_batch_import() {
 }
 
 #[test]
+fn load_all_inserts_nothing_when_a_later_compile_fails() {
+    let app = App::builder()
+        .engine(FailingEngine::after(1))
+        .build()
+        .unwrap();
+    let first = wit_component(TRANSLATOR_WIT, "service", "first");
+    let second = wit_component(TRANSLATOR_WIT, "service", "second");
+
+    assert!(matches!(
+        block_on(app.load_all([first, second])),
+        Err(LoadError::Compile(error)) if error.to_string() == "invalid adapter"
+    ));
+    for name in ["first", "second"] {
+        let error = block_on(app.call(
+            name,
+            "example:translate/translator@0.1.7",
+            "translate",
+            vec!["hello".into()],
+        ))
+        .unwrap_err();
+        assert_eq!(error.kind(), CallErrorKind::Unavailable);
+    }
+}
+
+#[test]
 fn typed_handle_queries_report_names_and_export_mismatches() {
     let app = App::builder()
         .engine(FakeEngine)
