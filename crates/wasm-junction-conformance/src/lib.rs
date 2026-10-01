@@ -11,6 +11,10 @@ mod trace;
 
 wasm_junction::bindgen!({ path: "wit" });
 
+mod stream_bindings {
+    wasm_junction::bindgen!({ path: "stream-wit", interfaces: ["example:streams/host"] });
+}
+
 pub use host::{FixtureHost, RoutedHost, sample_note, sample_summary};
 pub use resources::ResourceHost;
 pub use runner::{
