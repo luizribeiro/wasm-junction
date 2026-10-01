@@ -140,6 +140,11 @@ impl Generator<'_> {
         } else {
             invoke
         };
+        let output = if let Some(ty) = function.result {
+            self.provider_output(ty, invoke, wit_name)?
+        } else {
+            invoke
+        };
         Ok(quote! {
             #wit_name => {
                 let #call { #(#bindings,)* } =
@@ -147,7 +152,7 @@ impl Generator<'_> {
                         &__wasm_junction_call.args,
                     )?;
                 #(#preparations)*
-                Ok(<#call as ::wasm_junction::TypedCall>::output(#invoke))
+                Ok(<#call as ::wasm_junction::TypedCall>::output(#output))
             }
         })
     }
@@ -229,17 +234,68 @@ impl Generator<'_> {
         }
     }
 
+    fn provider_output(
+        &self,
+        ty: Type,
+        value: TokenStream,
+        item: &str,
+    ) -> syn::Result<TokenStream> {
+        let Type::Id(id) = ty else { return Ok(value) };
+        match &self.resolve.types[id].kind {
+            TypeDefKind::Type(ty) => self.provider_output(*ty, value, item),
+            TypeDefKind::Handle(_) => {
+                let resource = self
+                    .direct_resource(ty)?
+                    .ok_or_else(|| Self::unsupported(item, "resource result"))?;
+                if resource.borrowed {
+                    return Err(Self::unsupported(item, "borrowed resource result"));
+                }
+                let table = resource.table;
+                Ok(quote!(self.#table.insert(#value)?))
+            }
+            TypeDefKind::Option(ty) => {
+                let Some(resource) = self.direct_resource(*ty)? else {
+                    return Ok(value);
+                };
+                if resource.borrowed {
+                    return Err(Self::unsupported(item, "borrowed resource result"));
+                }
+                let table = resource.table;
+                Ok(quote!(#value.map(|value| self.#table.insert(value)).transpose()?))
+            }
+            TypeDefKind::Result(result) => {
+                let (ok, err) = self.direct_result_resources(result.ok, result.err)?;
+                let ok = Self::output_arm(ok.as_ref(), true, item)?;
+                let err = Self::output_arm(err.as_ref(), false, item)?;
+                Ok(quote!(match #value { #ok, #err }))
+            }
+            _ => Ok(value),
+        }
+    }
+
+    fn output_arm(
+        resource: Option<&ResourceUse>,
+        ok: bool,
+        item: &str,
+    ) -> syn::Result<TokenStream> {
+        let constructor = if ok { quote!(Ok) } else { quote!(Err) };
+        let Some(resource) = resource else {
+            return Ok(quote!(#constructor(value) => #constructor(value)));
+        };
+        if resource.borrowed {
+            return Err(Self::unsupported(item, "borrowed resource result"));
+        }
+        let table = &resource.table;
+        Ok(quote!(#constructor(value) => #constructor(self.#table.insert(value)?)))
+    }
+
     fn map_result(
         &self,
         ok: Option<Type>,
         err: Option<Type>,
         name: &proc_macro2::Ident,
     ) -> syn::Result<(TokenStream, TokenStream)> {
-        let ok = ok.map(|ty| self.direct_resource(ty)).transpose()?.flatten();
-        let err = err
-            .map(|ty| self.direct_resource(ty))
-            .transpose()?
-            .flatten();
+        let (ok, err) = self.direct_result_resources(ok, err)?;
         let ok_store = Self::borrowed_result(ok.as_ref(), name, "ok")?;
         let err_store = Self::borrowed_result(err.as_ref(), name, "err")?;
         let preparations = [&ok_store, &err_store]
@@ -251,6 +307,15 @@ impl Generator<'_> {
             quote!(#(#preparations)*),
             quote!(match #name { #ok_arm, #err_arm }),
         ))
+    }
+
+    fn direct_result_resources(
+        &self,
+        ok: Option<Type>,
+        err: Option<Type>,
+    ) -> syn::Result<(Option<ResourceUse>, Option<ResourceUse>)> {
+        let direct = |ty: Option<Type>| ty.map(|ty| self.direct_resource(ty)).transpose();
+        Ok((direct(ok)?.flatten(), direct(err)?.flatten()))
     }
 
     fn borrowed_result(
@@ -358,5 +423,6 @@ mod tests {
         assert!(tokens.contains("as_deref"), "{tokens}");
         assert!(tokens.contains("value_ok_borrow"), "{tokens}");
         assert!(tokens.contains("match value"), "{tokens}");
+        assert!(tokens.contains("session . insert"), "{tokens}");
     }
 }

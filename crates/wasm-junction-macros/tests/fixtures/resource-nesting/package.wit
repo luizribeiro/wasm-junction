@@ -8,6 +8,8 @@ interface host {
   }
 
   allowed: func(value: option<borrow<session>>) -> result<session, string>;
+  maybe: func() -> option<session>;
+  fallback: func() -> result<string, session>;
   consume: func(value: session);
   choose: func(value: result<borrow<session>, session>);
   bad: func(values: list<borrow<session>>);
