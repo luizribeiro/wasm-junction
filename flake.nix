@@ -56,11 +56,13 @@
             pass_filenames = false;
             inherit stages;
           };
-        hooks = {
+        offlineHooks = {
           nixfmt.enable = true;
           check-toml.enable = true;
           end-of-file-fixer.enable = true;
           trim-trailing-whitespace.enable = true;
+        };
+        cargoHooks = {
           rustfmt = cargoHook {
             name = "rustfmt-hook";
             text = "cargo fmt --all -- --check";
@@ -102,11 +104,14 @@
         };
         gitHooks = git-hooks.lib.${system}.run {
           src = ./.;
-          inherit hooks;
+          hooks = offlineHooks // cargoHooks;
         };
       in
       {
-        checks.pre-commit = gitHooks;
+        checks.pre-commit = git-hooks.lib.${system}.run {
+          src = ./.;
+          hooks = offlineHooks;
+        };
 
         devShells.default = pkgs.mkShell {
           packages = [
