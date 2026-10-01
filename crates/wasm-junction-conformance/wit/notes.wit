@@ -1,0 +1,51 @@
+package example:notes@0.1.0;
+
+interface types {
+  enum mood { neutral, upbeat }
+  flags emphasis { concise, detailed }
+  variant attachment { none, text(string), count(u32) }
+
+  record note {
+    title: string,
+    published: bool,
+    signed-8: s8,
+    unsigned-8: u8,
+    signed-16: s16,
+    unsigned-16: u16,
+    signed-32: s32,
+    unsigned-32: u32,
+    signed-64: s64,
+    unsigned-64: u64,
+    score-32: f32,
+    score-64: f64,
+    marker: char,
+    tags: list<string>,
+    location: tuple<s32, s32>,
+    attachment: attachment,
+    mood: mood,
+    emphasis: emphasis,
+    subtitle: option<string>,
+    revision: result<u64, string>,
+  }
+
+  record summary { text: string, source: note }
+}
+
+interface notes {
+  use types.{note};
+  read: async func(name: string) -> result<note, string>;
+  normalize: func(value: note) -> note;
+}
+
+interface summarizer {
+  use types.{note, summary};
+  summarize: async func(name: string) -> result<summary, string>;
+  echo: func(value: note) -> note;
+  crash: func();
+}
+
+world notes-summary {
+  import types;
+  import notes;
+  export summarizer;
+}
