@@ -3,12 +3,58 @@ use std::sync::Arc;
 
 use super::{
     App, Candidate, Generation, LoadedComponent, MissingImports, ReloadError, ResolutionIssue,
-    interfaces_compatible, lock_or_recover, resolution_candidates_excluding,
+    UnloadError, interfaces_compatible, lock_or_recover, resolution_candidates_excluding,
 };
 use crate::Component;
 use crate::component::ComponentParts;
 
 impl App {
+    /// Removes a component when no component or live handle depends on it.
+    ///
+    /// Calls already in progress finish on the removed generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnloadError`] if the component is unknown or has dependents.
+    pub async fn unload(&self, name: &str) -> Result<(), UnloadError> {
+        // Keep the public lifecycle API async even though generation retirement is immediate.
+        std::future::ready(self.unload_inner(name, false)).await
+    }
+
+    /// Removes a component even when components or live handles depend on it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnloadError`] if the component is unknown.
+    pub async fn unload_force(&self, name: &str) -> Result<(), UnloadError> {
+        // Keep the public lifecycle API async even though generation retirement is immediate.
+        std::future::ready(self.unload_inner(name, true)).await
+    }
+
+    fn unload_inner(&self, name: &str, force: bool) -> Result<(), UnloadError> {
+        let mut components = self.lock_components();
+        if !components.contains_key(name) {
+            return Err(UnloadError::UnknownComponent(name.to_owned()));
+        }
+        if !force {
+            let handles = lock_or_recover(&self.0.handle_counts);
+            let dependents =
+                breaking_dependents(&self.0.providers, &components, &handles, name, &[]);
+            if !dependents.is_empty() {
+                return Err(UnloadError::HasDependents {
+                    component: name.to_owned(),
+                    dependents,
+                });
+            }
+        }
+        let removed = components
+            .remove(name)
+            .ok_or_else(|| UnloadError::UnknownComponent(name.to_owned()))?;
+        lock_or_recover(&self.0.unloaded)
+            .insert(name.to_owned(), removed.generation.exports.clone());
+        Ok(())
+    }
+
     /// Compiles and atomically replaces a loaded component generation.
     ///
     /// Calls already in progress finish on the generation they started on. New calls and existing

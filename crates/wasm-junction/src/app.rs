@@ -30,6 +30,7 @@ pub(crate) struct AppInner {
     max_call_depth: usize,
     components: Mutex<BTreeMap<String, LoadedComponent>>,
     handle_counts: Mutex<HashMap<(String, &'static str), usize>>,
+    unloaded: Mutex<BTreeMap<String, Vec<Arc<str>>>>,
 }
 
 struct LoadedComponent {
@@ -97,6 +98,7 @@ impl App {
             .map_err(LoadError::Compile)?;
         let mut components = self.lock_components();
         self.validate_load(&name, &imports, &exports, &components)?;
+        lock_or_recover(&self.0.unloaded).remove(&name);
         components.insert(
             name.clone(),
             LoadedComponent {
@@ -154,6 +156,7 @@ impl App {
         let mut loaded = self.lock_components();
         self.validate_batch(&pending, &loaded)?;
         for (component, compiled) in pending.into_iter().zip(compiled) {
+            lock_or_recover(&self.0.unloaded).remove(&component.name);
             loaded.insert(
                 component.name.clone(),
                 LoadedComponent {
@@ -456,9 +459,9 @@ impl App {
         self.check_call_depth(&context)?;
         let (compiled, component_name, interface) = {
             let components = self.lock_components();
-            let loaded = components.get(component).ok_or_else(|| {
-                CallError::unavailable(format!("component `{component}` is not loaded"))
-            })?;
+            let loaded = components
+                .get(component)
+                .ok_or_else(|| self.component_unavailable(component))?;
             let resolved = loaded.export_name(interface).ok_or_else(|| {
                 CallError::unavailable(format!(
                     "component `{component}` does not export `{interface}`"
@@ -685,7 +688,23 @@ impl App {
             .collect::<Vec<_>>();
         let mut matches = hosts.chain(component_candidates).collect::<Vec<_>>();
         match matches.len() {
-            0 => Err(ResolveError::Missing),
+            0 => {
+                let unloaded = lock_or_recover(&self.0.unloaded);
+                let mut exporters = unloaded.iter().filter(|(name, exports)| {
+                    name.as_str() != caller
+                        && exports
+                            .iter()
+                            .any(|export| interfaces_compatible(requested, export))
+                });
+                let Some((name, _)) = exporters.next() else {
+                    return Err(ResolveError::Missing);
+                };
+                if exporters.next().is_some() {
+                    Err(ResolveError::Missing)
+                } else {
+                    Err(ResolveError::ComponentUnloaded(name.clone()))
+                }
+            }
             1 => Ok(matches.remove(0)),
             _ => Err(ResolveError::Ambiguous {
                 candidates: matches.iter().map(ResolvedImport::candidate).collect(),
@@ -697,6 +716,14 @@ impl App {
         match self.0.components.lock() {
             Ok(components) => components,
             Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
+    fn component_unavailable(&self, name: &str) -> CallError {
+        if lock_or_recover(&self.0.unloaded).contains_key(name) {
+            CallError::unavailable(format!("component `{name}` was unloaded"))
+        } else {
+            CallError::unavailable(format!("component `{name}` is not loaded"))
         }
     }
 }
@@ -1157,6 +1184,39 @@ impl Error for ReloadError {
     }
 }
 
+/// A failure to remove a loaded component.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UnloadError {
+    /// No component is loaded under the requested name.
+    UnknownComponent(String),
+    /// Other components or live handles still use the component.
+    HasDependents {
+        /// The component that could not be removed.
+        component: String,
+        /// Human-readable descriptions of each dependent.
+        dependents: Vec<String>,
+    },
+}
+
+impl Display for UnloadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownComponent(name) => write!(formatter, "component `{name}` is not loaded"),
+            Self::HasDependents {
+                component,
+                dependents,
+            } => write!(
+                formatter,
+                "unload of `{component}` refused; dependents: {}",
+                dependents.join(", ")
+            ),
+        }
+    }
+}
+
+impl Error for UnloadError {}
+
 /// A failure to obtain a typed interface handle.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1427,6 +1487,7 @@ impl AppBuilder {
             max_call_depth: self.max_call_depth.unwrap_or(64),
             components: Mutex::new(BTreeMap::new()),
             handle_counts: Mutex::new(HashMap::new()),
+            unloaded: Mutex::new(BTreeMap::new()),
         })))
     }
 }
