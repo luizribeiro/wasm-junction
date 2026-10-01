@@ -108,6 +108,24 @@ fn host_resource_calls_cross_middleware_and_the_engine() {
 }
 
 #[test]
+fn completed_invocation_cleans_up_retained_host_resources() {
+    let host = ResourceHost::default();
+    let app = App::builder()
+        .engine(WasmtimeEngine::new().unwrap())
+        .provide(host.clone().provided())
+        .build()
+        .unwrap();
+    let component = Component::from_bytes(resource_component())
+        .unwrap()
+        .named("resource-client");
+    block_on(app.load(component)).unwrap();
+    let result =
+        block_on(app.call("resource-client", RESOURCE_CLIENT, "retain", Vec::new())).unwrap();
+    assert_eq!(result, [Val::from("profile:Grace")]);
+    assert_eq!(host.active_resources(), 0);
+}
+
+#[test]
 fn routed_calls_use_fresh_callee_instances() {
     let engine = WasmtimeEngine::new().unwrap();
     let fixture = block_on(RoutedFixture::new(engine.clone())).unwrap();

@@ -78,6 +78,23 @@ impl Provider for FailingDropHost {
 }
 
 #[test]
+fn successful_calls_report_cleanup_failures_after_attempting_every_drop() {
+    let provider = FailingDropHost::default();
+    let error = block_on(provider.app().call(
+        "resource-client",
+        RESOURCE_CLIENT,
+        "retain",
+        Vec::new(),
+    ))
+    .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Trap);
+    assert!(error.to_string().contains("drop refused for session#0"));
+    assert_eq!(*provider.attempts.lock().unwrap(), [0, 1]);
+    assert_eq!(provider.host.active_resources(), 1);
+    provider.remove_failed_resource();
+}
+
+#[test]
 fn traps_include_cleanup_failures_after_attempting_every_drop() {
     let provider = FailingDropHost::default();
     let error = block_on(provider.app().call(

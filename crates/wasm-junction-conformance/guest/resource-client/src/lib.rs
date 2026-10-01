@@ -22,6 +22,14 @@ impl bindings::exports::example::resources::client::Guest for Component {
         assert!(!trap, "resource fixture trap");
         profile
     }
+
+    fn retain() -> String {
+        let session = Session::new("Grace");
+        let profile = session.profile();
+        core::mem::forget(session);
+        core::mem::forget(Session::new("cleanup"));
+        profile
+    }
 }
 
 bindings::export!(Component with_types_in bindings);

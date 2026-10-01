@@ -9,6 +9,7 @@ interface host {
 
 interface client {
     run: func(trap: bool) -> string;
+    retain: func() -> string;
 }
 
 world resource-client {
