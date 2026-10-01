@@ -1,24 +1,22 @@
-//! Five-sample release measurements for a WASI environment read.
+//! Five-sample release measurements for a guest WASI environment read.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 use std::hint::black_box;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use wasm_junction::{
-    App, BoxFuture, CallError, CompiledComponent, Engine, EngineError, ImportDispatcher,
-    ImportTarget, InvocationContext, Val, Vals, WasiConfig,
-};
-use wasmtime::component::ResourceTable;
-use wasmtime_wasi::cli::WasiCliView;
-use wasmtime_wasi::p2::bindings::cli::environment;
+use wasm_junction::{App, Component as JunctionComponent, Val, WasiConfig};
+use wasm_junction_wasmtime::WasmtimeEngine;
+use wasmtime::component::{Component, InstancePre, Linker, ResourceTable, Val as WasmtimeVal};
+use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
-const CALLS: u32 = 100_000;
+const CALLS: u32 = 10_000;
 const SAMPLES: usize = 5;
-const INTERFACE: &str = "wasi:cli/environment@0.2.12";
+const COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wasi-test.wasm"));
+const INTERFACE: &str = "test:wasi/environment@0.1.0";
 
 struct State {
     context: WasiCtx,
@@ -34,10 +32,6 @@ impl State {
             table: ResourceTable::new(),
         }
     }
-
-    fn read(&mut self) -> Vec<(String, String)> {
-        environment::Host::get_environment(&mut self.cli()).unwrap()
-    }
 }
 
 impl WasiView for State {
@@ -49,66 +43,87 @@ impl WasiView for State {
     }
 }
 
-struct EnvironmentTarget(Mutex<State>);
-
-impl ImportTarget for EnvironmentTarget {
-    fn call(
-        &self,
-        _context: InvocationContext,
-        args: Vals,
-    ) -> BoxFuture<'static, Result<Vals, CallError>> {
-        assert!(args.is_empty());
-        let values = self.0.lock().unwrap().read();
-        Box::pin(async move {
-            Ok(vec![Val::List(
-                values
-                    .into_iter()
-                    .map(|(name, value)| Val::Tuple(vec![name.into(), value.into()]))
-                    .collect(),
-            )])
-        })
-    }
+struct Ungated {
+    pre: InstancePre<State>,
 }
 
-struct UnusedEngine;
+impl Ungated {
+    fn new() -> Self {
+        let mut config = Config::new();
+        config
+            .wasm_component_model_async(true)
+            .concurrency_support(true);
+        let engine = Engine::new(&config).unwrap();
+        let component = Component::new(&engine, COMPONENT).unwrap();
+        let mut linker = Linker::new(&engine);
+        wasmtime_wasi::p2::add_to_linker_async(&mut linker).unwrap();
+        Self {
+            pre: linker.instantiate_pre(&component).unwrap(),
+        }
+    }
 
-impl Engine for UnusedEngine {
-    fn compile(
-        &self,
-        _bytes: Arc<[u8]>,
-        _wasi: WasiConfig,
-    ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
-        Box::pin(async { Err(EngineError::new("benchmark does not compile components")) })
+    async fn read(&self) -> Vec<WasmtimeVal> {
+        let mut store = Store::new(self.pre.engine(), State::new());
+        let instance = self.pre.instantiate_async(&mut store).await.unwrap();
+        let interface = instance
+            .get_export_index(&mut store, None, INTERFACE)
+            .unwrap();
+        let function = instance
+            .get_export_index(&mut store, Some(&interface), "read")
+            .unwrap();
+        let function = instance.get_func(&mut store, function).unwrap();
+        let params = [WasmtimeVal::String("GREETING".into())];
+        let mut results = vec![WasmtimeVal::Bool(false)];
+        store
+            .run_concurrent(async |accessor| {
+                function
+                    .call_concurrent(accessor, &params, &mut results)
+                    .await
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        results
     }
 }
 
 fn main() {
-    let mut direct = State::new();
-    let app = App::builder().engine(UnusedEngine).build().unwrap();
-    let target: Arc<dyn ImportTarget> = Arc::new(EnvironmentTarget(Mutex::new(State::new())));
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let ungated = Ungated::new();
+    let gated = runtime.block_on(async {
+        let app = App::builder()
+            .engine(WasmtimeEngine::new().unwrap())
+            .wasi(WasiConfig::new().env("GREETING", "hello"))
+            .build()
+            .unwrap();
+        app.load(
+            JunctionComponent::from_bytes(Arc::<[u8]>::from(COMPONENT))
+                .unwrap()
+                .named("wasi"),
+        )
+        .await
+        .unwrap();
+        app
+    });
 
-    let direct_samples = samples(|| {
+    let ungated_samples = samples(|| {
         for _ in 0..CALLS {
-            black_box(direct.read());
+            black_box(runtime.block_on(ungated.read()));
         }
     });
     let gated_samples = samples(|| {
         for _ in 0..CALLS {
-            let values = futures::executor::block_on(app.call_engine(
-                InvocationContext::default(),
-                Arc::from("benchmark"),
-                Arc::from(INTERFACE),
-                Arc::from("get-environment"),
-                Vec::new(),
-                target.clone(),
-            ))
-            .unwrap();
+            let values = runtime
+                .block_on(gated.call("wasi", INTERFACE, "read", vec![Val::from("GREETING")]))
+                .unwrap();
             black_box(values);
         }
     });
 
-    print("WASI environment read, ungated", &direct_samples);
-    print("WASI environment read, gated", &gated_samples);
+    print("WASI guest environment read, ungated", &ungated_samples);
+    print("WASI guest environment read, gated", &gated_samples);
 }
 
 fn samples(mut run: impl FnMut()) -> Vec<Duration> {

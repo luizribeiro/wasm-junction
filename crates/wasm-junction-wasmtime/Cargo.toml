@@ -12,7 +12,6 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-futures = { version = "0.3.34", default-features = false, features = ["executor"] }
 wasm-junction-core = { path = "../wasm-junction-core", version = "=0.0.0" }
 wasmtime = { version = "=49.0.1", default-features = false, features = ["component-model-async", "cranelift", "runtime", "std"] }
 wasmtime-wasi = { version = "=49.0.1", default-features = false, features = ["p2"] }
