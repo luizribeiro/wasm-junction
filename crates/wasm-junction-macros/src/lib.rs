@@ -5,13 +5,14 @@
 
 use std::path::PathBuf;
 
-use heck::ToSnakeCase;
 use proc_macro::TokenStream;
-use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
+use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::{LitStr, Token, braced};
 use wit_parser::Resolve;
+
+mod generate;
 
 struct Config {
     path: LitStr,
@@ -54,34 +55,12 @@ fn expand(config: &Config) -> syn::Result<TokenStream2> {
     let (package_id, sources) = resolve
         .push_path(&path)
         .map_err(|error| syn::Error::new(config.path.span(), error.to_string()))?;
-    let package = &resolve.packages[package_id];
     let tracked = sources.paths().map(|path| {
         let path = path.to_string_lossy();
         quote!(
             const _: &[u8] = include_bytes!(#path);
         )
     });
-    let modules = package
-        .interfaces
-        .iter()
-        .map(|(name, _)| {
-            let module = rust_ident(&name.to_snake_case())?;
-            let interface = package.name.interface_id(name);
-            Ok(quote! {
-                #[doc = concat!("Bindings for the `", #interface, "` interface.")]
-                pub mod #module {
-                    /// The fully qualified WIT interface name.
-                    pub const INTERFACE: &str = #interface;
-                }
-            })
-        })
-        .collect::<syn::Result<Vec<_>>>()?;
-    Ok(quote!(#(#tracked)* #(#modules)*))
-}
-
-fn rust_ident(name: &str) -> syn::Result<Ident> {
-    syn::parse_str(name)
-        .or_else(|_| syn::parse_str(&format!("r#{name}")))
-        .or_else(|_| syn::parse_str(&format!("{name}_")))
-        .map_err(|_| syn::Error::new(Span::call_site(), format!("invalid Rust name `{name}`")))
+    let bindings = generate::generate(&resolve, package_id)?;
+    Ok(quote!(#(#tracked)* #bindings))
 }
