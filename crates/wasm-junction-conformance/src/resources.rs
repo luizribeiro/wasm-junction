@@ -109,6 +109,12 @@ impl Provider for ResourceHost {
     ) -> BoxFuture<'a, Result<Vals, CallError>> {
         Box::pin(async move {
             match call.function.as_ref() {
+                "open-file" => {
+                    let [Val::String(name)] = call.args.as_slice() else {
+                        return Err(CallError::trap("open-file expects a name"));
+                    };
+                    Ok(vec![Val::Resource(self.open_file(name.clone())?)])
+                }
                 "[constructor]session" => {
                     let [Val::String(user)] = call.args.as_slice() else {
                         return Err(CallError::trap("session constructor expects a user"));

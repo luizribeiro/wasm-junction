@@ -9,7 +9,8 @@ use std::time::Duration;
 
 use wasm_junction::{
     App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Caller, Component, Engine,
-    Middleware, Next, Provided, Provider, Resource, Val, Vals, WasiConfig,
+    ImportDispatcher, InvocationContext, Middleware, Next, Provided, Provider, Resource, Val, Vals,
+    WasiConfig,
 };
 use wasm_junction_conformance::{
     CYCLE_A, Fixture, FixtureHost, RESOURCE_CLIENT, RESOURCE_HOST, ResourceHost, RoutedFixture,
@@ -47,6 +48,35 @@ fn block_on<F: Future>(future: F) -> F::Output {
 
 fn loaded(engine: &WasmtimeEngine) -> Fixture {
     block_on(Fixture::new(engine.clone())).unwrap()
+}
+
+fn call_resource_host(app: &App, function: &str, args: Vals) -> Vals {
+    block_on(ImportDispatcher::call(
+        app,
+        InvocationContext::default(),
+        Arc::from("resource-client"),
+        Arc::from(RESOURCE_HOST),
+        Arc::from(function),
+        args,
+    ))
+    .unwrap()
+}
+
+fn drop_host_resource(app: &App, resource: Resource) {
+    block_on(ImportDispatcher::drop_resource(
+        app,
+        InvocationContext::default(),
+        Arc::from("resource-client"),
+        resource,
+    ))
+    .unwrap();
+}
+
+fn one_resource(values: &[Val]) -> Resource {
+    let [Val::Resource(resource)] = values else {
+        panic!("host did not return a resource")
+    };
+    resource.clone()
 }
 
 #[test]
@@ -95,7 +125,11 @@ fn resources_cross_guest_exports_as_borrows_and_owned_values() {
         .named("resource-client");
     block_on(app.load(component)).unwrap();
 
-    let owned = host.open("Lin").unwrap();
+    let owned = one_resource(&call_resource_host(
+        &app,
+        "[constructor]session",
+        vec![Val::from("Lin")],
+    ));
     let borrowed = wasm_junction::Resource::borrowed(owned.interface(), owned.name(), owned.id());
     let inspected = block_on(app.call(
         "resource-client",
@@ -130,10 +164,14 @@ fn resources_cross_guest_exports_as_borrows_and_owned_values() {
         panic!("guest did not return the owned session");
     };
     assert_eq!(host.active_resources(), 1);
-    host.close(returned).unwrap();
+    drop_host_resource(&app, returned.clone());
     assert_eq!(host.active_resources(), 0);
 
-    let file = host.open_file("notes.txt").unwrap();
+    let file = one_resource(&call_resource_host(
+        &app,
+        "open-file",
+        vec![Val::from("notes.txt")],
+    ));
     let error = block_on(app.call(
         "resource-client",
         RESOURCE_CLIENT,
@@ -149,11 +187,10 @@ fn resources_cross_guest_exports_as_borrows_and_owned_values() {
         "{error}"
     );
     assert_eq!(host.active_resources(), 1);
-    host.close(&file).unwrap();
+    drop_host_resource(&app, file);
 }
 
-#[derive(Clone)]
-struct WrongResourceResult(ResourceHost);
+struct WrongResourceResult;
 
 impl Provider for WrongResourceResult {
     fn call<'a>(
@@ -163,28 +200,24 @@ impl Provider for WrongResourceResult {
     ) -> BoxFuture<'a, Result<Vals, CallError>> {
         Box::pin(async move {
             match call.function.as_ref() {
-                "[constructor]session" => Ok(vec![Val::Resource(self.0.open_file("wrong")?)]),
+                "[constructor]session" => Ok(vec![Val::Resource(Resource::owned(
+                    RESOURCE_HOST,
+                    "file",
+                    0,
+                ))]),
                 function => Err(CallError::unavailable(format!(
                     "wrong resource host has no `{function}` function"
                 ))),
             }
         })
     }
-
-    fn drop_resource(&self, _cx: &CallContext, resource: Resource) -> Result<(), CallError> {
-        self.0.close(&resource)
-    }
 }
 
 #[test]
 fn provider_resource_results_match_the_import_signature() {
-    let host = ResourceHost::default();
     let app = App::builder()
         .engine(WasmtimeEngine::new().unwrap())
-        .provide(Provided::new(
-            RESOURCE_HOST,
-            WrongResourceResult(host.clone()),
-        ))
+        .provide(Provided::new(RESOURCE_HOST, WrongResourceResult))
         .build()
         .unwrap();
     let component = Component::from_bytes(resource_component())
@@ -206,9 +239,6 @@ fn provider_resource_results_match_the_import_signature() {
             .contains("does not match the resource type"),
         "{error}"
     );
-    assert_eq!(host.active_resources(), 1);
-    host.close(&Resource::owned(RESOURCE_HOST, "file", 0))
-        .unwrap();
 }
 
 #[test]
