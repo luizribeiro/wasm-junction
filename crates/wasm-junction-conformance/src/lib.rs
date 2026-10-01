@@ -4,9 +4,11 @@
 #![warn(missing_docs)]
 
 mod host;
+mod runner;
 mod trace;
 
 pub use host::{FixtureHost, sample_note, sample_summary};
+pub use runner::{Fixture, FixtureError, run};
 pub use trace::{EXPECTED_TRACE, Trace};
 
 /// The fixture's types-only interface.
