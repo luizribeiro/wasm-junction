@@ -63,24 +63,7 @@ impl App {
     pub async fn load(&self, component: Component) -> Result<(), LoadError> {
         let (bytes, name, imports, exports) = component.into_parts();
         let name = name.ok_or(LoadError::UnnamedComponent)?;
-        if self.lock_components().contains_key(&name) {
-            return Err(LoadError::DuplicateName(name));
-        }
-        let mut missing = imports
-            .iter()
-            .filter(|import| {
-                matches!(
-                    self.resolve_import(&name, import),
-                    Err(ResolveError::Missing)
-                ) && !self.0.engine.supports_import(import)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        missing.sort();
-        missing.dedup();
-        if !missing.is_empty() {
-            return Err(LoadError::MissingImports(MissingImports::new(missing)));
-        }
+        self.validate_load(&name, &imports, &exports, &self.lock_components())?;
         let compiled = self
             .0
             .engine
@@ -88,9 +71,7 @@ impl App {
             .await
             .map_err(LoadError::Compile)?;
         let mut components = self.lock_components();
-        if components.contains_key(&name) {
-            return Err(LoadError::DuplicateName(name));
-        }
+        self.validate_load(&name, &imports, &exports, &components)?;
         components.insert(
             name.clone(),
             LoadedComponent {
@@ -102,6 +83,62 @@ impl App {
             },
         );
         Ok(())
+    }
+
+    fn validate_load(
+        &self,
+        name: &str,
+        imports: &[String],
+        exports: &[String],
+        components: &BTreeMap<String, LoadedComponent>,
+    ) -> Result<(), LoadError> {
+        if components.contains_key(name) {
+            return Err(LoadError::DuplicateName(name.to_owned()));
+        }
+        let mut missing = Vec::new();
+        let mut issues = Vec::new();
+        for import in imports {
+            if self.0.engine.supports_import(import) {
+                continue;
+            }
+            let candidates =
+                resolution_candidates_excluding(&self.0.providers, components, import, Some(name));
+            match candidates.len() {
+                0 => missing.push(import.clone()),
+                1 => {}
+                _ => issues.push(ResolutionIssue::ambiguous(
+                    name.to_owned(),
+                    import.clone(),
+                    candidates,
+                )),
+            }
+        }
+        for (consumer, component) in components {
+            for import in &component.imports {
+                if component.links.contains_key(import.as_ref())
+                    || !exports
+                        .iter()
+                        .any(|export| interfaces_compatible(import, export))
+                {
+                    continue;
+                }
+                let mut candidates = resolution_candidates_excluding(
+                    &self.0.providers,
+                    components,
+                    import,
+                    Some(consumer),
+                );
+                if candidates.len() == 1 {
+                    candidates.push(Candidate::Component(name.to_owned()));
+                    issues.push(ResolutionIssue::ambiguous(
+                        consumer.clone(),
+                        import.to_string(),
+                        candidates,
+                    ));
+                }
+            }
+        }
+        typed_load_resolution_result(missing, issues)
     }
 
     /// Returns a generated handle for one component interface.
@@ -622,6 +659,11 @@ pub enum LoadError {
     DuplicateName(String),
     /// One or more imported interfaces have no host provider.
     MissingImports(MissingImports),
+    /// Loading would leave one or more component imports ambiguous.
+    WouldMakeAmbiguous {
+        /// Imports whose resolution would be ambiguous.
+        issues: Vec<ResolutionIssue>,
+    },
     /// The selected engine could not compile the component.
     Compile(EngineError),
 }
@@ -632,6 +674,15 @@ impl Display for LoadError {
             Self::UnnamedComponent => formatter.write_str("component has no application name"),
             Self::DuplicateName(name) => write!(formatter, "component `{name}` is already loaded"),
             Self::MissingImports(error) => Display::fmt(error, formatter),
+            Self::WouldMakeAmbiguous { issues } => write!(
+                formatter,
+                "load would make imports ambiguous: {}",
+                issues
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ),
             Self::Compile(error) => write!(formatter, "component compilation failed: {error}"),
         }
     }
@@ -642,7 +693,9 @@ impl Error for LoadError {
         match self {
             Self::MissingImports(error) => Some(error),
             Self::Compile(error) => Some(error),
-            Self::UnnamedComponent | Self::DuplicateName(_) => None,
+            Self::UnnamedComponent | Self::DuplicateName(_) | Self::WouldMakeAmbiguous { .. } => {
+                None
+            }
         }
     }
 }
@@ -1008,6 +1061,44 @@ fn interfaces_compatible(requested: &str, provided: &str) -> bool {
         }
 }
 
+fn resolution_candidates_excluding(
+    providers: &HashMap<&'static str, Arc<dyn Provider>>,
+    components: &BTreeMap<String, LoadedComponent>,
+    requested: &str,
+    excluded: Option<&str>,
+) -> Vec<Candidate> {
+    providers
+        .keys()
+        .filter(|provided| interfaces_compatible(requested, provided))
+        .map(|_| Candidate::Host)
+        .chain(
+            components
+                .values()
+                .filter(|component| excluded.is_none_or(|name| component.name.as_ref() != name))
+                .filter(|component| component.exports_interface(requested))
+                .map(|component| Candidate::Component(component.name.to_string())),
+        )
+        .collect()
+}
+
+fn typed_load_resolution_result(
+    mut missing: Vec<String>,
+    mut issues: Vec<ResolutionIssue>,
+) -> Result<(), LoadError> {
+    missing.sort();
+    missing.dedup();
+    issues.sort_by(|left, right| {
+        (&left.component, &left.interface).cmp(&(&right.component, &right.interface))
+    });
+    issues.dedup();
+    if !missing.is_empty() {
+        Err(LoadError::MissingImports(MissingImports::new(missing)))
+    } else if !issues.is_empty() {
+        Err(LoadError::WouldMakeAmbiguous { issues })
+    } else {
+        Ok(())
+    }
+}
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
@@ -1141,6 +1232,35 @@ mod tests {
         assert_eq!(
             issue.to_string(),
             "component `writer` import `example:translate/translator@0.1.0` is ambiguous: `deepl`, `google`"
+        );
+    }
+
+    #[test]
+    fn ambiguous_load_display_separates_resolution_issues() {
+        let issue = |component: &str| ResolutionIssue {
+            component: component.into(),
+            interface: "example:translate/translator@0.1.0".into(),
+            kind: IssueKind::Ambiguous {
+                candidates: vec![
+                    Candidate::Component("deepl".into()),
+                    Candidate::Component("google".into()),
+                ],
+            },
+        };
+        let writer = issue("writer");
+        assert_eq!(
+            LoadError::WouldMakeAmbiguous {
+                issues: vec![writer.clone()]
+            }
+            .to_string(),
+            "load would make imports ambiguous: component `writer` import `example:translate/translator@0.1.0` is ambiguous: `deepl`, `google`"
+        );
+        assert_eq!(
+            LoadError::WouldMakeAmbiguous {
+                issues: vec![writer, issue("reviewer")]
+            }
+            .to_string(),
+            "load would make imports ambiguous: component `writer` import `example:translate/translator@0.1.0` is ambiguous: `deepl`, `google`; component `reviewer` import `example:translate/translator@0.1.0` is ambiguous: `deepl`, `google`"
         );
     }
 
