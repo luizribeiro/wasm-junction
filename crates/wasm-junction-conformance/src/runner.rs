@@ -1,16 +1,80 @@
 use std::error::Error;
 use std::fmt::{self, Display};
+use std::sync::Arc;
 
-use wasm_junction::{App, CallError, Component, Engine, Vals};
+use wasm_junction::{App, CallError, Component, Engine, TypedCall, Vals};
 
 use crate::host::summary;
-use crate::{EXPECTED_TRACE, FixtureHost, SUMMARIZER, Trace, component, summarizer};
+use crate::{
+    EXPECTED_ROUTED_TRACE, EXPECTED_TRACE, FixtureHost, RoutedHost, SUMMARIZER, Trace, component,
+    summarizer, translator_component, writer, writer_component,
+};
 
 /// A loaded conformance fixture available for additional engine assertions.
 pub struct Fixture {
     app: App,
     host: FixtureHost,
     trace: Trace,
+}
+
+/// A loaded pair of components for routed-call assertions.
+pub struct RoutedFixture {
+    app: App,
+    host: RoutedHost,
+    trace: Trace,
+}
+
+impl RoutedFixture {
+    /// Builds and loads the writer and translator with their host and tracer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FixtureError`] if application construction, inspection, or loading fails.
+    pub async fn new(engine: impl Engine + 'static) -> Result<Self, FixtureError> {
+        let host = RoutedHost::default();
+        let trace = Trace::default();
+        let app = App::builder()
+            .engine(engine)
+            .provide(host.clone().provided())
+            .middleware(trace.clone())
+            .build()
+            .map_err(FixtureError::source)?;
+        let translator = Component::from_bytes(translator_component())
+            .map_err(FixtureError::source)?
+            .named("translator");
+        let writer = Component::from_bytes(writer_component())
+            .map_err(FixtureError::source)?
+            .named("writer");
+        app.load_all([translator, writer])
+            .await
+            .map_err(FixtureError::source)?;
+        Ok(Self { app, host, trace })
+    }
+
+    /// Invokes the writer's plain or async function.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CallError`] when middleware or any hop fails.
+    pub async fn write(&self, function: &str, text: &str) -> Result<String, CallError> {
+        let values = self
+            .app
+            .call("writer", crate::WRITER, function, vec![text.into()])
+            .await?;
+        writer::Write::decode_output(&values).map_err(CallError::from)
+    }
+
+    /// Returns the host provider called by the translator.
+    #[must_use]
+    pub const fn host(&self) -> &RoutedHost {
+        &self.host
+    }
+
+    /// Returns the fixture's tracing middleware.
+    #[must_use]
+    pub const fn trace(&self) -> &Trace {
+        &self.trace
+    }
 }
 
 impl Fixture {
@@ -90,6 +154,46 @@ pub async fn run(engine: impl Engine + 'static) -> Result<Fixture, FixtureError>
     if fixture.trace.entries() != expected {
         return Err(FixtureError::new(format!(
             "unexpected trace: {:#?}",
+            fixture.trace.entries()
+        )));
+    }
+    Ok(fixture)
+}
+
+/// Runs plain and async calls through two components and checks their exact trace.
+///
+/// # Errors
+///
+/// Returns [`FixtureError`] if setup, invocation, output, caller, or tracing differs.
+pub async fn run_routed(engine: impl Engine + 'static) -> Result<RoutedFixture, FixtureError> {
+    let fixture = RoutedFixture::new(engine).await?;
+    for (function, expected) in [
+        ("write", "host: hello #1"),
+        ("write-async", "host: async #1"),
+    ] {
+        let input = function.strip_prefix("write-").unwrap_or("hello");
+        let output = fixture
+            .write(function, input)
+            .await
+            .map_err(FixtureError::source)?;
+        if output != expected {
+            return Err(FixtureError::new(format!("unexpected output: {output}")));
+        }
+    }
+    let callers = fixture.host.callers();
+    let translator = wasm_junction::Caller::Component(Arc::from("translator"));
+    if callers != [translator.clone(), translator] {
+        return Err(FixtureError::new(format!(
+            "unexpected callers: {callers:?}"
+        )));
+    }
+    let expected = EXPECTED_ROUTED_TRACE
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if fixture.trace.entries() != expected {
+        return Err(FixtureError::new(format!(
+            "unexpected routed trace: {:#?}",
             fixture.trace.entries()
         )));
     }

@@ -154,6 +154,34 @@ pub const EXPECTED_TRACE: &[&str] = &[
     "invocation end summarizer",
 ];
 
+/// Exact trace produced by the successful routed-call scenario.
+pub const EXPECTED_ROUTED_TRACE: &[&str] = &[
+    "invocation start writer",
+    "call host → writer example:notes/writer@0.1.0.write(\"hello\")",
+    "invocation start translator",
+    "call writer → translator example:notes/translator@0.1.0.translate(\"hello\")",
+    "invocation start host",
+    "call translator → host example:notes/decoration@0.1.0.decorate(\"hello\")",
+    "return translator → host example:notes/decoration@0.1.0.decorate(\"host: hello\")",
+    "invocation end host",
+    "return writer → translator example:notes/translator@0.1.0.translate(\"host: hello #1\")",
+    "invocation end translator",
+    "return host → writer example:notes/writer@0.1.0.write(\"host: hello #1\")",
+    "invocation end writer",
+    "invocation start writer",
+    "call host → writer example:notes/writer@0.1.0.write-async(\"async\")",
+    "invocation start translator",
+    "call writer → translator example:notes/translator@0.1.0.translate-async(\"async\")",
+    "invocation start host",
+    "call translator → host example:notes/decoration@0.1.0.decorate-async(\"async\")",
+    "return translator → host example:notes/decoration@0.1.0.decorate-async(\"host: async\")",
+    "invocation end host",
+    "return writer → translator example:notes/translator@0.1.0.translate-async(\"host: async #1\")",
+    "invocation end translator",
+    "return host → writer example:notes/writer@0.1.0.write-async(\"host: async #1\")",
+    "invocation end writer",
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;

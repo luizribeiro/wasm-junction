@@ -11,7 +11,9 @@ use wasm_junction::{
     App, Call, CallError, CallErrorKind, Caller, Component, Engine, Middleware, Next, Val, Vals,
     WasiConfig,
 };
-use wasm_junction_conformance::{Fixture, FixtureHost, SUMMARIZER, component, run, sample_note};
+use wasm_junction_conformance::{
+    Fixture, FixtureHost, SUMMARIZER, component, run, run_routed, sample_note,
+};
 use wasm_junction_wasmtime::WasmtimeEngine;
 
 const WASI_COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wasi-test.wasm"));
@@ -47,6 +49,11 @@ fn loaded(engine: &WasmtimeEngine) -> Fixture {
 #[test]
 fn successful_scenario_matches_the_engine_neutral_trace() {
     block_on(run(WasmtimeEngine::new().unwrap())).unwrap();
+}
+
+#[test]
+fn routed_scenario_matches_the_engine_neutral_trace() {
+    block_on(run_routed(WasmtimeEngine::new().unwrap())).unwrap();
 }
 
 #[test]
