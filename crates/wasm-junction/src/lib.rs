@@ -19,7 +19,7 @@ mod provider;
 mod values;
 
 pub use app::{App, AppBuilder, BuildError, GetError, InterfaceHandle, LoadError, MissingImports};
-pub use call::{Call, Caller, Trap, TypedCall};
+pub use call::{Call, CallError, Caller, TypedCall};
 pub use component::{Component, ComponentError};
 pub use context::{CallContext, Extensions, InvocationContext};
 pub use engine::{CompiledComponent, Engine, EngineError, ImportDispatcher};

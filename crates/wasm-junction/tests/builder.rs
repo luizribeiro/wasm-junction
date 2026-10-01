@@ -6,15 +6,19 @@ use std::sync::Arc;
 
 use support::NOTES;
 use wasm_junction::{
-    App, BoxFuture, Call, CallContext, CompiledComponent, Engine, EngineError, ImportDispatcher,
-    Provided, Provider, Trap, Vals,
+    App, BoxFuture, Call, CallContext, CallError, CompiledComponent, Engine, EngineError,
+    ImportDispatcher, Provided, Provider, Vals,
 };
 
 struct UnusedProvider;
 
 impl Provider for UnusedProvider {
-    fn call<'a>(&'a self, _cx: &'a CallContext, _call: Call) -> BoxFuture<'a, Result<Vals, Trap>> {
-        Box::pin(async { Err(Trap::new("unused provider")) })
+    fn call<'a>(
+        &'a self,
+        _cx: &'a CallContext,
+        _call: Call,
+    ) -> BoxFuture<'a, Result<Vals, CallError>> {
+        Box::pin(async { Err(CallError::trap("unused provider")) })
     }
 }
 

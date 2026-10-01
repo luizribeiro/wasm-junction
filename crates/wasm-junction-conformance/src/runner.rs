@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt::{self, Display};
 
-use wasm_junction::{App, Component, Engine, Trap, Val, Vals};
+use wasm_junction::{App, CallError, Component, Engine, Val, Vals};
 
 use crate::{EXPECTED_TRACE, FixtureHost, SUMMARIZER, Trace, component, sample_summary};
 
@@ -39,8 +39,8 @@ impl Fixture {
     ///
     /// # Errors
     ///
-    /// Returns [`Trap`] when middleware, the guest, or its host import traps.
-    pub async fn call(&self, function: &str, args: Vals) -> Result<Vals, Trap> {
+    /// Returns [`CallError`] when middleware, the guest, or its host import traps.
+    pub async fn call(&self, function: &str, args: Vals) -> Result<Vals, CallError> {
         self.app
             .call("summarizer", SUMMARIZER, function, args)
             .await

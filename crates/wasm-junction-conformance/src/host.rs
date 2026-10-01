@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use wasm_junction::{BoxFuture, Call, CallContext, Provided, Provider, Trap, Val, Vals};
+use wasm_junction::{BoxFuture, Call, CallContext, CallError, Provided, Provider, Val, Vals};
 
 use crate::NOTES;
 
@@ -30,7 +30,7 @@ impl Provider for FixtureHost {
         &'a self,
         _context: &'a CallContext,
         call: Call,
-    ) -> BoxFuture<'a, Result<Vals, Trap>> {
+    ) -> BoxFuture<'a, Result<Vals, CallError>> {
         Box::pin(async move {
             match call.function.as_ref() {
                 "read" => read(&call.args),
@@ -38,15 +38,17 @@ impl Provider for FixtureHost {
                     self.normalizations.fetch_add(1, Ordering::Relaxed);
                     normalize(call.args)
                 }
-                function => Err(Trap::new(format!("unknown notes function `{function}`"))),
+                function => Err(CallError::trap(format!(
+                    "unknown notes function `{function}`"
+                ))),
             }
         })
     }
 }
 
-fn read(args: &[Val]) -> Result<Vals, Trap> {
+fn read(args: &[Val]) -> Result<Vals, CallError> {
     let [Val::String(name)] = args else {
-        return Err(Trap::new("notes.read expected one string"));
+        return Err(CallError::trap("notes.read expected one string"));
     };
     let result = if name == "private" {
         Err(Some(Box::new(Val::String("permission denied".to_owned()))))
@@ -56,9 +58,9 @@ fn read(args: &[Val]) -> Result<Vals, Trap> {
     Ok(vec![Val::Result(result)])
 }
 
-fn normalize(args: Vals) -> Result<Vals, Trap> {
+fn normalize(args: Vals) -> Result<Vals, CallError> {
     if args.len() != 1 || !matches!(args.first(), Some(Val::Record(_))) {
-        return Err(Trap::new("notes.normalize expected one note"));
+        return Err(CallError::trap("notes.normalize expected one note"));
     }
     Ok(args)
 }

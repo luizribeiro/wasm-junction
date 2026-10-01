@@ -2,7 +2,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::{Call, CallContext, Trap, Vals};
+use crate::{Call, CallContext, CallError, Vals};
 
 /// A boxed future that may move between threads on native targets.
 #[cfg(not(target_arch = "wasm32"))]
@@ -65,7 +65,11 @@ const _: () = {
 /// An object-safe implementation of one host or component interface.
 pub trait Provider: HostBound {
     /// Invokes a function through its engine-neutral call representation.
-    fn call<'a>(&'a self, cx: &'a CallContext, call: Call) -> BoxFuture<'a, Result<Vals, Trap>>;
+    fn call<'a>(
+        &'a self,
+        cx: &'a CallContext,
+        call: Call,
+    ) -> BoxFuture<'a, Result<Vals, CallError>>;
 }
 
 /// A provider paired with the fully qualified interface it implements.

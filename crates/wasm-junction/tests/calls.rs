@@ -3,7 +3,7 @@
 mod support;
 
 use support::{Delete, NOTES, Read, read_call};
-use wasm_junction::{Call, Caller, Trap, TypeError, TypedCall, Val};
+use wasm_junction::{Call, CallError, Caller, TypeError, TypedCall, Val};
 
 #[test]
 fn clone_preserves_call_metadata_and_arguments() {
@@ -17,7 +17,7 @@ fn clone_preserves_call_metadata_and_arguments() {
 
 #[test]
 fn type_errors_become_boundary_traps() {
-    let trap = Trap::from(TypeError::new("wrong argument shape"));
+    let trap = CallError::from(TypeError::new("wrong argument shape"));
     assert_eq!(trap.to_string(), "wrong argument shape");
 }
 

@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use wasm_junction::{Call, Event, Middleware, Next, Trap, Val, Vals};
+use wasm_junction::{Call, CallError, Event, Middleware, Next, Val, Vals};
 
 /// Middleware that records calls, returns, traps, and invocation boundaries.
 #[derive(Clone, Default)]
@@ -31,7 +31,7 @@ impl Trace {
 }
 
 impl Middleware for Trace {
-    async fn call(&self, call: Call, next: Next) -> Result<Vals, Trap> {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
         let label = call.to_string();
         self.record(format!("call {label}({})", vals(&call.args)));
         let result = next.run(call).await;

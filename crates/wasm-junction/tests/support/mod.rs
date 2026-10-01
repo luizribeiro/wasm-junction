@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
 use wasm_junction::{
-    BoxFuture, Call, CallContext, Caller, CompiledComponent, Engine, EngineError, ImportDispatcher,
-    InvocationContext, Provider, Trap, TypeError, TypedCall, Val, Vals,
+    BoxFuture, Call, CallContext, CallError, Caller, CompiledComponent, Engine, EngineError,
+    ImportDispatcher, InvocationContext, Provider, TypeError, TypedCall, Val, Vals,
 };
 use wit_component::{ComponentEncoder, StringEncoding, dummy_module, embed_component_metadata};
 use wit_parser::{ManglingAndAbi, Resolve};
@@ -76,13 +76,13 @@ impl CompiledComponent for UnusedComponent {
         interface: Arc<str>,
         function: Arc<str>,
         args: Vals,
-    ) -> BoxFuture<'_, Result<Vals, Trap>> {
+    ) -> BoxFuture<'_, Result<Vals, CallError>> {
         Box::pin(async move {
             if interface.as_ref() != "example:journal/summaries@0.1.0" {
-                return Err(Trap::new("engine received an unresolved export"));
+                return Err(CallError::trap("engine received an unresolved export"));
             }
             if function.as_ref() != "summarize" {
-                return Err(Trap::new("engine received the wrong function"));
+                return Err(CallError::trap("engine received the wrong function"));
             }
             imports
                 .call(
@@ -101,8 +101,12 @@ impl CompiledComponent for UnusedComponent {
 pub struct UnusedProvider;
 
 impl Provider for UnusedProvider {
-    fn call<'a>(&'a self, _cx: &'a CallContext, _call: Call) -> BoxFuture<'a, Result<Vals, Trap>> {
-        Box::pin(async { Err(Trap::new("unused provider")) })
+    fn call<'a>(
+        &'a self,
+        _cx: &'a CallContext,
+        _call: Call,
+    ) -> BoxFuture<'a, Result<Vals, CallError>> {
+        Box::pin(async { Err(CallError::trap("unused provider")) })
     }
 }
 

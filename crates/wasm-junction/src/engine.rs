@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::{error::Error, fmt};
 
-use crate::{BoxFuture, HostBound, InvocationContext, Trap, Vals};
+use crate::{BoxFuture, CallError, HostBound, InvocationContext, Vals};
 
 /// A compiled component whose exports can be invoked by an [`crate::App`].
 ///
@@ -16,7 +16,7 @@ pub trait CompiledComponent: HostBound {
         interface: Arc<str>,
         function: Arc<str>,
         args: Vals,
-    ) -> BoxFuture<'_, Result<Vals, Trap>>;
+    ) -> BoxFuture<'_, Result<Vals, CallError>>;
 }
 
 /// The engine-facing route from a guest import back into an [`crate::App`].
@@ -29,7 +29,7 @@ pub trait ImportDispatcher: HostBound {
         interface: Arc<str>,
         function: Arc<str>,
         args: Vals,
-    ) -> BoxFuture<'_, Result<Vals, Trap>>;
+    ) -> BoxFuture<'_, Result<Vals, CallError>>;
 }
 
 /// Compiles WebAssembly components for an [`crate::App`].

@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::middleware::{CallTarget, ErasedMiddleware};
 use crate::{
-    BoxFuture, Call, CallContext, Caller, CompiledComponent, Component, Engine, EngineError, Event,
-    ImportDispatcher, InvocationContext, Middleware, Provided, Provider, Trap, Vals,
+    BoxFuture, Call, CallContext, CallError, Caller, CompiledComponent, Component, Engine,
+    EngineError, Event, ImportDispatcher, InvocationContext, Middleware, Provided, Provider, Vals,
 };
 
 /// An application assembled from host providers, middleware, and WebAssembly components.
@@ -137,7 +137,7 @@ impl App {
     ///
     /// # Errors
     ///
-    /// Returns [`Trap`] if the component or export is unavailable, middleware refuses the call,
+    /// Returns [`CallError`] if the component or export is unavailable, middleware refuses the call,
     /// or the engine reports a failure.
     pub async fn call(
         &self,
@@ -145,7 +145,7 @@ impl App {
         interface: &str,
         function: impl Into<Arc<str>>,
         args: Vals,
-    ) -> Result<Vals, Trap> {
+    ) -> Result<Vals, CallError> {
         self.call_with_context(
             component,
             interface,
@@ -163,14 +163,14 @@ impl App {
         function: Arc<str>,
         args: Vals,
         context: InvocationContext,
-    ) -> Result<Vals, Trap> {
+    ) -> Result<Vals, CallError> {
         let (compiled, component_name, interface) = {
             let components = self.lock_components();
             let loaded = components
                 .get(component)
-                .ok_or_else(|| Trap::new(format!("component `{component}` is not loaded")))?;
+                .ok_or_else(|| CallError::trap(format!("component `{component}` is not loaded")))?;
             let resolved = loaded.export_name(interface).ok_or_else(|| {
-                Trap::new(format!(
+                CallError::trap(format!(
                     "component `{component}` does not export `{interface}`"
                 ))
             })?;
@@ -195,10 +195,10 @@ impl App {
         interface: Arc<str>,
         function: Arc<str>,
         args: Vals,
-    ) -> Result<Vals, Trap> {
+    ) -> Result<Vals, CallError> {
         let (provided_interface, provider) = self
             .find_provider(&interface)
-            .ok_or_else(|| Trap::new(format!("no provider for `{interface}`")))?;
+            .ok_or_else(|| CallError::trap(format!("no provider for `{interface}`")))?;
         self.dispatch(
             Arc::new(HostTarget { provider, context }),
             Call::new(
@@ -212,7 +212,7 @@ impl App {
         .await
     }
 
-    async fn dispatch(&self, target: Arc<dyn CallTarget>, call: Call) -> Result<Vals, Trap> {
+    async fn dispatch(&self, target: Arc<dyn CallTarget>, call: Call) -> Result<Vals, CallError> {
         self.emit(&Event::InvocationStart {
             component: call.callee.clone(),
         });
@@ -255,7 +255,7 @@ impl ImportDispatcher for App {
         interface: Arc<str>,
         function: Arc<str>,
         args: Vals,
-    ) -> BoxFuture<'_, Result<Vals, Trap>> {
+    ) -> BoxFuture<'_, Result<Vals, CallError>> {
         Box::pin(self.call_import(context, caller, interface, function, args))
     }
 }
@@ -266,7 +266,7 @@ struct HostTarget {
 }
 
 impl CallTarget for HostTarget {
-    fn call(&self, call: Call) -> BoxFuture<'static, Result<Vals, Trap>> {
+    fn call(&self, call: Call) -> BoxFuture<'static, Result<Vals, CallError>> {
         let provider = self.provider.clone();
         let invocation = self.context.clone();
         Box::pin(async move {
@@ -284,7 +284,7 @@ struct ComponentTarget {
 }
 
 impl CallTarget for ComponentTarget {
-    fn call(&self, call: Call) -> BoxFuture<'static, Result<Vals, Trap>> {
+    fn call(&self, call: Call) -> BoxFuture<'static, Result<Vals, CallError>> {
         let compiled = self.compiled.clone();
         let imports = self.imports.clone();
         let context = self.context.clone();
@@ -562,12 +562,12 @@ mod tests {
             &'a self,
             cx: &'a CallContext,
             _call: Call,
-        ) -> BoxFuture<'a, Result<Vals, Trap>> {
+        ) -> BoxFuture<'a, Result<Vals, CallError>> {
             Box::pin(async move {
                 let marker = cx
                     .extensions()
                     .get::<Marker>()
-                    .ok_or_else(|| Trap::new("missing invocation data"))?;
+                    .ok_or_else(|| CallError::trap("missing invocation data"))?;
                 Ok(vec![Val::U32(marker.0)])
             })
         }
@@ -584,7 +584,7 @@ mod tests {
             _interface: Arc<str>,
             _function: Arc<str>,
             args: Vals,
-        ) -> BoxFuture<'_, Result<Vals, Trap>> {
+        ) -> BoxFuture<'_, Result<Vals, CallError>> {
             Box::pin(async move {
                 imports
                     .call(context, component, Arc::from(HOST), Arc::from("read"), args)

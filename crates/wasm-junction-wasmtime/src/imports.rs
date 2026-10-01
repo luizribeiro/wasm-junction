@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use wasm_junction::{ImportDispatcher, Trap, Vals};
+use wasm_junction::{CallError, ImportDispatcher, Vals};
 use wasmtime::AsContextMut;
 use wasmtime::bail;
 use wasmtime::component::types::ComponentItem;
@@ -107,7 +107,7 @@ async fn call(
     imports
         .call(context, component, interface, function, args)
         .await
-        .map_err(|error: Trap| wasmtime::Error::msg(error.to_string()))
+        .map_err(|error: CallError| wasmtime::Error::msg(error.to_string()))
 }
 
 fn set_results(results: &mut [WasmtimeVal], values: Vals) -> Result<(), wasmtime::Error> {

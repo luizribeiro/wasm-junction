@@ -8,8 +8,8 @@ pub mod users {
     use std::sync::Arc;
 
     use wasm_junction::{
-        BoxFuture, Call, CallContext, HostBound, Provided, Provider, Trap, TypeError, TypedCall,
-        Val, Vals,
+        BoxFuture, Call, CallContext, CallError, HostBound, Provided, Provider, TypeError,
+        TypedCall, Val, Vals,
     };
 
     /// The fully qualified WIT interface name.
@@ -83,10 +83,10 @@ pub mod users {
             &'a self,
             cx: &'a CallContext,
             call: Call,
-        ) -> BoxFuture<'a, Result<Vals, Trap>> {
+        ) -> BoxFuture<'a, Result<Vals, CallError>> {
             Box::pin(async move {
                 if call.function.as_ref() != "lookup" {
-                    return Err(Trap::new(format!(
+                    return Err(CallError::trap(format!(
                         "unknown users function `{}`",
                         call.function
                     )));
@@ -129,7 +129,7 @@ pub mod users {
 pub mod greeter {
     use std::sync::Arc;
 
-    use wasm_junction::{App, InterfaceHandle, Trap, TypeError, TypedCall, Val, Vals};
+    use wasm_junction::{App, CallError, InterfaceHandle, TypeError, TypedCall, Val, Vals};
 
     /// The fully qualified WIT interface name.
     pub const INTERFACE: &str = "example:greeter/greeter@0.1.0";
@@ -191,8 +191,8 @@ pub mod greeter {
         ///
         /// # Errors
         ///
-        /// Returns a [`Trap`] if middleware or the component fails.
-        pub async fn greet(&self, id: u32) -> Result<Result<String, String>, Trap> {
+        /// Returns a [`CallError`] if middleware or the component fails.
+        pub async fn greet(&self, id: u32) -> Result<Result<String, String>, CallError> {
             let values = self
                 .app
                 .call(
@@ -202,7 +202,7 @@ pub mod greeter {
                     Greet { id }.into_vals(),
                 )
                 .await?;
-            Greet::decode_output(&values).map_err(Trap::from)
+            Greet::decode_output(&values).map_err(CallError::from)
         }
     }
 

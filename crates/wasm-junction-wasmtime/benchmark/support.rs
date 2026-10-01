@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll, Wake, Waker};
 
 use wasm_junction::{
-    App, AppBuilder, BoxFuture, Call, CallContext, Component, Middleware, Next, Provided, Provider,
-    Trap, Val, Vals,
+    App, AppBuilder, BoxFuture, Call, CallContext, CallError, Component, Middleware, Next,
+    Provided, Provider, Val, Vals,
 };
 use wasm_junction_wasmtime::WasmtimeEngine;
 
@@ -16,13 +16,17 @@ const COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dispatch-benc
 struct Ping;
 
 impl Provider for Ping {
-    fn call<'a>(&'a self, _cx: &'a CallContext, call: Call) -> BoxFuture<'a, Result<Vals, Trap>> {
+    fn call<'a>(
+        &'a self,
+        _cx: &'a CallContext,
+        call: Call,
+    ) -> BoxFuture<'a, Result<Vals, CallError>> {
         Box::pin(async move {
             if call.function.as_ref() != "ping" {
-                return Err(Trap::new("benchmark expected host.ping"));
+                return Err(CallError::trap("benchmark expected host.ping"));
             }
             let [Val::U32(value)] = call.args.as_slice() else {
-                return Err(Trap::new("host.ping expected one u32"));
+                return Err(CallError::trap("host.ping expected one u32"));
             };
             Ok(vec![Val::U32(value + 1)])
         })
@@ -39,7 +43,7 @@ impl Counting {
 }
 
 impl Middleware for Counting {
-    async fn call(&self, call: Call, next: Next) -> Result<Vals, Trap> {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
         self.0.fetch_add(1, Ordering::Relaxed);
         next.run(call).await
     }

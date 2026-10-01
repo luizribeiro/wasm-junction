@@ -132,25 +132,25 @@ pub trait TypedCall: Sized {
 
 /// A failure that crosses a component call boundary.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Trap(String);
+pub struct CallError(String);
 
-impl Trap {
-    /// Creates a trap with a message suitable for the call's recipient.
+impl CallError {
+    /// Creates a guest trap with a message suitable for the call's recipient.
     #[must_use]
-    pub fn new(message: impl Into<String>) -> Self {
+    pub fn trap(message: impl Into<String>) -> Self {
         Self(message.into())
     }
 }
 
-impl Display for Trap {
+impl Display for CallError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         Display::fmt(&self.0, formatter)
     }
 }
 
-impl Error for Trap {}
+impl Error for CallError {}
 
-impl From<TypeError> for Trap {
+impl From<TypeError> for CallError {
     fn from(error: TypeError) -> Self {
         Self(error.to_string())
     }

@@ -8,9 +8,9 @@ use support::{
     FakeEngine, NOTES, Read, UnusedProvider, block_on, component_bytes, component_bytes_from,
 };
 use wasm_junction::{
-    App, BoxFuture, Call, CallContext, Caller, CompiledComponent, Component, Engine, EngineError,
-    GetError, InterfaceHandle, LoadError, Middleware, Next, Provided, Provider, Trap, TypedCall,
-    Vals,
+    App, BoxFuture, Call, CallContext, CallError, Caller, CompiledComponent, Component, Engine,
+    EngineError, GetError, InterfaceHandle, LoadError, Middleware, Next, Provided, Provider,
+    TypedCall, Vals,
 };
 
 const CLOCK: &str = "example:journal/clock@0.1.0";
@@ -56,7 +56,7 @@ impl InterfaceHandle for Summaries {
 }
 
 impl Summaries {
-    async fn summarize(&self, note: &str) -> Result<Vals, Trap> {
+    async fn summarize(&self, note: &str) -> Result<Vals, CallError> {
         self.app
             .call(&self.component, SUMMARIES, "summarize", vec![note.into()])
             .await
@@ -66,7 +66,7 @@ impl Summaries {
 struct Trace(Arc<Mutex<Vec<Call>>>);
 
 impl Middleware for Trace {
-    async fn call(&self, call: Call, next: Next) -> Result<Vals, Trap> {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
         self.0.lock().unwrap().push(call.clone());
         next.run(call).await
     }
@@ -75,12 +75,16 @@ impl Middleware for Trace {
 struct NotesProvider(Arc<Mutex<Vec<Caller>>>);
 
 impl Provider for NotesProvider {
-    fn call<'a>(&'a self, cx: &'a CallContext, call: Call) -> BoxFuture<'a, Result<Vals, Trap>> {
+    fn call<'a>(
+        &'a self,
+        cx: &'a CallContext,
+        call: Call,
+    ) -> BoxFuture<'a, Result<Vals, CallError>> {
         Box::pin(async move {
             self.0.lock().unwrap().push(cx.caller().clone());
             let read = call
                 .view::<Read>()?
-                .ok_or_else(|| Trap::new("unknown notes function"))?;
+                .ok_or_else(|| CallError::trap("unknown notes function"))?;
             Ok(Read::output(format!("contents of {}", read.name)))
         })
     }

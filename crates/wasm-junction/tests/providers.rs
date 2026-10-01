@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use support::{NOTES, Read, block_on, read_call};
 use wasm_junction::{
-    BoxFuture, Call, CallContext, Caller, Provided, Provider, Trap, TypedCall, Vals,
+    BoxFuture, Call, CallContext, CallError, Caller, Provided, Provider, TypedCall, Vals,
 };
 
 struct NotesProvider {
@@ -15,18 +15,22 @@ struct NotesProvider {
 }
 
 impl Provider for NotesProvider {
-    fn call<'a>(&'a self, cx: &'a CallContext, call: Call) -> BoxFuture<'a, Result<Vals, Trap>> {
+    fn call<'a>(
+        &'a self,
+        cx: &'a CallContext,
+        call: Call,
+    ) -> BoxFuture<'a, Result<Vals, CallError>> {
         Box::pin(async move {
             if cx.caller() != &Caller::Component(Arc::from("summarizer")) {
-                return Err(Trap::new("caller may not read notes"));
+                return Err(CallError::trap("caller may not read notes"));
             }
             let read = call
                 .view::<Read>()?
-                .ok_or_else(|| Trap::new("notes provider received another function"))?;
+                .ok_or_else(|| CallError::trap("notes provider received another function"))?;
             let text = self
                 .notes
                 .get(&read.name)
-                .ok_or_else(|| Trap::new(format!("note `{}` was not found", read.name)))?;
+                .ok_or_else(|| CallError::trap(format!("note `{}` was not found", read.name)))?;
             Ok(Read::output(text.clone()))
         })
     }

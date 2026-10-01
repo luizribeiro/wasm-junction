@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::{BoxFuture, Call, HostBound, MaybeSend, Trap, Vals};
+use crate::{BoxFuture, Call, CallError, HostBound, MaybeSend, Vals};
 
 /// A lifecycle notification observed by middleware.
 #[non_exhaustive]
@@ -22,19 +22,23 @@ pub enum Event {
 /// Logic that wraps every host-to-guest and guest-to-host call.
 pub trait Middleware: HostBound {
     /// Handles a call, optionally forwarding it through `next`.
-    fn call(&self, call: Call, next: Next) -> impl Future<Output = Result<Vals, Trap>> + MaybeSend;
+    fn call(
+        &self,
+        call: Call,
+        next: Next,
+    ) -> impl Future<Output = Result<Vals, CallError>> + MaybeSend;
 
     /// Observes an invocation lifecycle event.
     fn event(&self, _event: &Event) {}
 }
 
 pub(crate) trait ErasedMiddleware: HostBound {
-    fn call(&self, call: Call, next: Next) -> BoxFuture<'_, Result<Vals, Trap>>;
+    fn call(&self, call: Call, next: Next) -> BoxFuture<'_, Result<Vals, CallError>>;
     fn event(&self, event: &Event);
 }
 
 impl<T: Middleware> ErasedMiddleware for T {
-    fn call(&self, call: Call, next: Next) -> BoxFuture<'_, Result<Vals, Trap>> {
+    fn call(&self, call: Call, next: Next) -> BoxFuture<'_, Result<Vals, CallError>> {
         Box::pin(Middleware::call(self, call, next))
     }
 
@@ -44,7 +48,7 @@ impl<T: Middleware> ErasedMiddleware for T {
 }
 
 pub(crate) trait CallTarget: HostBound {
-    fn call(&self, call: Call) -> BoxFuture<'static, Result<Vals, Trap>>;
+    fn call(&self, call: Call) -> BoxFuture<'static, Result<Vals, CallError>>;
 }
 
 /// The remainder of a middleware chain.
@@ -71,7 +75,7 @@ impl Next {
 
     /// Continues the chain with `call`.
     #[must_use]
-    pub fn run(self, call: Call) -> BoxFuture<'static, Result<Vals, Trap>> {
+    pub fn run(self, call: Call) -> BoxFuture<'static, Result<Vals, CallError>> {
         if let Some(middleware) = self.middleware.get(self.index).cloned() {
             let next = Self {
                 index: self.index + 1,
@@ -128,7 +132,7 @@ mod tests {
     struct Record(&'static str, Arc<Mutex<Vec<&'static str>>>);
 
     impl Middleware for Record {
-        async fn call(&self, call: Call, next: Next) -> Result<Vals, Trap> {
+        async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
             self.1.lock().unwrap().push(self.0);
             let result = next.run(call).await;
             self.1.lock().unwrap().push(self.0);
@@ -139,7 +143,7 @@ mod tests {
     struct Target(Arc<Mutex<Vec<&'static str>>>);
 
     impl CallTarget for Target {
-        fn call(&self, call: Call) -> BoxFuture<'static, Result<Vals, Trap>> {
+        fn call(&self, call: Call) -> BoxFuture<'static, Result<Vals, CallError>> {
             self.0.lock().unwrap().push("target");
             Box::pin(async move { Ok(call.args) })
         }
@@ -149,7 +153,7 @@ mod tests {
         Call::new(Caller::Host, "notebook", NOTES, "read", vec![name.into()])
     }
 
-    fn run(middleware: Vec<Arc<dyn ErasedMiddleware>>, call: Call) -> Result<Vals, Trap> {
+    fn run(middleware: Vec<Arc<dyn ErasedMiddleware>>, call: Call) -> Result<Vals, CallError> {
         let trace = Arc::new(Mutex::new(Vec::new()));
         block_on(Next::new(middleware.into(), Arc::new(Target(trace))).run(call))
     }
@@ -185,12 +189,12 @@ mod tests {
     fn middleware_can_short_circuit_rewrite_and_retry() {
         struct Behavior;
         impl Middleware for Behavior {
-            async fn call(&self, mut call: Call, next: Next) -> Result<Vals, Trap> {
+            async fn call(&self, mut call: Call, next: Next) -> Result<Vals, CallError> {
                 let Some(read) = call.view::<Read>()? else {
-                    return Err(Trap::new("unexpected call"));
+                    return Err(CallError::trap("unexpected call"));
                 };
                 if read.0 == "secret" {
-                    return Err(Trap::new("access denied"));
+                    return Err(CallError::trap("access denied"));
                 }
                 call.set_view(Read(String::from("weekly")))?;
                 let first = next.clone().run(call.clone()).await?;
@@ -216,7 +220,7 @@ mod tests {
     fn middleware_can_use_values_without_a_typed_view() {
         struct Raw;
         impl Middleware for Raw {
-            async fn call(&self, mut call: Call, next: Next) -> Result<Vals, Trap> {
+            async fn call(&self, mut call: Call, next: Next) -> Result<Vals, CallError> {
                 call.args = vec![Val::from("raw")];
                 next.run(call).await
             }

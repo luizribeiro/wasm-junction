@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
 
-use wasm_junction::{App, Call, Component, Engine, Middleware, Next, Trap, Val, Vals};
+use wasm_junction::{App, Call, CallError, Component, Engine, Middleware, Next, Val, Vals};
 use wasm_junction_conformance::{Fixture, FixtureHost, SUMMARIZER, component, run, sample_note};
 use wasm_junction_wasmtime::WasmtimeEngine;
 
@@ -81,7 +81,7 @@ fn malformed_component_has_a_typed_compilation_error() {
 struct AwaitTimer(Arc<AtomicBool>);
 
 impl Middleware for AwaitTimer {
-    async fn call(&self, call: Call, next: Next) -> Result<Vals, Trap> {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
         if call.function.as_ref() == "normalize" {
             timer(Duration::from_millis(10)).await;
             self.0.store(true, Ordering::Release);

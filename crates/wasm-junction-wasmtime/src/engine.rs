@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use wasm_junction::{
-    BoxFuture, CompiledComponent, Engine, EngineError, ImportDispatcher, InvocationContext, Trap,
-    Vals,
+    BoxFuture, CallError, CompiledComponent, Engine, EngineError, ImportDispatcher,
+    InvocationContext, Vals,
 };
 use wasmtime::component::{Component, InstancePre, Linker, Val as WasmtimeVal};
 use wasmtime::{Config, Engine as RuntimeEngine, Store};
@@ -84,11 +84,11 @@ impl CompiledComponent for Compiled {
         interface: Arc<str>,
         function: Arc<str>,
         args: Vals,
-    ) -> BoxFuture<'_, Result<Vals, Trap>> {
+    ) -> BoxFuture<'_, Result<Vals, CallError>> {
         Box::pin(async move {
             self.call_export(imports, context, component, &interface, &function, args)
                 .await
-                .map_err(|error| Trap::new(error.to_string()))
+                .map_err(|error| CallError::trap(error.to_string()))
         })
     }
 }
