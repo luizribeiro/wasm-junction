@@ -57,6 +57,7 @@ impl Generator<'_> {
         match &self.resolve.types[id].kind {
             wit_parser::TypeDefKind::Record(record) => return self.record(name, record),
             wit_parser::TypeDefKind::Enum(enum_) => return Self::enum_(name, enum_),
+            wit_parser::TypeDefKind::Flags(flags) => return Self::flags(name, flags),
             _ => {}
         }
         let ident = rust_ident(&name.to_upper_camel_case())?;

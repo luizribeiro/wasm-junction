@@ -5,4 +5,9 @@ interface controls {
     ready,
     needs-review,
   }
+
+  flags permissions {
+    read,
+    write,
+  }
 }

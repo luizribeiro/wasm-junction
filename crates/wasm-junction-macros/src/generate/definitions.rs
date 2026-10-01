@@ -1,11 +1,70 @@
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::TokenStream;
 use quote::quote;
-use wit_parser::{Enum, Record, Type, TypeDefKind};
+use wit_parser::{Enum, Flags, Record, Type, TypeDefKind};
 
 use super::{Generator, rust_ident};
 
 impl Generator<'_> {
+    pub(super) fn flags(name: &str, flags: &Flags) -> syn::Result<TokenStream> {
+        let type_ident = rust_ident(&name.to_upper_camel_case())?;
+        let fields = flags
+            .flags
+            .iter()
+            .map(|flag| rust_ident(&flag.name.to_snake_case()))
+            .collect::<syn::Result<Vec<_>>>()?;
+        let wit_names = flags
+            .flags
+            .iter()
+            .map(|flag| &flag.name)
+            .collect::<Vec<_>>();
+        let decode = wit_names.iter().zip(&fields).map(|(name, field)| {
+            let duplicate = format!("duplicate {name} flag");
+            quote!(#name => {
+                if result.#field {
+                    return Err(::wasm_junction::TypeError::new(#duplicate));
+                }
+                result.#field = true;
+            })
+        });
+        let expected = format!("expected {name} flags");
+        Ok(quote! {
+            #[doc = concat!("The WIT `", #name, "` flags.")]
+            #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+            pub struct #type_ident {
+                #(#[doc = concat!("Whether the WIT `", #wit_names, "` flag is active.")]
+                  pub #fields: bool,)*
+            }
+
+            impl ::std::convert::From<#type_ident> for ::wasm_junction::Val {
+                fn from(value: #type_ident) -> Self {
+                    let #type_ident { #(#fields,)* } = value;
+                    let mut flags = ::std::vec::Vec::new();
+                    #(if #fields { flags.push(#wit_names.to_owned()); })*
+                    Self::Flags(flags)
+                }
+            }
+
+            impl ::std::convert::TryFrom<::wasm_junction::Val> for #type_ident {
+                type Error = ::wasm_junction::TypeError;
+
+                fn try_from(value: ::wasm_junction::Val) -> ::std::result::Result<Self, Self::Error> {
+                    let ::wasm_junction::Val::Flags(flags) = value else {
+                        return Err(::wasm_junction::TypeError::new(#expected));
+                    };
+                    let mut result = Self::default();
+                    for flag in flags {
+                        match flag.as_str() {
+                            #(#decode,)*
+                            _ => return Err(::wasm_junction::TypeError::new(#expected)),
+                        }
+                    }
+                    Ok(result)
+                }
+            }
+        })
+    }
+
     pub(super) fn enum_(name: &str, enum_: &Enum) -> syn::Result<TokenStream> {
         let type_ident = rust_ident(&name.to_upper_camel_case())?;
         let cases = enum_
