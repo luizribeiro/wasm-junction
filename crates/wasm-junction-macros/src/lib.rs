@@ -196,6 +196,16 @@ mod tests {
             tokens.contains("Into :: < :: wasm_junction :: StreamHandle >"),
             "{tokens}"
         );
+        assert!(
+            tokens.contains(
+                "pub async fn send (& self , value : :: std :: option :: Option < :: wasm_junction :: OutputStream >)"
+            ),
+            "{tokens}"
+        );
+        assert!(
+            tokens.contains("Result < :: wasm_junction :: InputStream"),
+            "{tokens}"
+        );
     }
 
     #[test]

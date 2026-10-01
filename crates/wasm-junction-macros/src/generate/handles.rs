@@ -69,9 +69,10 @@ impl Generator<'_> {
             .map(|(param, name)| self.handle_argument(param.ty, &function.name, name))
             .collect::<syn::Result<Vec<_>>>()?;
         let (types, values): (Vec<_>, Vec<_>) = arguments.into_iter().unzip();
-        let output = function
-            .result
-            .map_or_else(|| Ok(quote!(())), |ty| self.rust_type(ty, &function.name))?;
+        let (output, convert_output) = function.result.map_or_else(
+            || Ok((quote!(()), quote!(Ok(value)))),
+            |ty| self.handle_output(ty, &quote!(value), &function.name),
+        )?;
         let function_name = &function.name;
         Ok(quote! {
             #[doc = concat!("Calls the WIT `", #function_name, "` function.")]
@@ -89,8 +90,9 @@ impl Generator<'_> {
                         #call { #(#names: #values,)* }
                     ),
                 ).await?;
-                <#call as ::wasm_junction::TypedCall>::decode_output(&values)
-                    .map_err(::wasm_junction::CallError::from)
+                let value = <#call as ::wasm_junction::TypedCall>::decode_output(&values)
+                    .map_err(::wasm_junction::CallError::from)?;
+                #convert_output
             }
         })
     }
@@ -101,6 +103,11 @@ impl Generator<'_> {
         item: &str,
         value: &proc_macro2::Ident,
     ) -> syn::Result<(TokenStream, TokenStream)> {
+        if let Some(mapped) =
+            self.handle_stream(ty, &quote!(#value), item, StreamDirection::Output)?
+        {
+            return Ok(mapped);
+        }
         let owned = self.rust_type(ty, item)?;
         match self.argument_kind(ty) {
             ArgumentKind::Value => Ok((owned, quote!(#value))),
@@ -130,6 +137,87 @@ impl Generator<'_> {
                 }
             }
             ArgumentKind::Borrowed => Ok((quote!(&#owned), quote!(#value.clone()))),
+        }
+    }
+
+    fn handle_output(
+        &self,
+        ty: Type,
+        value: &TokenStream,
+        item: &str,
+    ) -> syn::Result<(TokenStream, TokenStream)> {
+        self.handle_stream(ty, value, item, StreamDirection::Input)?
+            .map_or_else(|| Ok((self.rust_type(ty, item)?, quote!(Ok(value)))), Ok)
+    }
+
+    fn handle_stream(
+        &self,
+        ty: Type,
+        value: &TokenStream,
+        item: &str,
+        direction: StreamDirection,
+    ) -> syn::Result<Option<(TokenStream, TokenStream)>> {
+        if self.direct_stream(ty) {
+            return Ok(Some((direction.ty(), direction.convert(value))));
+        }
+        let Type::Id(id) = ty else { return Ok(None) };
+        match &self.resolve.types[id].kind {
+            TypeDefKind::Option(payload) if self.direct_stream(*payload) => {
+                let ty = direction.ty();
+                let mapped = match direction {
+                    StreamDirection::Output => {
+                        quote!(#value.map(::std::convert::Into::into))
+                    }
+                    StreamDirection::Input => quote!(#value
+                        .map(::wasm_junction::InputStream::try_from)
+                        .transpose()
+                        .map_err(|error|
+                            ::wasm_junction::CallError::trap(error.to_string()))),
+                };
+                Ok(Some((quote!(::std::option::Option<#ty>), mapped)))
+            }
+            TypeDefKind::Result(result)
+                if result.ok.is_some_and(|ty| self.direct_stream(ty))
+                    || result.err.is_some_and(|ty| self.direct_stream(ty)) =>
+            {
+                let (ok_ty, ok) = self.handle_result_side(result.ok, true, item, direction)?;
+                let (err_ty, err) = self.handle_result_side(result.err, false, item, direction)?;
+                Ok(Some((
+                    quote!(::std::result::Result<#ok_ty, #err_ty>),
+                    quote!(match #value { #ok, #err }),
+                )))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn handle_result_side(
+        &self,
+        ty: Option<Type>,
+        ok: bool,
+        item: &str,
+        direction: StreamDirection,
+    ) -> syn::Result<(TokenStream, TokenStream)> {
+        let constructor = if ok { quote!(Ok) } else { quote!(Err) };
+        let Some(ty) = ty else {
+            return Ok((quote!(()), quote!(#constructor(()) => #constructor(()))));
+        };
+        if self.direct_stream(ty) {
+            let mapped = direction.convert(&quote!(value));
+            let arm = match direction {
+                StreamDirection::Output => {
+                    quote!(#constructor(value) => #constructor(#mapped))
+                }
+                StreamDirection::Input => {
+                    quote!(#constructor(value) => #mapped.map(#constructor))
+                }
+            };
+            Ok((direction.ty(), arm))
+        } else {
+            Ok((
+                self.rust_type(ty, item)?,
+                quote!(#constructor(value) => #constructor(value)),
+            ))
         }
     }
 
@@ -163,4 +251,29 @@ enum ArgumentKind {
     StringList,
     Option(Type),
     Borrowed,
+}
+
+#[derive(Clone, Copy)]
+enum StreamDirection {
+    Input,
+    Output,
+}
+
+impl StreamDirection {
+    fn ty(self) -> TokenStream {
+        match self {
+            Self::Output => quote!(::wasm_junction::OutputStream),
+            Self::Input => quote!(::wasm_junction::InputStream),
+        }
+    }
+
+    fn convert(self, value: &TokenStream) -> TokenStream {
+        match self {
+            Self::Output => quote!(::std::convert::Into::<
+                ::wasm_junction::StreamHandle,
+            >::into(#value)),
+            Self::Input => quote!(::wasm_junction::InputStream::try_from(#value)
+                .map_err(|error| ::wasm_junction::CallError::trap(error.to_string()))),
+        }
+    }
 }

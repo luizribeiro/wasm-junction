@@ -236,7 +236,7 @@ impl Generator<'_> {
         })
     }
 
-    fn direct_stream(&self, ty: Type) -> bool {
+    pub(super) fn direct_stream(&self, ty: Type) -> bool {
         matches!(self.direct_boundary(ty), Ok(Some(BoundaryUse::Stream)))
     }
 
