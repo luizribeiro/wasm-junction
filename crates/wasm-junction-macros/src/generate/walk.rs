@@ -11,7 +11,6 @@ pub(super) enum Position {
 #[derive(Clone, Copy)]
 pub(super) struct TypeUse<'a> {
     pub(super) ty: Type,
-    #[allow(dead_code)]
     pub(super) item: &'a str,
     pub(super) position: Position,
 }

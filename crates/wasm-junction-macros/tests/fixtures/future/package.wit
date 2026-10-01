@@ -1,0 +1,5 @@
+package test:futures;
+
+interface tasks {
+  type delayed = future<string>;
+}

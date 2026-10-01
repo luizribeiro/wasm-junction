@@ -1,0 +1,5 @@
+package test:streams;
+
+interface data {
+  type chunks = stream<u8>;
+}

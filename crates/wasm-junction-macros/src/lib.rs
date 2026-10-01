@@ -61,7 +61,7 @@ fn expand(config: &Config) -> syn::Result<TokenStream2> {
             const _: &[u8] = include_bytes!(#path);
         )
     });
-    let bindings = generate::generate(&resolve, package_id)?;
+    let bindings = generate::generate(&resolve, package_id, config.path.span())?;
     Ok(quote!(#(#tracked)* #bindings))
 }
 

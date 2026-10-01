@@ -11,8 +11,12 @@ mod validate;
 mod values;
 mod walk;
 
-pub(crate) fn generate(resolve: &Resolve, package_id: PackageId) -> syn::Result<TokenStream> {
-    validate::package(resolve, package_id)?;
+pub(crate) fn generate(
+    resolve: &Resolve,
+    package_id: PackageId,
+    span: Span,
+) -> syn::Result<TokenStream> {
+    validate::package(resolve, package_id, span)?;
     let selected = reachability::find(resolve, package_id)?;
     let generator = Generator {
         resolve,
