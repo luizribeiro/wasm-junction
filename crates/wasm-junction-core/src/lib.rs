@@ -13,7 +13,8 @@ mod values;
 
 pub use context::{Extensions, InvocationContext};
 pub use engine::{
-    CompiledComponent, Engine, EngineError, ImportDispatcher, ImportTarget, WasiConfig,
+    ChannelDirection, CompiledComponent, Engine, EngineError, ImportDispatcher, ImportTarget,
+    WasiConfig,
 };
 pub use error::{CallError, CallErrorKind};
 pub use future::{BoxFuture, HostBound, MaybeSend};

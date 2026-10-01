@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::{BoxFuture, Call, CallError, HostBound, MaybeSend, Vals};
+use crate::{BoxFuture, Call, CallError, ChannelDirection, HostBound, MaybeSend, Vals};
 
 /// A lifecycle notification observed by middleware.
 #[non_exhaustive]
@@ -28,6 +28,20 @@ pub enum Event {
         resource: Arc<str>,
         /// The provider-assigned resource id.
         id: u32,
+    },
+    /// A byte stream began crossing the engine boundary.
+    ChannelOpen {
+        /// The opaque stream id.
+        stream: u64,
+        /// The direction bytes travel.
+        direction: ChannelDirection,
+    },
+    /// A byte stream stopped crossing the engine boundary.
+    ChannelClose {
+        /// The opaque stream id.
+        stream: u64,
+        /// The direction bytes traveled.
+        direction: ChannelDirection,
     },
 }
 

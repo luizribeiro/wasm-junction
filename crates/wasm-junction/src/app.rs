@@ -723,6 +723,14 @@ impl ImportDispatcher for App {
             self.drop_host_resource(&context, resource)
         })
     }
+
+    fn channel_open(&self, stream: u64, direction: crate::ChannelDirection) {
+        self.emit(&Event::ChannelOpen { stream, direction });
+    }
+
+    fn channel_close(&self, stream: u64, direction: crate::ChannelDirection) {
+        self.emit(&Event::ChannelClose { stream, direction });
+    }
 }
 
 struct HostTarget {
@@ -1411,6 +1419,7 @@ fn load_resolution_result(
 mod tests {
     use std::cell::Cell;
     use std::future::Future;
+    use std::sync::{Arc, Mutex};
     use std::task::{Context, Poll, Waker};
 
     use super::*;
@@ -1430,6 +1439,18 @@ mod tests {
     }
 
     struct RewriteEngineImport;
+
+    struct RecordEvents(Arc<Mutex<Vec<Event>>>);
+
+    impl Middleware for RecordEvents {
+        async fn call(&self, call: Call, next: crate::Next) -> Result<Vals, CallError> {
+            next.run(call).await
+        }
+
+        fn event(&self, event: &Event) {
+            self.0.lock().unwrap().push(event.clone());
+        }
+    }
 
     impl Middleware for RewriteEngineImport {
         async fn call(&self, mut call: Call, next: crate::Next) -> Result<Vals, CallError> {
@@ -1483,6 +1504,33 @@ mod tests {
         .unwrap();
 
         assert_eq!(values, [crate::Val::from("rewritten")]);
+    }
+
+    #[test]
+    fn engine_channel_events_reach_middleware() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let app = App::builder()
+            .engine(ExplicitEngine)
+            .middleware(RecordEvents(events.clone()))
+            .build()
+            .unwrap();
+
+        ImportDispatcher::channel_open(&app, 7, crate::ChannelDirection::HostToGuest);
+        ImportDispatcher::channel_close(&app, 7, crate::ChannelDirection::HostToGuest);
+
+        assert_eq!(
+            *events.lock().unwrap(),
+            [
+                Event::ChannelOpen {
+                    stream: 7,
+                    direction: crate::ChannelDirection::HostToGuest,
+                },
+                Event::ChannelClose {
+                    stream: 7,
+                    direction: crate::ChannelDirection::HostToGuest,
+                },
+            ]
+        );
     }
 
     fn ready<F: Future>(future: F) -> F::Output {

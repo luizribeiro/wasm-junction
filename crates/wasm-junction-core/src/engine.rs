@@ -4,6 +4,15 @@ use std::{error::Error, fmt};
 
 use crate::{BoxFuture, CallError, HostBound, InvocationContext, Resource, Vals};
 
+/// The direction bytes travel across a component boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChannelDirection {
+    /// Bytes are produced by the host and consumed by a guest.
+    HostToGuest,
+    /// Bytes are produced by a guest and consumed by the host.
+    GuestToHost,
+}
+
 /// The engine-provided implementation at the end of an imported call's middleware chain.
 pub trait ImportTarget: HostBound {
     /// Invokes the implementation with middleware's final arguments.
@@ -60,6 +69,12 @@ pub trait ImportDispatcher: HostBound {
         caller: Arc<str>,
         resource: Resource,
     ) -> BoxFuture<'_, Result<(), CallError>>;
+
+    /// Reports that an engine began bridging a stream across its boundary.
+    fn channel_open(&self, _stream: u64, _direction: ChannelDirection) {}
+
+    /// Reports that an engine finished bridging a stream across its boundary.
+    fn channel_close(&self, _stream: u64, _direction: ChannelDirection) {}
 }
 
 /// Compiles WebAssembly components for an application dispatcher.
