@@ -16,6 +16,7 @@ pub struct Component {
     imports: Vec<String>,
     type_imports: Vec<String>,
     exports: Vec<String>,
+    resource_exports: Vec<String>,
     sections: HashMap<String, Range<usize>>,
 }
 
@@ -34,6 +35,7 @@ impl Component {
             imports: metadata.imports,
             type_imports: metadata.type_imports,
             exports: metadata.exports,
+            resource_exports: metadata.resource_exports,
             sections: metadata.sections,
         })
     }
@@ -93,15 +95,30 @@ impl Component {
         let range = self.sections.get(name)?;
         self.bytes.get(range.clone())
     }
-    pub(crate) fn into_parts(self) -> (Arc<[u8]>, Option<String>, Vec<String>, Vec<String>) {
-        (self.bytes, self.name, self.imports, self.exports)
+    pub(crate) fn into_parts(self) -> ComponentParts {
+        ComponentParts {
+            bytes: self.bytes,
+            name: self.name,
+            imports: self.imports,
+            exports: self.exports,
+            resource_exports: self.resource_exports,
+        }
     }
+}
+
+pub(crate) struct ComponentParts {
+    pub(crate) bytes: Arc<[u8]>,
+    pub(crate) name: Option<String>,
+    pub(crate) imports: Vec<String>,
+    pub(crate) exports: Vec<String>,
+    pub(crate) resource_exports: Vec<String>,
 }
 
 struct Metadata {
     imports: Vec<String>,
     type_imports: Vec<String>,
     exports: Vec<String>,
+    resource_exports: Vec<String>,
     sections: HashMap<String, Range<usize>>,
 }
 
@@ -113,6 +130,7 @@ fn inspect(bytes: &[u8]) -> Result<Metadata, ComponentError> {
         imports: Vec::new(),
         type_imports: Vec::new(),
         exports: Vec::new(),
+        resource_exports: Vec::new(),
         sections: HashMap::new(),
     };
     let mut depth = 0_u32;
@@ -154,6 +172,18 @@ fn inspect(bytes: &[u8]) -> Result<Metadata, ComponentError> {
                     let export = export.map_err(ComponentError::Parse)?;
                     if export.kind == ComponentExternalKind::Instance {
                         metadata.exports.push(export.name.name.to_owned());
+                        let id = types.as_ref().component_instance_at(export.index);
+                        if types[id].exports.values().any(|item| {
+                            matches!(
+                                item.ty,
+                                ComponentEntityType::Type {
+                                    referenced: ComponentAnyTypeId::Resource(_),
+                                    ..
+                                }
+                            )
+                        }) {
+                            metadata.resource_exports.push(export.name.name.to_owned());
+                        }
                     }
                 }
             }

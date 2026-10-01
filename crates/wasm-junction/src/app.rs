@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use semver::Version;
 
+use crate::component::ComponentParts;
 use crate::middleware::{CallTarget, ErasedMiddleware};
 use crate::{
     BoxFuture, Call, CallContext, CallError, Caller, CompiledComponent, Component, Engine,
@@ -70,8 +71,15 @@ impl App {
     /// Returns [`LoadError`] if the component is unnamed, its name is already loaded, an import
     /// is missing, or the engine cannot compile it.
     pub async fn load(&self, component: Component) -> Result<(), LoadError> {
-        let (bytes, name, imports, exports) = component.into_parts();
+        let ComponentParts {
+            bytes,
+            name,
+            imports,
+            exports,
+            resource_exports,
+        } = component.into_parts();
         let name = name.ok_or(LoadError::UnnamedComponent)?;
+        reject_resource_exports(resource_exports)?;
         self.validate_load(&name, &imports, &exports, &self.lock_components())?;
         let compiled = self
             .0
@@ -107,7 +115,14 @@ impl App {
     ) -> Result<(), LoadError> {
         let mut pending = Vec::new();
         for component in components {
-            let (bytes, name, imports, exports) = component.into_parts();
+            let ComponentParts {
+                bytes,
+                name,
+                imports,
+                exports,
+                resource_exports,
+            } = component.into_parts();
+            reject_resource_exports(resource_exports)?;
             pending.push(PendingComponent {
                 bytes,
                 name: name.ok_or(LoadError::UnnamedComponent)?,
@@ -891,6 +906,8 @@ pub enum LoadError {
     UnnamedComponent,
     /// Another component is already loaded under this name.
     DuplicateName(String),
+    /// Exported interfaces define resources, which cannot yet be routed between components.
+    ResourceExports(Vec<String>),
     /// One or more imported interfaces have no host provider.
     MissingImports(MissingImports),
     /// Loading would leave one or more component imports ambiguous.
@@ -907,6 +924,11 @@ impl Display for LoadError {
         match self {
             Self::UnnamedComponent => formatter.write_str("component has no application name"),
             Self::DuplicateName(name) => write!(formatter, "component `{name}` is already loaded"),
+            Self::ResourceExports(interfaces) => write!(
+                formatter,
+                "component exports unsupported resources in: {}",
+                interfaces.join(", ")
+            ),
             Self::MissingImports(error) => Display::fmt(error, formatter),
             Self::WouldMakeAmbiguous { issues } => write!(
                 formatter,
@@ -927,11 +949,21 @@ impl Error for LoadError {
         match self {
             Self::MissingImports(error) => Some(error),
             Self::Compile(error) => Some(error),
-            Self::UnnamedComponent | Self::DuplicateName(_) | Self::WouldMakeAmbiguous { .. } => {
-                None
-            }
+            Self::UnnamedComponent
+            | Self::DuplicateName(_)
+            | Self::ResourceExports(_)
+            | Self::WouldMakeAmbiguous { .. } => None,
         }
     }
+}
+
+fn reject_resource_exports(mut interfaces: Vec<String>) -> Result<(), LoadError> {
+    if interfaces.is_empty() {
+        return Ok(());
+    }
+    interfaces.sort();
+    interfaces.dedup();
+    Err(LoadError::ResourceExports(interfaces))
 }
 
 /// A failure to obtain a typed interface handle.

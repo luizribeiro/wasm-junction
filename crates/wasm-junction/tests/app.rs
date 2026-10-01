@@ -72,6 +72,12 @@ const CONTEXT_WIT: &str = r"
     interface target { read: func() -> u32; }
     world target-component { export target; }
 ";
+const RESOURCE_EXPORT_WIT: &str = r"
+    package example:resources@1.0.0;
+    interface sessions { resource session; open: func() -> session; }
+    interface files { resource file; create: func() -> file; }
+    world plugin { export sessions; export files; }
+";
 
 fn component(name: &str) -> Component {
     Component::from_bytes(component_bytes(PLUGIN_WIT, "plugin"))
@@ -252,6 +258,20 @@ fn load_compiles_and_refuses_missing_imports_or_duplicate_names() {
         block_on(app.load(component("summarizer"))),
         Err(LoadError::DuplicateName(name)) if name == "summarizer"
     ));
+}
+
+#[test]
+fn load_refuses_interfaces_that_export_resources() {
+    let app = App::builder().engine(FakeEngine).build().unwrap();
+    let component = wit_component(RESOURCE_EXPORT_WIT, "plugin", "resources");
+    let error = block_on(app.load(component)).unwrap_err();
+    assert_eq!(
+        error,
+        LoadError::ResourceExports(vec![
+            "example:resources/files@1.0.0".to_owned(),
+            "example:resources/sessions@1.0.0".to_owned(),
+        ])
+    );
 }
 
 #[test]
