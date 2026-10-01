@@ -25,6 +25,12 @@ pub const HANDLE_SUMMARIES: &str = "test:handles/summaries@1.0.0";
 /// The reserved interface-name fixture.
 pub const RESERVED_HOST: &str = "test:keywords/host";
 
+/// The interface used to verify invocation context propagation.
+pub const CONTEXT_TARGET: &str = "example:context/target@1.0.0";
+
+/// Per-invocation data checked by the context propagation fixture.
+pub struct ContextMarker(pub u32);
+
 /// Builds a real component from inline WIT and a matching dummy core module.
 pub fn component_bytes(wit: &str, world_name: &str) -> Vec<u8> {
     component_bytes_from(&[("fixture.wit", wit)], world_name)
@@ -85,70 +91,75 @@ impl CompiledComponent for UnusedComponent {
         args: Vals,
     ) -> BoxFuture<'_, Result<Vals, CallError>> {
         Box::pin(async move {
-            if interface.as_ref() == "example:cycle/first-api@1.0.0" {
-                return imports
-                    .call(
-                        context,
-                        component,
-                        Arc::from("example:cycle/second-api@1.0.0"),
-                        function,
-                        args,
-                    )
-                    .await;
+            match interface.as_ref() {
+                "example:cycle/first-api@1.0.0" => {
+                    imports
+                        .call(
+                            context,
+                            component,
+                            Arc::from("example:cycle/second-api@1.0.0"),
+                            function,
+                            args,
+                        )
+                        .await
+                }
+                "example:cycle/second-api@1.0.0" => {
+                    imports
+                        .call(
+                            context,
+                            component,
+                            Arc::from("example:cycle/first-api@1.0.0"),
+                            function,
+                            args,
+                        )
+                        .await
+                }
+                "example:writer/article@1.0.0" => {
+                    imports
+                        .call(
+                            context,
+                            component,
+                            Arc::from("example:translate/translator@0.1.0"),
+                            Arc::from("translate"),
+                            args,
+                        )
+                        .await
+                }
+                "example:translate/translator@0.1.7" => {
+                    let [wasm_junction::Val::String(text)] = args.as_slice() else {
+                        return Err(CallError::trap("translator expected one string"));
+                    };
+                    Ok(vec![format!("translated: {text}").into()])
+                }
+                CONTEXT_TARGET => context
+                    .extensions()
+                    .get::<ContextMarker>()
+                    .map(|marker| vec![Val::U32(marker.0)])
+                    .ok_or_else(|| CallError::trap("invocation context marker is missing")),
+                RESERVED_HOST => {
+                    imports
+                        .call(context, component, interface, function, args)
+                        .await
+                }
+                HANDLE_SUMMARIES => handle_call(&function, args),
+                "example:journal/summaries@0.1.0" => {
+                    let import = match function.as_ref() {
+                        "summarize" => "read",
+                        "unknown" => "unknown",
+                        _ => return Err(CallError::trap("engine received the wrong function")),
+                    };
+                    imports
+                        .call(
+                            context,
+                            component,
+                            Arc::from(NOTES),
+                            Arc::from(import),
+                            args,
+                        )
+                        .await
+                }
+                _ => Err(CallError::trap("engine received an unresolved export")),
             }
-            if interface.as_ref() == "example:cycle/second-api@1.0.0" {
-                return imports
-                    .call(
-                        context,
-                        component,
-                        Arc::from("example:cycle/first-api@1.0.0"),
-                        function,
-                        args,
-                    )
-                    .await;
-            }
-            if interface.as_ref() == "example:writer/article@1.0.0" {
-                return imports
-                    .call(
-                        context,
-                        component,
-                        Arc::from("example:translate/translator@0.1.0"),
-                        Arc::from("translate"),
-                        args,
-                    )
-                    .await;
-            }
-            if interface.as_ref() == "example:translate/translator@0.1.7" {
-                let [wasm_junction::Val::String(text)] = args.as_slice() else {
-                    return Err(CallError::trap("translator expected one string"));
-                };
-                return Ok(vec![format!("translated: {text}").into()]);
-            }
-            if interface.as_ref() == RESERVED_HOST {
-                return imports
-                    .call(context, component, interface, function, args)
-                    .await;
-            }
-            if interface.as_ref() == HANDLE_SUMMARIES {
-                return handle_call(&function, args);
-            }
-            if interface.as_ref() != "example:journal/summaries@0.1.0" {
-                return Err(CallError::trap("engine received an unresolved export"));
-            }
-            let import = match function.as_ref() {
-                "summarize" => "read",
-                "unknown" => "unknown",
-                _ => return Err(CallError::trap("engine received the wrong function")),
-            };
-            imports
-                .call(
-                    context,
-                    component,
-                    Arc::from(NOTES),
-                    Arc::from(import),
-                    args,
-                )
-                .await
         })
     }
 }
