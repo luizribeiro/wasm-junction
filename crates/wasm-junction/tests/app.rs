@@ -34,9 +34,32 @@ const TYPES_PLUGIN_WIT: &str = r"
     }
     world plugin { export summaries; }
 ";
+const TRANSLATOR_WIT: &str = r"
+    package example:translate@0.1.7;
+    interface translator { translate: func(text: string) -> string; }
+    world service { export translator; }
+";
+const TRANSLATOR_API_WIT: &str = r"
+    package example:translate@0.1.0;
+    interface translator { translate: func(text: string) -> string; }
+";
+const WRITER_WIT: &str = r"
+    package example:writer@1.0.0;
+    interface article { write: func(text: string) -> string; }
+    world writer {
+        import example:translate/translator@0.1.0;
+        export article;
+    }
+";
 
 fn component(name: &str) -> Component {
     Component::from_bytes(component_bytes(PLUGIN_WIT, "plugin"))
+        .unwrap()
+        .named(name)
+}
+
+fn wit_component(wit: &str, world: &str, name: &str) -> Component {
+    Component::from_bytes(component_bytes(wit, world))
         .unwrap()
         .named(name)
 }
@@ -136,6 +159,22 @@ fn load_compiles_and_refuses_missing_imports_or_duplicate_names() {
         block_on(app.load(component("summarizer"))),
         Err(LoadError::DuplicateName(name)) if name == "summarizer"
     ));
+}
+
+#[test]
+fn loaded_component_exports_satisfy_compatible_imports() {
+    let app = App::builder().engine(FakeEngine).build().unwrap();
+    block_on(app.load(wit_component(TRANSLATOR_WIT, "service", "translator"))).unwrap();
+    let writer = Component::from_bytes(component_bytes_from(
+        &[
+            ("translator.wit", TRANSLATOR_API_WIT),
+            ("writer.wit", WRITER_WIT),
+        ],
+        "example:writer/writer@1.0.0",
+    ))
+    .unwrap()
+    .named("writer");
+    block_on(app.load(writer)).unwrap();
 }
 
 #[test]

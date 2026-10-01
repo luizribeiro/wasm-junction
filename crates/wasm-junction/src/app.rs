@@ -4,6 +4,8 @@ use std::fmt::{self, Display};
 use std::panic::Location;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use semver::Version;
+
 use crate::middleware::{CallTarget, ErasedMiddleware};
 use crate::{
     BoxFuture, Call, CallContext, CallError, Caller, CompiledComponent, Component, Engine,
@@ -65,7 +67,8 @@ impl App {
         let mut missing = imports
             .iter()
             .filter(|import| {
-                self.find_provider(import).is_none() && !self.0.engine.supports_import(import)
+                matches!(self.resolve_import(import), Err(ResolveError::Missing))
+                    && !self.0.engine.supports_import(import)
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -259,12 +262,36 @@ impl App {
             .map(|(interface, provider)| (*interface, provider.clone()))
     }
 
+    fn resolve_import(&self, requested: &str) -> Result<(), ResolveError> {
+        let host_count = self
+            .0
+            .providers
+            .keys()
+            .filter(|provided| interfaces_compatible(requested, provided))
+            .count();
+        let component_count = self
+            .lock_components()
+            .values()
+            .filter(|component| component.exports_interface(requested))
+            .count();
+        match host_count + component_count {
+            0 => Err(ResolveError::Missing),
+            1 => Ok(()),
+            _ => Err(ResolveError::Ambiguous),
+        }
+    }
+
     fn lock_components(&self) -> MutexGuard<'_, BTreeMap<String, LoadedComponent>> {
         match self.0.components.lock() {
             Ok(components) => components,
             Err(poisoned) => poisoned.into_inner(),
         }
     }
+}
+
+enum ResolveError {
+    Missing,
+    Ambiguous,
 }
 
 impl ImportDispatcher for App {
@@ -612,20 +639,28 @@ fn interfaces_compatible(requested: &str, provided: &str) -> bool {
     if requested_name != provided_name {
         return false;
     }
-    let parse = |version: &str| {
-        let mut pieces = version.split('.');
-        let version = (
-            pieces.next()?.parse::<u64>().ok()?,
-            pieces.next()?.parse::<u64>().ok()?,
-            pieces.next()?.parse::<u64>().ok()?,
-        );
-        pieces.next().is_none().then_some(version)
-    };
-    let (Some(requested), Some(provided)) = (parse(requested_version), parse(provided_version))
-    else {
+    let (Ok(requested), Ok(provided)) = (
+        Version::parse(requested_version),
+        Version::parse(provided_version),
+    ) else {
         return false;
     };
-    requested.0 == provided.0 && (requested.0 != 0 || requested.1 == provided.1)
+    if requested.major == provided.major
+        && requested.minor == provided.minor
+        && requested.patch == provided.patch
+        && requested.pre == provided.pre
+    {
+        return true;
+    }
+    if !requested.pre.is_empty() || !provided.pre.is_empty() {
+        return false;
+    }
+    requested.major == provided.major
+        && if requested.major == 0 {
+            requested.minor != 0 && requested.minor == provided.minor
+        } else {
+            true
+        }
 }
 
 #[cfg(test)]
@@ -719,11 +754,30 @@ mod tests {
 
     #[test]
     fn interface_compatibility_follows_semver_tracks() {
-        assert!(interfaces_compatible("a:b/c@1.2.3", "a:b/c@1.2.3"));
-        assert!(interfaces_compatible("a:b/c@1.2.3", "a:b/c@1.8.0"));
-        assert!(interfaces_compatible("a:b/c@1.8.0", "a:b/c@1.2.3"));
-        assert!(!interfaces_compatible("a:b/c@1.0.0", "a:b/c@2.0.0"));
-        assert!(!interfaces_compatible("a:b/c@0.4.0", "a:b/c@0.5.0"));
-        assert!(!interfaces_compatible("a:b/c@bad", "a:b/c@worse"));
+        let compatible = [
+            ("a:b/c", "a:b/c"),
+            ("a:b/c@1.2.3", "a:b/c@1.8.0"),
+            ("a:b/c@0.4.1", "a:b/c@0.4.9"),
+            ("a:b/c@1.2.3+abc", "a:b/c@1.8.0+def"),
+            ("a:b/c@0.0.1+abc", "a:b/c@0.0.1+def"),
+            ("a:b/c@1.2.3-rc.1+abc", "a:b/c@1.2.3-rc.1+def"),
+        ];
+        let incompatible = [
+            ("a:b/c", "a:b/d"),
+            ("a:b/c", "a:b/c@1.0.0"),
+            ("a:b/c@1.0.0", "a:b/c@2.0.0"),
+            ("a:b/c@0.4.0", "a:b/c@0.5.0"),
+            ("a:b/c@0.0.1", "a:b/c@0.0.2"),
+            ("a:b/c@1.2.3-rc.1", "a:b/c@1.2.3-rc.2"),
+            ("a:b/c@bad", "a:b/c@worse"),
+        ];
+        for (left, right) in compatible {
+            assert!(interfaces_compatible(left, right));
+            assert!(interfaces_compatible(right, left));
+        }
+        for (left, right) in incompatible {
+            assert!(!interfaces_compatible(left, right));
+            assert!(!interfaces_compatible(right, left));
+        }
     }
 }

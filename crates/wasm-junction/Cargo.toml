@@ -22,6 +22,7 @@ wasmtime = ["dep:wasm-junction-wasmtime"]
 [dependencies]
 wasm-junction-core = { path = "../wasm-junction-core", version = "=0.0.0" }
 wasm-junction-macros = { path = "../wasm-junction-macros", version = "=0.0.0" }
+semver = "1.0.28"
 wasmparser = { version = "=0.259.0", default-features = false, features = ["component-model", "std", "validate"] }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
