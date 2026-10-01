@@ -80,6 +80,16 @@ impl LoadedComponent {
     }
 }
 
+impl PendingComponent {
+    fn prospective(&self) -> ProspectiveComponent {
+        ProspectiveComponent {
+            imports: self.imports.clone(),
+            exports: self.exports.clone(),
+            links: HashMap::new(),
+        }
+    }
+}
+
 impl App {
     /// Starts configuring an application.
     #[must_use]
@@ -219,68 +229,14 @@ impl App {
                 return Err(LoadError::DuplicateName(component.name.clone()));
             }
         }
-        let added_candidates = |interface: &str, excluded: Option<&str>| {
-            pending
-                .iter()
-                .filter(|component| excluded != Some(component.name.as_str()))
-                .filter(|component| {
-                    component
-                        .exports
-                        .iter()
-                        .any(|export| interfaces_compatible(interface, export))
-                })
-                .map(|component| Candidate::Component(component.name.clone()))
-                .collect::<Vec<_>>()
-        };
-        let mut missing = Vec::new();
-        let mut issues = Vec::new();
+        let mut prospective = prospective_components(loaded);
+        let mut required = HashSet::new();
         for component in pending {
-            for import in &component.imports {
-                if self.0.engine.supports_import(import) {
-                    continue;
-                }
-                let mut candidates = resolution_candidates_excluding(
-                    &self.0.providers,
-                    loaded,
-                    import,
-                    Some(&component.name),
-                );
-                candidates.extend(added_candidates(import, Some(&component.name)));
-                match candidates.len() {
-                    0 => missing.push(import.clone()),
-                    1 => {}
-                    _ => issues.push(ResolutionIssue::ambiguous(
-                        component.name.clone(),
-                        import.clone(),
-                        candidates,
-                    )),
-                }
-            }
+            required.insert(component.name.clone());
+            prospective.insert(component.name.clone(), component.prospective());
         }
-        for (consumer, component) in loaded {
-            for import in &component.generation.imports {
-                if component.links.contains_key(import.as_ref()) {
-                    continue;
-                }
-                let mut candidates = resolution_candidates_excluding(
-                    &self.0.providers,
-                    loaded,
-                    import,
-                    Some(consumer),
-                );
-                if candidates.len() == 1 {
-                    candidates.extend(added_candidates(import, None));
-                }
-                if candidates.len() > 1 {
-                    issues.push(ResolutionIssue::ambiguous(
-                        consumer.clone(),
-                        import.to_string(),
-                        candidates,
-                    ));
-                }
-            }
-        }
-        load_resolution_result(missing, issues)
+        let problems = self.resolve_prospective(&prospective, &required);
+        load_resolution_result(problems.missing, problems.ambiguous)
     }
 
     fn validate_load(
@@ -293,50 +249,18 @@ impl App {
         if components.contains_key(name) {
             return Err(LoadError::DuplicateName(name.to_owned()));
         }
-        let mut missing = Vec::new();
-        let mut issues = Vec::new();
-        for import in imports {
-            if self.0.engine.supports_import(import) {
-                continue;
-            }
-            let candidates =
-                resolution_candidates_excluding(&self.0.providers, components, import, Some(name));
-            match candidates.len() {
-                0 => missing.push(import.clone()),
-                1 => {}
-                _ => issues.push(ResolutionIssue::ambiguous(
-                    name.to_owned(),
-                    import.clone(),
-                    candidates,
-                )),
-            }
-        }
-        for (consumer, component) in components {
-            for import in &component.generation.imports {
-                if component.links.contains_key(import.as_ref())
-                    || !exports
-                        .iter()
-                        .any(|export| interfaces_compatible(import, export))
-                {
-                    continue;
-                }
-                let mut candidates = resolution_candidates_excluding(
-                    &self.0.providers,
-                    components,
-                    import,
-                    Some(consumer),
-                );
-                if candidates.len() == 1 {
-                    candidates.push(Candidate::Component(name.to_owned()));
-                    issues.push(ResolutionIssue::ambiguous(
-                        consumer.clone(),
-                        import.to_string(),
-                        candidates,
-                    ));
-                }
-            }
-        }
-        load_resolution_result(missing, issues)
+        let mut prospective = prospective_components(components);
+        prospective.insert(
+            name.to_owned(),
+            ProspectiveComponent {
+                imports: imports.to_vec(),
+                exports: exports.to_vec(),
+                links: HashMap::new(),
+            },
+        );
+        let required = HashSet::from([name.to_owned()]);
+        let problems = self.resolve_prospective(&prospective, &required);
+        load_resolution_result(problems.missing, problems.ambiguous)
     }
 
     fn resolve_prospective(
