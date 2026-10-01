@@ -6,7 +6,9 @@ use wasm_junction::{
     App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Component, InputStream,
     OutputStream, Provided, Provider, Val, Vals,
 };
-use wasm_junction_conformance::{STREAM_HOST, STREAM_PROBE, StreamHost, stream_component};
+use wasm_junction_conformance::{
+    STREAM_HOST, STREAM_PROBE, StreamHost, run_streams, stream_component,
+};
 use wasm_junction_wasmtime::WasmtimeEngine;
 
 #[derive(Default)]
@@ -40,6 +42,15 @@ impl Provider for RetainHost {
             Ok(Vec::new())
         })
     }
+}
+
+#[test]
+fn bidirectional_streams_match_the_engine_neutral_trace() {
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(run_streams(WasmtimeEngine::new().unwrap()))
+        .unwrap();
 }
 
 #[test]

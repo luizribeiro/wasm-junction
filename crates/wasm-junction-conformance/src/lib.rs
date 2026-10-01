@@ -14,10 +14,13 @@ wasm_junction::bindgen!({ path: "wit" });
 pub use host::{FixtureHost, RoutedHost, sample_note, sample_summary};
 pub use resources::ResourceHost;
 pub use runner::{
-    Fixture, FixtureError, ResourceFixture, RoutedFixture, run, run_resources, run_routed,
+    Fixture, FixtureError, ResourceFixture, RoutedFixture, StreamFixture, run, run_resources,
+    run_routed, run_streams,
 };
 pub use stream_host::StreamHost;
-pub use trace::{EXPECTED_RESOURCE_TRACE, EXPECTED_ROUTED_TRACE, EXPECTED_TRACE, Trace};
+pub use trace::{
+    EXPECTED_RESOURCE_TRACE, EXPECTED_ROUTED_TRACE, EXPECTED_STREAM_TRACE, EXPECTED_TRACE, Trace,
+};
 
 /// The fixture's types-only interface.
 pub const TYPES: &str = types::INTERFACE;

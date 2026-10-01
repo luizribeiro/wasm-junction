@@ -9,9 +9,10 @@ use wasm_junction::{
 
 use crate::host::summary;
 use crate::{
-    EXPECTED_RESOURCE_TRACE, EXPECTED_ROUTED_TRACE, EXPECTED_TRACE, FixtureHost, RESOURCE_CLIENT,
-    RESOURCE_HOST, ResourceHost, RoutedHost, SUMMARIZER, SessionId, Trace, component,
-    resource_component, summarizer, translator_component, writer, writer_component,
+    EXPECTED_RESOURCE_TRACE, EXPECTED_ROUTED_TRACE, EXPECTED_STREAM_TRACE, EXPECTED_TRACE,
+    FixtureHost, RESOURCE_CLIENT, RESOURCE_HOST, ResourceHost, RoutedHost, STREAM_PROBE,
+    SUMMARIZER, SessionId, StreamHost, Trace, component, resource_component, stream_component,
+    summarizer, translator_component, writer, writer_component,
 };
 
 /// A loaded conformance fixture available for additional engine assertions.
@@ -33,6 +34,48 @@ pub struct ResourceFixture {
     app: App,
     host: ResourceHost,
     trace: Trace,
+}
+
+/// A loaded byte-stream component and its hand-written provider.
+pub struct StreamFixture {
+    app: App,
+    host: StreamHost,
+    trace: Trace,
+}
+
+impl StreamFixture {
+    /// Builds and loads the stream guest with its host and tracer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FixtureError`] if application construction, inspection, or loading fails.
+    pub async fn new(engine: impl Engine + 'static) -> Result<Self, FixtureError> {
+        let host = StreamHost::default();
+        let trace = Trace::default();
+        let app = App::builder()
+            .engine(engine)
+            .provide(host.clone().provided())
+            .middleware(trace.clone())
+            .build()
+            .map_err(FixtureError::source)?;
+        app.load(
+            Component::from_bytes(stream_component())
+                .map_err(FixtureError::source)?
+                .named("streams"),
+        )
+        .await
+        .map_err(FixtureError::source)?;
+        Ok(Self { app, host, trace })
+    }
+
+    /// Invokes one exported stream fixture function.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CallError`] when middleware, the guest, or its host import traps.
+    pub async fn call(&self, function: &str, args: Vals) -> Result<Vals, CallError> {
+        self.app.call("streams", STREAM_PROBE, function, args).await
+    }
 }
 
 impl ResourceFixture {
@@ -327,6 +370,36 @@ pub async fn run_resources(engine: impl Engine + 'static) -> Result<ResourceFixt
     }
     if fixture.profile_dropped(1).await.is_ok() {
         return Err(FixtureError::new("trapped resource invocation leaked"));
+    }
+    Ok(fixture)
+}
+
+/// Checks byte streams in both directions and their exact lifecycle trace.
+///
+/// # Errors
+///
+/// Returns [`FixtureError`] if setup, invocation, bytes, or tracing differs.
+pub async fn run_streams(engine: impl Engine + 'static) -> Result<StreamFixture, FixtureError> {
+    let fixture = StreamFixture::new(engine).await?;
+    let output = fixture
+        .call("motd", Vec::new())
+        .await
+        .map_err(FixtureError::source)?;
+    if output != [Val::from("Have a good day.")] {
+        return Err(FixtureError::new(format!("unexpected motd: {output:?}")));
+    }
+    fixture
+        .call("audit", Vec::new())
+        .await
+        .map_err(FixtureError::source)?;
+    if fixture.host.audit() != b"opened note\n" {
+        return Err(FixtureError::new("unexpected audit bytes"));
+    }
+    if fixture.trace.entries() != EXPECTED_STREAM_TRACE {
+        return Err(FixtureError::new(format!(
+            "unexpected stream trace: {:#?}",
+            fixture.trace.entries()
+        )));
     }
     Ok(fixture)
 }

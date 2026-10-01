@@ -267,6 +267,30 @@ pub const EXPECTED_RESOURCE_TRACE: &[&str] = &[
     "invocation end resource-client",
 ];
 
+/// Exact trace produced by the host-to-guest and guest-to-host stream scenarios.
+pub const EXPECTED_STREAM_TRACE: &[&str] = &[
+    "invocation start streams",
+    "call host → streams example:streams/probe@0.1.0.motd()",
+    "invocation start host",
+    "call streams → host example:streams/host@0.1.0.motd()",
+    "return streams → host example:streams/host@0.1.0.motd(stream)",
+    "invocation end host",
+    "channel open stream#0 host-to-guest",
+    "channel close stream#0 host-to-guest",
+    "return host → streams example:streams/probe@0.1.0.motd(\"Have a good day.\")",
+    "invocation end streams",
+    "invocation start streams",
+    "call host → streams example:streams/probe@0.1.0.audit()",
+    "channel open stream#1 guest-to-host",
+    "invocation start host",
+    "call streams → host example:streams/host@0.1.0.audit(stream)",
+    "channel close stream#1 guest-to-host",
+    "return streams → host example:streams/host@0.1.0.audit()",
+    "invocation end host",
+    "return host → streams example:streams/probe@0.1.0.audit()",
+    "invocation end streams",
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
