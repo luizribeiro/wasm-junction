@@ -2,6 +2,7 @@
 
 mod support;
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use support::{
@@ -125,15 +126,37 @@ impl Provider for NotesProvider {
     }
 }
 
-struct FailingEngine;
+struct FailingEngine {
+    successes: AtomicUsize,
+    fallback: FakeEngine,
+}
+
+impl FailingEngine {
+    fn after(successes: usize) -> Self {
+        Self {
+            successes: AtomicUsize::new(successes),
+            fallback: FakeEngine,
+        }
+    }
+}
 
 impl Engine for FailingEngine {
     fn compile(
         &self,
-        _bytes: Arc<[u8]>,
-        _wasi: WasiConfig,
+        bytes: Arc<[u8]>,
+        wasi: WasiConfig,
     ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
-        Box::pin(async { Err(EngineError::new("invalid adapter")) })
+        if self
+            .successes
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                count.checked_sub(1)
+            })
+            .is_ok()
+        {
+            self.fallback.compile(bytes, wasi)
+        } else {
+            Box::pin(async { Err(EngineError::new("invalid adapter")) })
+        }
     }
 }
 
@@ -353,7 +376,7 @@ fn type_only_imports_do_not_require_providers() {
 #[test]
 fn engine_compilation_errors_are_distinct_from_call_traps() {
     let app = App::builder()
-        .engine(FailingEngine)
+        .engine(FailingEngine::after(0))
         .provide(Provided::new(NOTES, UnusedProvider))
         .provide(Provided::new(CLOCK, UnusedProvider))
         .build()
