@@ -5,7 +5,7 @@
 mod support;
 
 use wasm_junction::{
-    App, CallContext, Component, InputStream, OutputStream, StreamHandle, TypedCall,
+    App, CallContext, CallError, Component, InputStream, OutputStream, StreamHandle, TypedCall,
 };
 
 wasm_junction::bindgen!({ path: "tests/fixtures/streams/wit" });
@@ -13,30 +13,30 @@ wasm_junction::bindgen!({ path: "tests/fixtures/streams/wit" });
 struct Echo;
 
 impl host::Host for Echo {
-    async fn top(&self, _cx: &CallContext, value: InputStream) -> OutputStream {
-        OutputStream::from_bytes(value.read_all().await.unwrap())
+    async fn top(&self, _cx: &CallContext, value: InputStream) -> Result<OutputStream, CallError> {
+        Ok(OutputStream::from_bytes(value.read_all().await?))
     }
 
     async fn optional(
         &self,
         _cx: &CallContext,
         value: Option<InputStream>,
-    ) -> Option<OutputStream> {
-        match value {
-            Some(value) => Some(OutputStream::from_bytes(value.read_all().await.unwrap())),
+    ) -> Result<Option<OutputStream>, CallError> {
+        Ok(match value {
+            Some(value) => Some(OutputStream::from_bytes(value.read_all().await?)),
             None => None,
-        }
+        })
     }
 
     async fn choose(
         &self,
         _cx: &CallContext,
         value: Result<InputStream, InputStream>,
-    ) -> Result<OutputStream, OutputStream> {
-        match value {
-            Ok(value) => Ok(OutputStream::from_bytes(value.read_all().await.unwrap())),
-            Err(value) => Err(OutputStream::from_bytes(value.read_all().await.unwrap())),
-        }
+    ) -> Result<Result<OutputStream, OutputStream>, CallError> {
+        Ok(match value {
+            Ok(value) => Ok(OutputStream::from_bytes(value.read_all().await?)),
+            Err(value) => Err(OutputStream::from_bytes(value.read_all().await?)),
+        })
     }
 }
 

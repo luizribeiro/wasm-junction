@@ -41,8 +41,7 @@ impl Generator<'_> {
                 Ok(quote! {
                     #name => {
                         let value: T::#associated = self.#field.take(&resource)?;
-                        <T as Host>::#method(&self.host, cx, value);
-                        Ok(())
+                        <T as Host>::#method(&self.host, cx, value)
                     }
                 })
             })
@@ -144,9 +143,9 @@ impl Generator<'_> {
             invoke
         };
         let output = if let Some(ty) = function.result {
-            self.provider_output(ty, invoke, wit_name)?
+            self.provider_output(ty, quote!(__wasm_junction_output), wit_name)?
         } else {
-            invoke
+            quote!(__wasm_junction_output)
         };
         Ok(quote! {
             #wit_name => {
@@ -155,6 +154,7 @@ impl Generator<'_> {
                         &__wasm_junction_call.args,
                     )?;
                 #(#preparations)*
+                let __wasm_junction_output = #invoke?;
                 Ok(<#call as ::wasm_junction::TypedCall>::output(#output))
             }
         })

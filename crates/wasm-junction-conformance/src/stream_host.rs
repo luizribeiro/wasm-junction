@@ -1,7 +1,9 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
 
-use wasm_junction::{CallContext, InputStream, OutputStream, OutputStreamWriter, Provided};
+use wasm_junction::{
+    CallContext, CallError, InputStream, OutputStream, OutputStreamWriter, Provided,
+};
 
 use crate::stream_bindings::host;
 
@@ -58,42 +60,46 @@ impl StreamHost {
 }
 
 impl host::Host for StreamHost {
-    fn motd(&self, _cx: &CallContext) -> OutputStream {
-        OutputStream::from_bytes(b"Have a good day.")
+    fn motd(&self, _cx: &CallContext) -> Result<OutputStream, CallError> {
+        Ok(OutputStream::from_bytes(b"Have a good day."))
     }
 
-    async fn audit(&self, _cx: &CallContext, lines: InputStream) {
+    async fn audit(&self, _cx: &CallContext, lines: InputStream) -> Result<(), CallError> {
         if let Ok(bytes) = lines.read_all().await {
             self.lock().audit = bytes;
         }
+        Ok(())
     }
 
     async fn optional(
         &self,
         _cx: &CallContext,
         bytes: Option<InputStream>,
-    ) -> Option<OutputStream> {
-        let bytes = bytes?.read_all().await.ok()?;
-        Some(OutputStream::from_bytes(bytes))
+    ) -> Result<Option<OutputStream>, CallError> {
+        Ok(match bytes {
+            Some(bytes) => bytes.read_all().await.ok().map(OutputStream::from_bytes),
+            None => None,
+        })
     }
 
-    fn chunks(&self, _cx: &CallContext) -> OutputStream {
+    fn chunks(&self, _cx: &CallContext) -> Result<OutputStream, CallError> {
         let (writer, stream) = OutputStream::channel();
         if ready(writer.write(b"first ")).is_ok() {
             self.lock().writer = Some(writer);
         }
-        stream
+        Ok(stream)
     }
 
-    fn advance(&self, _cx: &CallContext) {
+    fn advance(&self, _cx: &CallContext) -> Result<(), CallError> {
         let Some(writer) = self.lock().writer.take() else {
-            return;
+            return Ok(());
         };
         let error = ready(writer.write(b"second")).err();
         let mut state = self.lock();
         state.advanced = true;
         state.reader_closed = error.is_some();
         state.write_error = error.map(|error| error.to_string());
+        Ok(())
     }
 }
 
@@ -117,15 +123,15 @@ mod tests {
     fn host_produces_incrementally_and_consumes_audit_bytes() {
         let host = StreamHost::default();
         let context = CallContext::for_test("streams");
-        let stream = host::Host::chunks(&host, &context);
+        let stream = host::Host::chunks(&host, &context).unwrap();
         let mut input = InputStream::try_from(StreamHandle::from(stream)).unwrap();
         assert_eq!(ready(input.read()).unwrap(), Some(b"first ".to_vec()));
-        host::Host::advance(&host, &context);
+        host::Host::advance(&host, &context).unwrap();
         assert_eq!(ready(input.read_all()).unwrap(), b"second");
 
         let audit =
             InputStream::try_from(StreamHandle::from(OutputStream::from_bytes(b"entry"))).unwrap();
-        ready(host::Host::audit(&host, &context, audit));
+        ready(host::Host::audit(&host, &context, audit)).unwrap();
         assert_eq!(host.audit(), b"entry");
     }
 }

@@ -454,6 +454,8 @@ impl CompiledComponent for UnusedComponent {
                 "example:journal/summaries@0.1.0" => {
                     let import = match function.as_ref() {
                         "summarize" => "read",
+                        "search" => "search",
+                        "clear" => "clear",
                         "unknown" => "unknown",
                         _ => return Err(CallError::trap("engine received the wrong function")),
                     };

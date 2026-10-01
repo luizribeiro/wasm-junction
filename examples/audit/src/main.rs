@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use bindings::{audit, runner};
 use trace::Trace;
-use wasm_junction::{App, CallContext, Component, InputStream};
+use wasm_junction::{App, CallContext, CallError, Component, InputStream};
 
 const COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/audit.wasm"));
 
@@ -35,15 +35,15 @@ impl Audit {
 impl audit::Host for Audit {
     type Session = Session;
 
-    fn session_new(&self, _cx: &CallContext, user: String) -> Session {
-        Session { user }
+    fn session_new(&self, _cx: &CallContext, user: String) -> Result<Session, CallError> {
+        Ok(Session { user })
     }
 
-    fn session_user(&self, _cx: &CallContext, session: &Session) -> String {
-        session.user.clone()
+    fn session_user(&self, _cx: &CallContext, session: &Session) -> Result<String, CallError> {
+        Ok(session.user.clone())
     }
 
-    async fn audit(&self, cx: &CallContext, mut lines: InputStream) {
+    async fn audit(&self, cx: &CallContext, mut lines: InputStream) -> Result<(), CallError> {
         let request = cx
             .extensions()
             .get::<RequestId>()
@@ -70,6 +70,7 @@ impl audit::Host for Audit {
                 self.lines().push(format!("[request {request}] {line}"));
             }
         }
+        Ok(())
     }
 }
 

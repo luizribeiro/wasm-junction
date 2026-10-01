@@ -34,8 +34,13 @@ impl Generator<'_> {
                 let method = super::rust_ident(&format!("drop_{}", name.to_snake_case()))?;
                 Ok(quote! {
                     #[doc = concat!("Drops the host value for a released `", #name, "` handle.")]
-                    fn #method(&self, _cx: &::wasm_junction::CallContext, value: Self::#ident) {
+                    fn #method(
+                        &self,
+                        _cx: &::wasm_junction::CallContext,
+                        value: Self::#ident,
+                    ) -> ::std::result::Result<(), ::wasm_junction::CallError> {
                         ::std::mem::drop(value);
+                        Ok(())
                     }
                 })
             })
@@ -47,8 +52,12 @@ impl Generator<'_> {
                 let ident = &resource.ident;
                 let method = super::rust_ident(&format!("drop_{}", name.to_snake_case()))?;
                 Ok(quote! {
-                    fn #method(&self, cx: &::wasm_junction::CallContext, value: Self::#ident) {
-                        self.as_ref().#method(cx, value);
+                    fn #method(
+                        &self,
+                        cx: &::wasm_junction::CallContext,
+                        value: Self::#ident,
+                    ) -> ::std::result::Result<(), ::wasm_junction::CallError> {
+                        self.as_ref().#method(cx, value)
                     }
                 })
             })
@@ -98,6 +107,7 @@ impl Generator<'_> {
             || Ok(quote!(())),
             |ty| self.host_output_type(interface, ty, wit_name),
         )?;
+        let output = quote!(::std::result::Result<#output, ::wasm_junction::CallError>);
         let return_type = if function.kind.is_async() {
             quote!(impl ::std::future::Future<Output = #output> + ::wasm_junction::MaybeSend)
         } else {
@@ -224,6 +234,10 @@ mod tests {
 
         assert!(tokens.contains("type Session"), "{tokens}");
         assert!(tokens.contains("fn drop_session"), "{tokens}");
+        assert!(
+            tokens.contains("Result < () , :: wasm_junction :: CallError >"),
+            "{tokens}"
+        );
         assert!(tokens.contains("Option < & Self :: Session >"), "{tokens}");
         assert!(tokens.contains("Result < Self :: Session"), "{tokens}");
         assert!(tokens.contains("type Session = T :: Session"), "{tokens}");

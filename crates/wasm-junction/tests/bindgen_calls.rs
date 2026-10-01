@@ -19,27 +19,48 @@ const SUMMARIES: &str = "example:journal/summaries@0.1.0";
 const PLUGIN_WIT: &str = r"
     package example:journal@0.1.0;
     interface notes { read: func(name: string) -> string; }
-    interface summaries { summarize: func(note: string) -> string; }
+    interface summaries {
+      summarize: func(note: string) -> string;
+      search: async func(query: string, limit: u32) -> list<string>;
+      clear: func();
+    }
     world plugin { import notes; export summaries; }
 ";
 
 impl notes::Host for Journal {
-    fn read(&self, _cx: &CallContext, name: String) -> Result<notes::Note, notes::AccessError> {
-        Ok(notes::Note {
+    fn read(
+        &self,
+        _cx: &CallContext,
+        name: String,
+    ) -> Result<Result<notes::Note, notes::AccessError>, CallError> {
+        if name == "provider-refusal" {
+            return Err(CallError::refused("journal is unavailable"));
+        }
+        Ok(Ok(notes::Note {
             title: name,
             body: Some("contents".into()),
-        })
+        }))
     }
 
-    async fn search(&self, _cx: &CallContext, query: String, limit: u32) -> Vec<notes::Note> {
+    async fn search(
+        &self,
+        _cx: &CallContext,
+        query: String,
+        limit: u32,
+    ) -> Result<Vec<notes::Note>, CallError> {
         std::future::ready(()).await;
-        vec![notes::Note {
+        if query == "provider-trap" {
+            return Err(CallError::trap("journal search failed"));
+        }
+        Ok(vec![notes::Note {
             title: format!("{query}:{limit}"),
             body: None,
-        }]
+        }])
     }
 
-    fn clear(&self, _cx: &CallContext) {}
+    fn clear(&self, _cx: &CallContext) -> Result<(), CallError> {
+        Ok(())
+    }
 }
 
 struct DenySecrets;
@@ -84,9 +105,11 @@ fn typed_views_round_trip_arguments_and_results() {
 fn arc_hosts_forward_plain_and_async_methods() {
     let host = Arc::new(Journal);
     let context = CallContext::for_test("summarizer");
-    let note = notes::Host::read(&host, &context, "daily".into()).unwrap();
+    let note = notes::Host::read(&host, &context, "daily".into())
+        .unwrap()
+        .unwrap();
     assert_eq!(note.title, "daily");
-    let found = support::block_on(notes::Host::search(&host, &context, "rust".into(), 3));
+    let found = support::block_on(notes::Host::search(&host, &context, "rust".into(), 3)).unwrap();
     assert_eq!(found[0].title, "rust:3");
 }
 
@@ -123,6 +146,25 @@ fn provider_calls_and_typed_refusals_cross_the_app() {
         Err(notes::AccessError::Denied)
     );
 
+    let error = invoke("provider-refusal".into()).unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert_eq!(error.to_string(), "journal is unavailable");
+    let error = support::block_on(
+        app.call(
+            "summarizer",
+            SUMMARIES,
+            "search",
+            notes::Search {
+                query: "provider-trap".into(),
+                limit: 1,
+            }
+            .into_vals(),
+        ),
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Trap);
+    assert_eq!(error.to_string(), "journal search failed");
+
     let error =
         support::block_on(app.call("summarizer", SUMMARIES, "unknown", Vec::new())).unwrap_err();
     assert_eq!(error.kind(), CallErrorKind::Refused);
@@ -134,15 +176,26 @@ const _: () = {
     struct BrowserHost(std::rc::Rc<()>);
 
     impl notes::Host for BrowserHost {
-        fn read(&self, _: &CallContext, _: String) -> Result<notes::Note, notes::AccessError> {
-            Err(notes::AccessError::Missing)
+        fn read(
+            &self,
+            _: &CallContext,
+            _: String,
+        ) -> Result<Result<notes::Note, notes::AccessError>, CallError> {
+            Ok(Err(notes::AccessError::Missing))
         }
-        async fn search(&self, _: &CallContext, _: String, _: u32) -> Vec<notes::Note> {
+        async fn search(
+            &self,
+            _: &CallContext,
+            _: String,
+            _: u32,
+        ) -> Result<Vec<notes::Note>, CallError> {
             std::future::ready(()).await;
             let _ = self.0.clone();
-            Vec::new()
+            Ok(Vec::new())
         }
-        fn clear(&self, _: &CallContext) {}
+        fn clear(&self, _: &CallContext) -> Result<(), CallError> {
+            Ok(())
+        }
     }
 
     fn accepts_non_send_provider() {

@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
 use wasm_junction::{
-    App, CallContext, CallErrorKind, Component, ImportDispatcher, InvocationContext, Provided,
-    Resource, TypedCall, Val,
+    App, CallContext, CallError, CallErrorKind, Component, ImportDispatcher, InvocationContext,
+    Provided, Resource, TypedCall, Val,
 };
 
 wasm_junction::bindgen!({ path: "tests/fixtures/resources/wit" });
@@ -89,45 +89,64 @@ impl resources::Host for ResourceHost {
     type Host_ = DropProbe;
     type Provider = ();
 
-    fn session_new(&self, _cx: &CallContext, user: String) -> SessionState {
-        SessionState(user)
+    fn session_new(&self, _cx: &CallContext, user: String) -> Result<SessionState, CallError> {
+        Ok(SessionState(user))
     }
 
-    async fn session_profile(&self, _cx: &CallContext, session: &SessionState) -> String {
+    async fn session_profile(
+        &self,
+        _cx: &CallContext,
+        session: &SessionState,
+    ) -> Result<String, CallError> {
         self.gate.wait().await;
-        format!("profile:{}", session.0)
+        if session.0 == "refuse" {
+            return Err(CallError::refused("profile is private"));
+        }
+        Ok(format!("profile:{}", session.0))
     }
 
-    fn session_new_(&self, _cx: &CallContext, session: &SessionState) -> String {
-        format!("new:{}", session.0)
+    fn session_new_(&self, _cx: &CallContext, session: &SessionState) -> Result<String, CallError> {
+        Ok(format!("new:{}", session.0))
     }
 
-    fn session_lookup(&self, _cx: &CallContext, user: String) -> Option<SessionState> {
-        Some(SessionState(user))
+    fn session_lookup(
+        &self,
+        _cx: &CallContext,
+        user: String,
+    ) -> Result<Option<SessionState>, CallError> {
+        Ok(Some(SessionState(user)))
     }
 
-    fn consume(&self, _cx: &CallContext, value: SessionState) -> String {
-        value.0
+    fn consume(&self, _cx: &CallContext, value: SessionState) -> Result<String, CallError> {
+        Ok(value.0)
     }
 
-    fn maybe(&self, _cx: &CallContext, value: Option<SessionState>) -> Option<SessionState> {
-        value
+    fn maybe(
+        &self,
+        _cx: &CallContext,
+        value: Option<SessionState>,
+    ) -> Result<Option<SessionState>, CallError> {
+        Ok(value)
     }
 
     fn choose(
         &self,
         _cx: &CallContext,
         value: Result<SessionState, String>,
-    ) -> Result<SessionState, String> {
-        value
+    ) -> Result<Result<SessionState, String>, CallError> {
+        Ok(value)
     }
 
-    fn make_host(&self, _cx: &CallContext) -> DropProbe {
-        DropProbe(self.default_drops.clone())
+    fn make_host(&self, _cx: &CallContext) -> Result<DropProbe, CallError> {
+        Ok(DropProbe(self.default_drops.clone()))
     }
 
-    fn drop_session(&self, _cx: &CallContext, value: SessionState) {
+    fn drop_session(&self, _cx: &CallContext, value: SessionState) -> Result<(), CallError> {
+        if value.0 == "refuse-drop" {
+            return Err(CallError::refused("session cannot be dropped"));
+        }
         self.dropped.lock().unwrap().push(value.0);
+        Ok(())
     }
 }
 
@@ -135,16 +154,16 @@ impl resources::Host for ResourceHost {
 fn host_resources_use_associated_values_and_arc_forwarding() {
     let host = Arc::new(ResourceHost::default());
     let context = CallContext::for_test("plugin");
-    let session = resources::Host::session_new(&host, &context, "Ada".to_owned());
+    let session = resources::Host::session_new(&host, &context, "Ada".to_owned()).unwrap();
     assert_eq!(
-        support::block_on(resources::Host::session_profile(&host, &context, &session)),
+        support::block_on(resources::Host::session_profile(&host, &context, &session)).unwrap(),
         "profile:Ada"
     );
     assert_eq!(
-        resources::Host::session_new_(&host, &context, &session),
+        resources::Host::session_new_(&host, &context, &session).unwrap(),
         "new:Ada"
     );
-    resources::Host::drop_session(&host, &context, session);
+    resources::Host::drop_session(&host, &context, session).unwrap();
     assert_eq!(*host.dropped.lock().unwrap(), ["Ada"]);
     let _provided = resources::provider(host);
 }
@@ -217,6 +236,30 @@ fn app_dispatch_maps_resource_values_and_stale_ids() {
     let error = call("profile", vec![Val::Resource(stale)]).unwrap_err();
     assert_eq!(error.kind(), CallErrorKind::Trap);
     assert!(error.to_string().contains("unknown resource"));
+
+    let refused = one_resource(&call("open", vec![Val::from("refuse")]).unwrap());
+    let error = call(
+        "profile",
+        vec![Val::Resource(Resource::borrowed(
+            refused.interface(),
+            refused.name(),
+            refused.id(),
+        ))],
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert_eq!(error.to_string(), "profile is private");
+
+    let refused_drop = one_resource(&call("open", vec![Val::from("refuse-drop")]).unwrap());
+    let error = support::block_on(ImportDispatcher::drop_resource(
+        &app,
+        InvocationContext::default(),
+        Arc::from("plugin"),
+        refused_drop,
+    ))
+    .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert_eq!(error.to_string(), "session cannot be dropped");
 
     let host_resource = one_resource(&call("make-host", Vec::new()).unwrap());
     support::block_on(ImportDispatcher::drop_resource(

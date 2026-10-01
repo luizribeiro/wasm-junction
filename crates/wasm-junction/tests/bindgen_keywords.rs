@@ -18,12 +18,12 @@ wasm_junction::bindgen!({ path: "tests/fixtures/keywords/wit" });
 struct Names;
 
 impl super_::Host for Names {
-    fn host(&self, _cx: &CallContext, cx_: String) -> String {
-        cx_
+    fn host(&self, _cx: &CallContext, cx_: String) -> Result<String, CallError> {
+        Ok(cx_)
     }
 
-    fn provider(&self, _cx: &CallContext, call: String) -> String {
-        call
+    fn provider(&self, _cx: &CallContext, call: String) -> Result<String, CallError> {
+        Ok(call)
     }
 
     fn call(
@@ -34,26 +34,26 @@ impl super_::Host for Names {
         value: String,
         host: String,
         self_: String,
-    ) -> String {
-        [call, args, value, host, self_].join(":")
+    ) -> Result<String, CallError> {
+        Ok([call, args, value, host, self_].join(":"))
     }
 
-    fn super_(&self, _cx: &CallContext) -> String {
-        "super".into()
+    fn super_(&self, _cx: &CallContext) -> Result<String, CallError> {
+        Ok("super".into())
     }
 }
 
 impl host::Host for Names {
-    fn host_handle(&self, _cx: &CallContext, value: String) -> String {
-        value
+    fn host_handle(&self, _cx: &CallContext, value: String) -> Result<String, CallError> {
+        Ok(value)
     }
 }
 
 struct ProviderNames;
 
 impl host_provider::Host for ProviderNames {
-    fn ping(&self, _cx: &CallContext) -> String {
-        "pong".to_owned()
+    fn ping(&self, _cx: &CallContext) -> Result<String, CallError> {
+        Ok("pong".to_owned())
     }
 }
 
@@ -61,10 +61,10 @@ impl host_provider::Host for ProviderNames {
 struct RecursiveHost(Arc<Mutex<Option<host::HostHandle>>>);
 
 impl host::Host for RecursiveHost {
-    fn host_handle(&self, cx: &CallContext, value: String) -> String {
+    fn host_handle(&self, cx: &CallContext, value: String) -> Result<String, CallError> {
         let handle = self.0.lock().unwrap().clone().unwrap();
-        support::block_on(handle.within(cx).host_handle(&value))
-            .unwrap_or_else(|error| error.to_string())
+        Ok(support::block_on(handle.within(cx).host_handle(&value))
+            .unwrap_or_else(|error| error.to_string()))
     }
 }
 
@@ -98,11 +98,11 @@ fn keywords_generate_valid_documented_identifiers() {
 #[test]
 fn generated_names_do_not_clash_with_the_host_surface() {
     let context = CallContext::for_test("caller");
-    let host = super_::Host::host(&Names, &context, "context".into());
+    let host = super_::Host::host(&Names, &context, "context".into()).unwrap();
     assert_eq!(host, "context");
-    let provider = super_::Host::provider(&Names, &context, "call".into());
+    let provider = super_::Host::provider(&Names, &context, "call".into()).unwrap();
     assert_eq!(provider, "call");
-    assert_eq!(super_::Host::super_(&Names, &context), "super");
+    assert_eq!(super_::Host::super_(&Names, &context).unwrap(), "super");
 
     let call = super_::Call {
         call: "call".into(),
@@ -121,7 +121,8 @@ fn generated_names_do_not_clash_with_the_host_surface() {
             decoded.value,
             decoded.host,
             decoded.self_,
-        ),
+        )
+        .unwrap(),
         "call:args:value:host:self"
     );
     let _provided = super_::provider(Names);

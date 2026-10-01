@@ -11,7 +11,7 @@ use std::error::Error;
 
 use bindings::{greeter, users};
 use trace::Trace;
-use wasm_junction::{App, CallContext, Component};
+use wasm_junction::{App, CallContext, CallError, Component};
 
 const COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/greeter.wasm"));
 
@@ -28,8 +28,8 @@ impl Users {
 }
 
 impl users::Host for Users {
-    fn lookup(&self, _cx: &CallContext, id: u32) -> Option<users::User> {
-        self.0.get(&id).cloned()
+    fn lookup(&self, _cx: &CallContext, id: u32) -> Result<Option<users::User>, CallError> {
+        Ok(self.0.get(&id).cloned())
     }
 }
 

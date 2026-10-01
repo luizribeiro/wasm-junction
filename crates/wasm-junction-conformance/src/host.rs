@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, MutexGuard};
 
-use wasm_junction::{CallContext, Caller, Provided, Val};
+use wasm_junction::{CallContext, CallError, Caller, Provided, Val};
 
 use crate::{SessionId, TranslatorHop, decoration, notes, types};
 
@@ -30,13 +30,17 @@ impl notes::Host for FixtureHost {
         &self,
         _context: &CallContext,
         name: String,
-    ) -> impl std::future::Future<Output = Result<types::Note, String>> {
-        std::future::ready(read(&name))
+    ) -> impl std::future::Future<Output = Result<Result<types::Note, String>, CallError>> {
+        std::future::ready(Ok(read(&name)))
     }
 
-    fn normalize(&self, _context: &CallContext, value: types::Note) -> types::Note {
+    fn normalize(
+        &self,
+        _context: &CallContext,
+        value: types::Note,
+    ) -> Result<types::Note, CallError> {
         self.normalizations.fetch_add(1, Ordering::Relaxed);
-        value
+        Ok(value)
     }
 }
 
@@ -84,16 +88,16 @@ impl RoutedHost {
 }
 
 impl decoration::Host for RoutedHost {
-    fn decorate(&self, context: &CallContext, text: String) -> String {
-        self.decorate(context, &text)
+    fn decorate(&self, context: &CallContext, text: String) -> Result<String, CallError> {
+        Ok(self.decorate(context, &text))
     }
 
     fn decorate_async(
         &self,
         context: &CallContext,
         text: String,
-    ) -> impl std::future::Future<Output = String> {
-        std::future::ready(self.decorate(context, &text))
+    ) -> impl std::future::Future<Output = Result<String, CallError>> {
+        std::future::ready(Ok(self.decorate(context, &text)))
     }
 }
 

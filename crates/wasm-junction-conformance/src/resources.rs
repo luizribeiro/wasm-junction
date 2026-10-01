@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use wasm_junction::{CallContext, Provided};
+use wasm_junction::{CallContext, CallError, Provided};
 
 wasm_junction::bindgen!({
     path: "resource-wit",
@@ -35,26 +35,28 @@ impl host::Host for ResourceHost {
     type File = String;
     type Session = String;
 
-    fn open_file(&self, _cx: &CallContext, name: String) -> String {
+    fn open_file(&self, _cx: &CallContext, name: String) -> Result<String, CallError> {
         self.0.active.fetch_add(1, Ordering::Relaxed);
-        name
+        Ok(name)
     }
 
-    fn session_new(&self, _cx: &CallContext, user: String) -> String {
+    fn session_new(&self, _cx: &CallContext, user: String) -> Result<String, CallError> {
         self.0.active.fetch_add(1, Ordering::Relaxed);
-        user
+        Ok(user)
     }
 
-    fn session_profile(&self, _cx: &CallContext, session: &String) -> String {
-        format!("profile:{session}")
+    fn session_profile(&self, _cx: &CallContext, session: &String) -> Result<String, CallError> {
+        Ok(format!("profile:{session}"))
     }
 
-    fn drop_file(&self, _cx: &CallContext, _file: String) {
+    fn drop_file(&self, _cx: &CallContext, _file: String) -> Result<(), CallError> {
         self.0.active.fetch_sub(1, Ordering::Relaxed);
+        Ok(())
     }
 
-    fn drop_session(&self, _cx: &CallContext, _session: String) {
+    fn drop_session(&self, _cx: &CallContext, _session: String) -> Result<(), CallError> {
         self.0.active.fetch_sub(1, Ordering::Relaxed);
+        Ok(())
     }
 }
 
@@ -66,13 +68,13 @@ mod tests {
     fn host_tracks_resource_values_until_drop() {
         let host = ResourceHost::default();
         let context = CallContext::for_test("resource-client");
-        let session = host::Host::session_new(&host, &context, "Ada".to_owned());
+        let session = host::Host::session_new(&host, &context, "Ada".to_owned()).unwrap();
         assert_eq!(host.active_resources(), 1);
         assert_eq!(
-            host::Host::session_profile(&host, &context, &session),
+            host::Host::session_profile(&host, &context, &session).unwrap(),
             "profile:Ada"
         );
-        host::Host::drop_session(&host, &context, session);
+        host::Host::drop_session(&host, &context, session).unwrap();
         assert_eq!(host.active_resources(), 0);
     }
 }

@@ -15,8 +15,8 @@ wasm_junction::bindgen!({ path: "benchmark/wit" });
 struct Ping;
 
 impl pinger::Host for Ping {
-    fn ping(&self, _cx: &CallContext, value: u32) -> u32 {
-        value + 1
+    fn ping(&self, _cx: &CallContext, value: u32) -> Result<u32, CallError> {
+        Ok(value + 1)
     }
 }
 
