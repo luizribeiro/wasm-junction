@@ -2,6 +2,8 @@ package test:wasi@0.1.0;
 
 interface environment {
   read: func(name: string) -> option<string>;
+  arguments: func() -> list<string>;
+  current-directory: func() -> option<string>;
 }
 
 world fixture {

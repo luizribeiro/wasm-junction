@@ -8,4 +8,5 @@ publish.workspace = true
 crate-type = ["cdylib"]
 
 [dependencies]
+wasi.workspace = true
 wit-bindgen.workspace = true

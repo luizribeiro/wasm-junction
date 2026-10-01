@@ -8,6 +8,7 @@ version = "0.0.0"
 publish = false
 
 [workspace.dependencies]
+wasi = "=0.14.7"
 wit-bindgen = "=0.62.0"
 
 [profile.release]

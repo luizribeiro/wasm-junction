@@ -45,7 +45,14 @@ fn project(state: &mut StoreData) -> Gate<'_> {
     Gate(state)
 }
 
-struct EnvironmentTarget(Arc<Mutex<WasiState>>);
+#[derive(Clone, Copy)]
+enum EnvironmentOperation {
+    Variables,
+    Arguments,
+    InitialCwd,
+}
+
+struct EnvironmentTarget(Arc<Mutex<WasiState>>, EnvironmentOperation);
 
 impl ImportTarget for EnvironmentTarget {
     fn call(
@@ -54,42 +61,87 @@ impl ImportTarget for EnvironmentTarget {
         args: Vals,
     ) -> BoxFuture<'static, Result<Vals, CallError>> {
         let state = self.0.clone();
+        let operation = self.1;
         Box::pin(async move {
             if !args.is_empty() {
-                return Err(CallError::trap("get-environment takes no arguments"));
+                return Err(CallError::trap("WASI environment call takes no arguments"));
             }
-            let entries = environment::Host::get_environment(&mut lock(&state).cli())
-                .map_err(|error| CallError::trap(error.to_string()))?;
-            Ok(vec![Val::List(
-                entries
-                    .into_iter()
-                    .map(|(name, value)| Val::Tuple(vec![name.into(), value.into()]))
-                    .collect(),
-            )])
+            let mut state = lock(&state);
+            match operation {
+                EnvironmentOperation::Variables => {
+                    environment::Host::get_environment(&mut state.cli()).map(|entries| {
+                        Val::List(
+                            entries
+                                .into_iter()
+                                .map(|(name, value)| Val::Tuple(vec![name.into(), value.into()]))
+                                .collect(),
+                        )
+                    })
+                }
+                EnvironmentOperation::Arguments => {
+                    environment::Host::get_arguments(&mut state.cli())
+                        .map(|values| Val::List(values.into_iter().map(Val::from).collect()))
+                }
+                EnvironmentOperation::InitialCwd => {
+                    environment::Host::initial_cwd(&mut state.cli())
+                        .map(|value| Val::Option(value.map(|value| Box::new(Val::from(value)))))
+                }
+            }
+            .map(|value| vec![value])
+            .map_err(|error| CallError::trap(error.to_string()))
         })
     }
 }
 
 impl environment::Host for Gate<'_> {
     fn get_environment(&mut self) -> wasmtime::Result<Vec<(String, String)>> {
-        let values = futures::executor::block_on(self.0.imports.call_engine(
-            self.0.context.clone(),
-            self.0.component.clone(),
-            Arc::from(INTERFACE),
-            Arc::from("get-environment"),
-            Vec::new(),
-            Arc::new(EnvironmentTarget(self.0.gated_wasi.clone())),
-        ))
-        .map_err(wasmtime::Error::new)?;
-        decode_environment(&values)
+        decode_environment(&self.call("get-environment", EnvironmentOperation::Variables)?)
     }
 
     fn get_arguments(&mut self) -> wasmtime::Result<Vec<String>> {
-        environment::Host::get_arguments(&mut self.0.cli())
+        let values = self.call("get-arguments", EnvironmentOperation::Arguments)?;
+        let [Val::List(values)] = values.as_slice() else {
+            return Err(wasmtime::Error::msg(
+                "get-arguments returned the wrong shape",
+            ));
+        };
+        values
+            .iter()
+            .map(|value| match value {
+                Val::String(value) => Ok(value.clone()),
+                _ => Err(wasmtime::Error::msg("argument is not a string")),
+            })
+            .collect()
     }
 
     fn initial_cwd(&mut self) -> wasmtime::Result<Option<String>> {
-        environment::Host::initial_cwd(&mut self.0.cli())
+        let values = self.call("initial-cwd", EnvironmentOperation::InitialCwd)?;
+        match values.as_slice() {
+            [Val::Option(Some(value))] => match value.as_ref() {
+                Val::String(value) => Ok(Some(value.clone())),
+                _ => Err(wasmtime::Error::msg("initial-cwd is not a string")),
+            },
+            [Val::Option(None)] => Ok(None),
+            _ => Err(wasmtime::Error::msg("initial-cwd returned the wrong shape")),
+        }
+    }
+}
+
+impl Gate<'_> {
+    fn call(
+        &mut self,
+        function: &'static str,
+        operation: EnvironmentOperation,
+    ) -> wasmtime::Result<Vals> {
+        futures::executor::block_on(self.0.imports.call_engine(
+            self.0.context.clone(),
+            self.0.component.clone(),
+            Arc::from(INTERFACE),
+            Arc::from(function),
+            Vec::new(),
+            Arc::new(EnvironmentTarget(self.0.gated_wasi.clone(), operation)),
+        ))
+        .map_err(wasmtime::Error::new)
     }
 }
 

@@ -100,6 +100,9 @@ fn environment_gate_traces_refuses_and_rewrites() {
         block_on(app.call("wasi", ENVIRONMENT, "read", vec![Val::from("GREETING")])).unwrap_err();
     let rewritten =
         block_on(app.call("wasi", ENVIRONMENT, "read", vec![Val::from("GREETING")])).unwrap();
+    let arguments = block_on(app.call("wasi", ENVIRONMENT, "arguments", Vec::new())).unwrap();
+    let current_directory =
+        block_on(app.call("wasi", ENVIRONMENT, "current-directory", Vec::new())).unwrap();
 
     assert_eq!(
         configured,
@@ -108,11 +111,15 @@ fn environment_gate_traces_refuses_and_rewrites() {
     assert_eq!(absent, [Val::Option(None)]);
     assert_eq!(refused.kind(), CallErrorKind::Refused);
     assert_eq!(rewritten, [Val::Option(Some(Box::new(Val::from("fixed"))))]);
+    assert_eq!(arguments, [Val::List(Vec::new())]);
+    assert_eq!(current_directory, [Val::Option(None)]);
     let calls = calls.lock().unwrap();
-    assert_eq!(calls.len(), 4);
+    assert_eq!(calls.len(), 6);
     assert_eq!(calls[0].caller, Caller::Component(Arc::from("wasi")));
     assert_eq!(calls[0].function.as_ref(), "get-environment");
     assert!(calls[0].args.is_empty());
+    assert_eq!(calls[4].function.as_ref(), "get-arguments");
+    assert_eq!(calls[5].function.as_ref(), "initial-cwd");
 }
 
 #[test]
