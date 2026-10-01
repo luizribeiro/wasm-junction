@@ -154,7 +154,7 @@ impl Compiled {
             .ok_or_else(|| wasmtime::Error::msg("export is not a function"))?;
         let params = args
             .into_iter()
-            .map(to_wasmtime)
+            .map(|value| to_wasmtime(value, &mut |_| wasmtime::bail!("unsupported host resource")))
             .collect::<Result<Vec<_>, _>>()?;
         let mut results = vec![WasmtimeVal::Bool(false); function.ty(&store).results().len()];
         store
@@ -164,7 +164,12 @@ impl Compiled {
                     .await
             })
             .await??;
-        results.into_iter().map(from_wasmtime).collect()
+        results
+            .into_iter()
+            .map(|value| {
+                from_wasmtime(value, &mut |_| wasmtime::bail!("unsupported host resource"))
+            })
+            .collect()
     }
 }
 

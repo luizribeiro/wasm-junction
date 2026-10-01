@@ -1,7 +1,10 @@
-use wasm_junction_core::Val;
-use wasmtime::component::Val as WasmtimeVal;
+use wasm_junction_core::{Resource, Val};
+use wasmtime::component::{ResourceAny, Val as WasmtimeVal};
 
-pub(crate) fn from_wasmtime(value: WasmtimeVal) -> Result<Val, wasmtime::Error> {
+pub(crate) fn from_wasmtime(
+    value: WasmtimeVal,
+    resource: &mut impl FnMut(ResourceAny) -> Result<Resource, wasmtime::Error>,
+) -> Result<Val, wasmtime::Error> {
     match value {
         WasmtimeVal::Bool(value) => Ok(Val::Bool(value)),
         WasmtimeVal::S8(value) => Ok(Val::S8(value)),
@@ -18,47 +21,51 @@ pub(crate) fn from_wasmtime(value: WasmtimeVal) -> Result<Val, wasmtime::Error> 
         WasmtimeVal::String(value) => Ok(Val::String(value)),
         WasmtimeVal::List(values) => values
             .into_iter()
-            .map(from_wasmtime)
+            .map(|value| from_wasmtime(value, resource))
             .collect::<Result<_, _>>()
             .map(Val::List),
         WasmtimeVal::Tuple(values) => values
             .into_iter()
-            .map(from_wasmtime)
+            .map(|value| from_wasmtime(value, resource))
             .collect::<Result<_, _>>()
             .map(Val::Tuple),
         WasmtimeVal::Record(fields) => fields
             .into_iter()
-            .map(|(name, value)| Ok((name, from_wasmtime(value)?)))
+            .map(|(name, value)| Ok((name, from_wasmtime(value, resource)?)))
             .collect::<Result<_, _>>()
             .map(Val::Record),
         WasmtimeVal::Variant(case, value) => Ok(Val::Variant {
             case,
             value: value
-                .map(|value| from_wasmtime(*value).map(Box::new))
+                .map(|value| from_wasmtime(*value, resource).map(Box::new))
                 .transpose()?,
         }),
         WasmtimeVal::Enum(case) => Ok(Val::Enum(case)),
         WasmtimeVal::Flags(names) => Ok(Val::Flags(names)),
         WasmtimeVal::Option(value) => Ok(Val::Option(
             value
-                .map(|value| from_wasmtime(*value).map(Box::new))
+                .map(|value| from_wasmtime(*value, resource).map(Box::new))
                 .transpose()?,
         )),
         WasmtimeVal::Result(result) => Ok(Val::Result(match result {
             Ok(value) => Ok(value
-                .map(|value| from_wasmtime(*value).map(Box::new))
+                .map(|value| from_wasmtime(*value, resource).map(Box::new))
                 .transpose()?),
             Err(value) => Err(value
-                .map(|value| from_wasmtime(*value).map(Box::new))
+                .map(|value| from_wasmtime(*value, resource).map(Box::new))
                 .transpose()?),
         })),
+        WasmtimeVal::Resource(value) => resource(value).map(Val::Resource),
         other => Err(wasmtime::Error::msg(format!(
             "unsupported component value: {other:?}"
         ))),
     }
 }
 
-pub(crate) fn to_wasmtime(value: Val) -> Result<WasmtimeVal, wasmtime::Error> {
+pub(crate) fn to_wasmtime(
+    value: Val,
+    resource: &mut impl FnMut(Resource) -> Result<ResourceAny, wasmtime::Error>,
+) -> Result<WasmtimeVal, wasmtime::Error> {
     match value {
         Val::Bool(value) => Ok(WasmtimeVal::Bool(value)),
         Val::S8(value) => Ok(WasmtimeVal::S8(value)),
@@ -73,51 +80,60 @@ pub(crate) fn to_wasmtime(value: Val) -> Result<WasmtimeVal, wasmtime::Error> {
         Val::F64(value) => Ok(WasmtimeVal::Float64(value)),
         Val::Char(value) => Ok(WasmtimeVal::Char(value)),
         Val::String(value) => Ok(WasmtimeVal::String(value)),
-        Val::List(values) => convert_values(values).map(WasmtimeVal::List),
-        Val::Tuple(values) => convert_values(values).map(WasmtimeVal::Tuple),
+        Val::List(values) => convert_values(values, resource).map(WasmtimeVal::List),
+        Val::Tuple(values) => convert_values(values, resource).map(WasmtimeVal::Tuple),
         Val::Record(fields) => fields
             .into_iter()
-            .map(|(name, value)| Ok((name, to_wasmtime(value)?)))
+            .map(|(name, value)| Ok((name, to_wasmtime(value, resource)?)))
             .collect::<Result<_, _>>()
             .map(WasmtimeVal::Record),
         Val::Variant { case, value } => Ok(WasmtimeVal::Variant(
             case,
             value
-                .map(|value| to_wasmtime(*value).map(Box::new))
+                .map(|value| to_wasmtime(*value, resource).map(Box::new))
                 .transpose()?,
         )),
         Val::Enum(case) => Ok(WasmtimeVal::Enum(case)),
         Val::Flags(names) => Ok(WasmtimeVal::Flags(names)),
         Val::Option(value) => Ok(WasmtimeVal::Option(
             value
-                .map(|value| to_wasmtime(*value).map(Box::new))
+                .map(|value| to_wasmtime(*value, resource).map(Box::new))
                 .transpose()?,
         )),
         Val::Result(result) => Ok(WasmtimeVal::Result(match result {
             Ok(value) => Ok(value
-                .map(|value| to_wasmtime(*value).map(Box::new))
+                .map(|value| to_wasmtime(*value, resource).map(Box::new))
                 .transpose()?),
             Err(value) => Err(value
-                .map(|value| to_wasmtime(*value).map(Box::new))
+                .map(|value| to_wasmtime(*value, resource).map(Box::new))
                 .transpose()?),
         })),
+        Val::Resource(value) => resource(value).map(WasmtimeVal::Resource),
         other => Err(wasmtime::Error::msg(format!(
             "unsupported framework value: {other:?}"
         ))),
     }
 }
 
-fn convert_values(values: Vec<Val>) -> Result<Vec<WasmtimeVal>, wasmtime::Error> {
-    values.into_iter().map(to_wasmtime).collect()
+fn convert_values(
+    values: Vec<Val>,
+    resource: &mut impl FnMut(Resource) -> Result<ResourceAny, wasmtime::Error>,
+) -> Result<Vec<WasmtimeVal>, wasmtime::Error> {
+    values
+        .into_iter()
+        .map(|value| to_wasmtime(value, resource))
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use wasm_junction_conformance::sample_note;
+    use wasm_junction_core::Resource;
 
     fn round_trip(value: Val) -> Val {
-        from_wasmtime(to_wasmtime(value).unwrap()).unwrap()
+        let value = to_wasmtime(value, &mut |_| unreachable!()).unwrap();
+        from_wasmtime(value, &mut |_| unreachable!()).unwrap()
     }
 
     #[test]
@@ -207,5 +223,27 @@ mod tests {
     fn every_plain_shape_round_trips_both_converters() {
         let note = sample_note();
         assert_eq!(round_trip(note.clone()), note);
+    }
+
+    #[test]
+    fn nested_resources_use_the_store_aware_conversion() {
+        let value = Val::Option(Some(Box::new(Val::Resource(Resource::owned(
+            "example:resources/host@1.0.0",
+            "session",
+            4,
+        )))));
+        let error = to_wasmtime(value, &mut |resource| {
+            Err(wasmtime::Error::msg(format!(
+                "saw {}/{}:{}",
+                resource.interface(),
+                resource.name(),
+                resource.id()
+            )))
+        })
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "saw example:resources/host@1.0.0/session:4"
+        );
     }
 }

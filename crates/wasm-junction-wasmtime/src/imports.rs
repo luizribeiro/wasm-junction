@@ -125,7 +125,11 @@ fn define_plain(
 }
 
 fn convert_params(params: &[WasmtimeVal]) -> Result<Vals, wasmtime::Error> {
-    params.iter().cloned().map(from_wasmtime).collect()
+    params
+        .iter()
+        .cloned()
+        .map(|value| from_wasmtime(value, &mut |_| bail!("unsupported host resource")))
+        .collect()
 }
 
 async fn call(
@@ -151,7 +155,7 @@ fn set_results(results: &mut [WasmtimeVal], values: Vals) -> Result<(), wasmtime
         );
     }
     for (result, value) in results.iter_mut().zip(values) {
-        *result = to_wasmtime(value)?;
+        *result = to_wasmtime(value, &mut |_| bail!("unsupported host resource"))?;
     }
     Ok(())
 }
