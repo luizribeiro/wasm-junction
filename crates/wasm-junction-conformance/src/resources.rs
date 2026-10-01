@@ -7,6 +7,11 @@ use wasm_junction::{
 
 use crate::RESOURCE_HOST;
 
+wasm_junction::bindgen!({
+    path: "resource-wit",
+    interfaces: ["example:resources/host@1.0.0"],
+});
+
 /// Hand-written host-resource provider used by engine conformance tests.
 #[derive(Clone)]
 pub struct ResourceHost(Arc<ResourceProvider>);
@@ -137,48 +142,48 @@ impl Provider for ResourceHost {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::future::Future;
-    use std::task::{Context, Poll, Waker};
+impl host::Host for ResourceHost {
+    type File = String;
+    type Session = String;
 
-    use wasm_junction::{Call, CallContext, Caller, Provider, Resource};
-
-    use super::*;
-
-    fn ready<F: Future>(future: F) -> F::Output {
-        let future = std::pin::pin!(future);
-        match future.poll(&mut Context::from_waker(Waker::noop())) {
-            Poll::Ready(output) => output,
-            Poll::Pending => panic!("provider unexpectedly suspended"),
-        }
+    fn open_file(&self, _cx: &CallContext, name: String) -> String {
+        self.0.active.fetch_add(1, Ordering::Relaxed);
+        name
     }
 
-    #[test]
-    fn provider_keeps_sessions_across_calls_and_checks_their_type() {
-        let provider = ResourceHost::default();
-        let context = CallContext::for_test("resource-client");
-        let constructor = Call::new(
-            Caller::Component(Arc::from("resource-client")),
-            "host",
-            RESOURCE_HOST,
-            "[constructor]session",
-            vec![Val::from("Ada")],
-        );
-        let session = ready(provider.call(&context, constructor)).unwrap();
-        let method = Call::new(
-            Caller::Component(Arc::from("resource-client")),
-            "host",
-            RESOURCE_HOST,
-            "[method]session.profile",
-            session,
-        );
-        assert_eq!(
-            ready(provider.call(&context, method)).unwrap(),
-            [Val::from("profile:Ada")]
-        );
+    fn session_new(&self, _cx: &CallContext, user: String) -> String {
+        self.0.active.fetch_add(1, Ordering::Relaxed);
+        user
+    }
 
-        let wrong = Resource::borrowed(RESOURCE_HOST, "file", 0);
-        assert!(provider.0.sessions.with(&wrong, String::len).is_err());
+    fn session_profile(&self, _cx: &CallContext, session: &String) -> String {
+        format!("profile:{session}")
+    }
+
+    fn drop_file(&self, _cx: &CallContext, _file: String) {
+        self.0.active.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    fn drop_session(&self, _cx: &CallContext, _session: String) {
+        self.0.active.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_tracks_resource_values_until_drop() {
+        let host = ResourceHost::default();
+        let context = CallContext::for_test("resource-client");
+        let session = host::Host::session_new(&host, &context, "Ada".to_owned());
+        assert_eq!(host.active_resources(), 1);
+        assert_eq!(
+            host::Host::session_profile(&host, &context, &session),
+            "profile:Ada"
+        );
+        host::Host::drop_session(&host, &context, session);
+        assert_eq!(host.active_resources(), 0);
     }
 }

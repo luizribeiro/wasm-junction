@@ -3,6 +3,8 @@ package example:resources@1.0.0;
 interface host {
     resource file;
 
+    open-file: func(name: string) -> file;
+
     resource session {
         constructor(user: string);
         profile: func() -> string;
