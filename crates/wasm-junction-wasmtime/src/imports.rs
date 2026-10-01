@@ -62,10 +62,29 @@ pub(crate) fn define_imports(
                 });
                 runtime_type
             };
+            let definition = definitions
+                .get(runtime_type as usize)
+                .cloned()
+                .ok_or_else(|| wasmtime::Error::msg("missing host resource definition"))?;
             instance_linker.resource_concurrent(
                 &name,
                 ResourceType::host_dynamic(runtime_type),
-                |_, _| Box::pin(async { Ok(()) }),
+                move |accessor, id| {
+                    let definition = definition.clone();
+                    Box::pin(async move {
+                        let (imports, caller) = accessor.with(|mut store| {
+                            let data = store.get();
+                            (data.imports.clone(), data.component.clone())
+                        });
+                        imports
+                            .drop_resource(
+                                caller,
+                                Resource::owned(definition.interface, definition.name, id),
+                            )
+                            .await
+                            .map_err(|error| wasmtime::Error::msg(error.to_string()))
+                    })
+                },
             )?;
         }
         for (function, concurrent) in functions {

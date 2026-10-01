@@ -57,6 +57,11 @@ impl Middleware for Trace {
             Event::InvocationEnd { component } => {
                 self.record(format!("invocation end {component}"));
             }
+            Event::ResourceDrop {
+                interface,
+                resource,
+                id,
+            } => self.record(format!("resource drop {interface}/{resource}#{id}")),
             _ => {}
         }
     }

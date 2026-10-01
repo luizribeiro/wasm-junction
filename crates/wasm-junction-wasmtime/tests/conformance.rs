@@ -61,9 +61,10 @@ fn routed_scenario_matches_the_engine_neutral_trace() {
 #[test]
 fn host_resource_calls_cross_middleware_and_the_engine() {
     let trace = Trace::default();
+    let host = ResourceHost::default();
     let app = App::builder()
         .engine(WasmtimeEngine::new().unwrap())
-        .provide(ResourceHost::default().provided())
+        .provide(host.clone().provided())
         .middleware(trace.clone())
         .build()
         .unwrap();
@@ -79,6 +80,8 @@ fn host_resource_calls_cross_middleware_and_the_engine() {
     ))
     .unwrap();
     assert_eq!(result, [Val::from("profile:Ada")]);
+    assert_eq!(host.active_resources(), 0);
+    assert!(host.profile(0).unwrap_err().to_string().contains("unknown"));
     let trace = trace.entries();
     assert!(
         trace
@@ -90,6 +93,8 @@ fn host_resource_calls_cross_middleware_and_the_engine() {
             .iter()
             .any(|entry| entry.contains("[method]session.profile"))
     );
+    assert!(trace.iter().any(|entry| entry.contains("resource drop")));
+    assert!(!trace.iter().any(|entry| entry.contains("[drop]session")));
 }
 
 #[test]

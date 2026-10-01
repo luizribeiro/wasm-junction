@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use wasm_junction::{
     BoxFuture, Call, CallContext, CallError, Provided, Provider, ResourceTable, Val, Vals,
@@ -14,6 +15,7 @@ impl Default for ResourceHost {
     fn default() -> Self {
         Self(Arc::new(ResourceProvider {
             sessions: ResourceTable::new(RESOURCE_HOST, "session"),
+            active: AtomicUsize::new(0),
         }))
     }
 }
@@ -24,10 +26,29 @@ impl ResourceHost {
     pub fn provided(self) -> Provided {
         Provided::new(RESOURCE_HOST, self)
     }
+
+    /// Returns the number of session values still owned by guests.
+    #[must_use]
+    pub fn active_resources(&self) -> usize {
+        self.0.active.load(Ordering::Relaxed)
+    }
+
+    /// Reads a session directly to verify stale-id failures in conformance tests.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CallError`] when `id` has been dropped or was never allocated.
+    pub fn profile(&self, id: u32) -> Result<String, CallError> {
+        let resource = wasm_junction::Resource::borrowed(RESOURCE_HOST, "session", id);
+        self.0
+            .sessions
+            .with(&resource, |user| format!("profile:{user}"))
+    }
 }
 
 struct ResourceProvider {
     sessions: ResourceTable<String>,
+    active: AtomicUsize,
 }
 
 impl Provider for ResourceHost {
@@ -42,7 +63,9 @@ impl Provider for ResourceHost {
                     let [Val::String(user)] = call.args.as_slice() else {
                         return Err(CallError::trap("session constructor expects a user"));
                     };
-                    Ok(vec![Val::Resource(self.0.sessions.insert(user.clone())?)])
+                    let resource = self.0.sessions.insert(user.clone())?;
+                    self.0.active.fetch_add(1, Ordering::Relaxed);
+                    Ok(vec![Val::Resource(resource)])
                 }
                 "[method]session.profile" => {
                     let [Val::Resource(session)] = call.args.as_slice() else {
@@ -59,6 +82,12 @@ impl Provider for ResourceHost {
                 ))),
             }
         })
+    }
+
+    fn drop_resource(&self, resource: wasm_junction::Resource) -> Result<(), CallError> {
+        drop(self.0.sessions.take(&resource)?);
+        self.0.active.fetch_sub(1, Ordering::Relaxed);
+        Ok(())
     }
 }
 
