@@ -140,7 +140,12 @@ impl Provider for FailingDropHost {
 #[test]
 fn successful_calls_report_cleanup_failures_after_attempting_every_drop() {
     let provider = FailingDropHost::default();
-    let handle = Handle::new(provider.app(), Arc::from("resource-client")).with(DropMarker(42));
+    let handle = Handle::new(
+        provider.app(),
+        Arc::from("resource-client"),
+        RESOURCE_CLIENT,
+    )
+    .with(DropMarker(42));
     let error = block_on(handle.call(RESOURCE_CLIENT, "retain", Vec::new())).unwrap_err();
     assert_eq!(error.kind(), CallErrorKind::Trap);
     assert!(error.to_string().contains("drop refused for session#0"));

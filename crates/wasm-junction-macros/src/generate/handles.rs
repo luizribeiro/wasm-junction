@@ -48,7 +48,9 @@ impl Generator<'_> {
                     app: ::wasm_junction::App,
                     component: ::std::sync::Arc<str>,
                 ) -> Self {
-                    Self { handle: ::wasm_junction::Handle::new(app, component) }
+                    Self {
+                        handle: ::wasm_junction::Handle::new(app, component, INTERFACE),
+                    }
                 }
             }
         })

@@ -29,6 +29,7 @@ pub(crate) struct AppInner {
     wasi: WasiConfig,
     max_call_depth: usize,
     components: Mutex<BTreeMap<String, LoadedComponent>>,
+    handle_counts: Mutex<HashMap<(String, &'static str), usize>>,
 }
 
 struct LoadedComponent {
@@ -861,6 +862,7 @@ fn call_for_invocation(context: &InvocationContext, mut call: Call) -> Call {
 #[doc(hidden)]
 #[derive(Clone)]
 pub struct Handle {
+    _lease: Arc<HandleLease>,
     app: App,
     component: Arc<str>,
     context: InvocationContext,
@@ -870,8 +872,16 @@ impl Handle {
     /// Creates the backing state for a generated interface handle.
     #[doc(hidden)]
     #[must_use]
-    pub fn new(app: App, component: Arc<str>) -> Self {
+    pub fn new(app: App, component: Arc<str>, interface: &'static str) -> Self {
+        let key = (component.to_string(), interface);
+        *lock_or_recover(&app.0.handle_counts)
+            .entry(key.clone())
+            .or_default() += 1;
         Self {
+            _lease: Arc::new(HandleLease {
+                app: app.0.clone(),
+                key,
+            }),
             app,
             component,
             context: InvocationContext::default(),
@@ -917,6 +927,30 @@ impl Handle {
                 self.context.clone(),
             )
             .await
+    }
+}
+
+struct HandleLease {
+    app: Arc<AppInner>,
+    key: (String, &'static str),
+}
+
+impl Drop for HandleLease {
+    fn drop(&mut self) {
+        let mut counts = lock_or_recover(&self.app.handle_counts);
+        if let Some(count) = counts.get_mut(&self.key) {
+            *count -= 1;
+            if *count == 0 {
+                counts.remove(&self.key);
+            }
+        }
+    }
+}
+
+fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(value) => value,
+        Err(poisoned) => poisoned.into_inner(),
     }
 }
 
@@ -1347,6 +1381,7 @@ impl AppBuilder {
             wasi: self.wasi,
             max_call_depth: self.max_call_depth.unwrap_or(64),
             components: Mutex::new(BTreeMap::new()),
+            handle_counts: Mutex::new(HashMap::new()),
         })))
     }
 }
@@ -1555,6 +1590,20 @@ mod tests {
             .unwrap();
 
         assert_eq!(default_calls.get(), 0);
+    }
+
+    #[test]
+    fn handle_clones_share_one_live_interface_lease() {
+        let app = App::builder().engine(ExplicitEngine).build().unwrap();
+        let handle = Handle::new(app.clone(), Arc::from("journal"), "example:journal/notes");
+        let clone = handle.clone();
+        let key = ("journal".to_owned(), "example:journal/notes");
+        assert_eq!(app.0.handle_counts.lock().unwrap().get(&key), Some(&1));
+
+        drop(handle);
+        assert_eq!(app.0.handle_counts.lock().unwrap().get(&key), Some(&1));
+        drop(clone);
+        assert!(!app.0.handle_counts.lock().unwrap().contains_key(&key));
     }
 
     #[test]
