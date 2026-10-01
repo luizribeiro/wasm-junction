@@ -5,12 +5,12 @@ mod support;
 use std::sync::{Arc, Mutex};
 
 use support::{
-    FailingEngine, FakeEngine, GenerationEngine, GenerationState, block_on, component_bytes,
-    component_bytes_from,
+    FailingEngine, FakeEngine, GenerationEngine, GenerationState, RoutingGenerationEngine,
+    block_on, component_bytes, component_bytes_from,
 };
 use wasm_junction::{
-    App, Call, CallContext, CallError, CallErrorKind, Component, Event, Middleware, Next,
-    ReloadError, UnloadError, Val, Vals,
+    App, Call, CallContext, CallError, CallErrorKind, Component, Event, InterfaceHandle,
+    Middleware, Next, ReloadError, UnloadError, Val, Vals,
 };
 
 mod handles {
@@ -37,6 +37,11 @@ const TRANSLATOR_WIT: &str = r"
 ";
 const TRANSLATOR_V0_WIT: &str = r"
     package example:translate@0.1.7;
+    interface translator { translate: func(text: string) -> string; }
+    world service { export translator; }
+";
+const TRANSLATOR_V0_REPLACEMENT_WIT: &str = r"
+    package example:translate@0.1.9;
     interface translator { translate: func(text: string) -> string; }
     world service { export translator; }
 ";
@@ -77,21 +82,57 @@ fn writer() -> Component {
     .unwrap()
 }
 
+struct Translator(wasm_junction::Handle);
+
+impl InterfaceHandle for Translator {
+    const INTERFACE: &'static str = "example:translate/translator@0.1.0";
+
+    fn from_app(app: App, component: Arc<str>) -> Self {
+        Self(wasm_junction::Handle::new(app, component, Self::INTERFACE))
+    }
+}
+
+impl Translator {
+    async fn translate(&self, text: &str) -> Result<Vals, CallError> {
+        self.0
+            .call(Self::INTERFACE, "translate", vec![Val::from(text)])
+            .await
+    }
+}
+
 #[test]
-fn in_flight_calls_pin_the_old_generation_until_they_finish() {
+fn a_writer_in_flight_finishes_on_the_old_translator_generation() {
     let state = Arc::new(GenerationState::default());
     let app = App::builder()
-        .engine(GenerationEngine(state.clone()))
+        .engine(RoutingGenerationEngine(state.clone()))
         .build()
         .unwrap();
-    block_on(app.load(component().named("translator"))).unwrap();
+    block_on(
+        app.load(
+            Component::from_bytes(component_bytes(TRANSLATOR_V0_WIT, "service"))
+                .unwrap()
+                .named("translator"),
+        ),
+    )
+    .unwrap();
+    block_on(app.load(writer().named("writer"))).unwrap();
 
     let caller = app.clone();
     let in_flight = std::thread::spawn(move || {
-        block_on(caller.call("translator", TRANSLATOR, "translate", Vec::new())).unwrap()
+        block_on(caller.call(
+            "writer",
+            "example:writer/article@1.0.0",
+            "write",
+            vec![Val::from("hello")],
+        ))
+        .unwrap()
     });
     state.wait_until_called();
-    block_on(app.reload("translator", component())).unwrap();
+    block_on(app.reload(
+        "translator",
+        Component::from_bytes(component_bytes(TRANSLATOR_V0_WIT, "service")).unwrap(),
+    ))
+    .unwrap();
     let old = state.generation(0);
     assert!(old.upgrade().is_some());
     state.release();
@@ -99,11 +140,79 @@ fn in_flight_calls_pin_the_old_generation_until_they_finish() {
     assert_eq!(in_flight.join().unwrap(), [Val::from("old")]);
     assert!(old.upgrade().is_none());
     assert_eq!(
-        block_on(app.call("translator", TRANSLATOR, "translate", Vec::new())).unwrap(),
+        block_on(app.call(
+            "writer",
+            "example:writer/article@1.0.0",
+            "write",
+            vec![Val::from("hello")],
+        ))
+        .unwrap(),
         [Val::from("new")]
     );
+}
+
+#[test]
+fn compatible_reload_updates_linked_implicit_and_host_callers() {
+    let state = Arc::new(GenerationState::default());
+    let app = App::builder()
+        .engine(RoutingGenerationEngine(state))
+        .build()
+        .unwrap();
+    block_on(
+        app.load(
+            Component::from_bytes(component_bytes(TRANSLATOR_V0_WIT, "service"))
+                .unwrap()
+                .named("translator"),
+        ),
+    )
+    .unwrap();
+    block_on(app.load(writer().named("linked-writer"))).unwrap();
+    block_on(app.load(writer().named("implicit-writer"))).unwrap();
+    app.link(
+        "linked-writer",
+        "example:translate/translator@0.1.0",
+        "translator",
+    )
+    .unwrap();
+    let handle = app.get::<Translator>("translator").unwrap();
+
+    block_on(app.reload(
+        "translator",
+        Component::from_bytes(component_bytes(TRANSLATOR_V0_REPLACEMENT_WIT, "service")).unwrap(),
+    ))
+    .unwrap();
+
+    for writer in ["linked-writer", "implicit-writer"] {
+        assert_eq!(
+            block_on(app.call(
+                writer,
+                "example:writer/article@1.0.0",
+                "write",
+                vec![Val::from("hello")],
+            ))
+            .unwrap(),
+            [Val::from("new")]
+        );
+    }
+    assert_eq!(
+        block_on(handle.translate("hello")).unwrap(),
+        [Val::from("new")]
+    );
+}
+
+#[test]
+fn reload_refuses_unsatisfied_replacement_imports() {
+    let app = App::builder().engine(FakeEngine).build().unwrap();
+    block_on(
+        app.load(
+            Component::from_bytes(component_bytes(MARKER_WIT, "service"))
+                .unwrap()
+                .named("service"),
+        ),
+    )
+    .unwrap();
     assert!(matches!(
-        block_on(app.reload("translator", writer())).unwrap_err(),
+        block_on(app.reload("service", writer())).unwrap_err(),
         ReloadError::MissingImports(_)
     ));
 }

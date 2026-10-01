@@ -178,6 +178,61 @@ impl Engine for GenerationEngine {
     }
 }
 
+/// A generation engine that routes writers through successive translator generations.
+pub struct RoutingGenerationEngine(pub Arc<GenerationState>);
+
+impl Engine for RoutingGenerationEngine {
+    fn compile(
+        &self,
+        bytes: Arc<[u8]>,
+        _wasi: WasiConfig,
+    ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
+        if bytes
+            .windows(b"example:writer/article".len())
+            .any(|window| window == b"example:writer/article")
+        {
+            return Box::pin(async { Ok(Arc::new(WriterComponent) as Arc<dyn CompiledComponent>) });
+        }
+        let version = self.0.compilations.fetch_add(1, Ordering::SeqCst);
+        let component = Arc::new(GenerationComponent {
+            value: if version == 0 { "old" } else { "new" },
+            gate: (version == 0).then(|| self.0.gate.clone()),
+        });
+        self.0
+            .generations
+            .lock()
+            .unwrap()
+            .push(Arc::downgrade(&component));
+        Box::pin(async move { Ok(component as Arc<dyn CompiledComponent>) })
+    }
+}
+
+struct WriterComponent;
+
+impl CompiledComponent for WriterComponent {
+    fn call(
+        &self,
+        imports: Arc<dyn ImportDispatcher>,
+        context: InvocationContext,
+        component: Arc<str>,
+        _interface: Arc<str>,
+        _function: Arc<str>,
+        args: Vals,
+    ) -> BoxFuture<'_, Result<Vals, CallError>> {
+        Box::pin(async move {
+            imports
+                .call(
+                    context,
+                    component,
+                    Arc::from("example:translate/translator@0.1.0"),
+                    Arc::from("translate"),
+                    args,
+                )
+                .await
+        })
+    }
+}
+
 #[derive(Clone, Default)]
 struct Gate(Arc<(Mutex<(bool, bool)>, Condvar)>);
 
