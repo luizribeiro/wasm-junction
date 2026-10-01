@@ -1,0 +1,15 @@
+package benchmark:dispatch@0.1.0;
+
+interface host {
+  ping: func(value: u32) -> u32;
+}
+
+interface runner {
+  imports: func(iterations: u32) -> u32;
+  noop: func() -> u32;
+}
+
+world dispatch {
+  import host;
+  export runner;
+}
