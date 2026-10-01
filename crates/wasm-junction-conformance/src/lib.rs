@@ -25,6 +25,10 @@ pub const DECORATION: &str = decoration::INTERFACE;
 pub const TRANSLATOR: &str = translator::INTERFACE;
 /// The interface exported by the routed fixture's writer.
 pub const WRITER: &str = writer::INTERFACE;
+/// The first exported interface in the cyclic fixture.
+pub const CYCLE_A: &str = cycle_a::INTERFACE;
+/// The second exported interface in the cyclic fixture.
+pub const CYCLE_B: &str = cycle_b::INTERFACE;
 
 /// Returns the notes-summary fixture component.
 #[must_use]
@@ -42,6 +46,18 @@ pub fn translator_component() -> &'static [u8] {
 #[must_use]
 pub fn writer_component() -> &'static [u8] {
     include_bytes!(concat!(env!("OUT_DIR"), "/writer.wasm"))
+}
+
+/// Returns the first component in the cyclic routed-call fixture.
+#[must_use]
+pub fn cycle_a_component() -> &'static [u8] {
+    include_bytes!(concat!(env!("OUT_DIR"), "/cycle-a.wasm"))
+}
+
+/// Returns the second component in the cyclic routed-call fixture.
+#[must_use]
+pub fn cycle_b_component() -> &'static [u8] {
+    include_bytes!(concat!(env!("OUT_DIR"), "/cycle-b.wasm"))
 }
 
 #[cfg(test)]
@@ -66,5 +82,15 @@ mod tests {
         let writer = Component::from_bytes(writer_component()).unwrap();
         assert_eq!(writer.imports(), [TRANSLATOR]);
         assert_eq!(writer.exports(), [WRITER]);
+    }
+
+    #[test]
+    fn cyclic_components_import_each_other() {
+        let a = Component::from_bytes(cycle_a_component()).unwrap();
+        assert_eq!(a.imports(), [CYCLE_B]);
+        assert_eq!(a.exports(), [CYCLE_A]);
+        let b = Component::from_bytes(cycle_b_component()).unwrap();
+        assert_eq!(b.imports(), [CYCLE_A]);
+        assert_eq!(b.exports(), [CYCLE_B]);
     }
 }

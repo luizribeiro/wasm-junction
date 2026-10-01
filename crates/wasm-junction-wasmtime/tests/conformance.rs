@@ -1,7 +1,7 @@
 //! End-to-end conformance checks for the native engine.
 
 use std::future::{Future, poll_fn};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
@@ -12,8 +12,9 @@ use wasm_junction::{
     WasiConfig,
 };
 use wasm_junction_conformance::{
-    Fixture, FixtureHost, RoutedFixture, RoutedHost, SUMMARIZER, WRITER, component, run,
-    run_routed, sample_note, translator_component, writer_component,
+    CYCLE_A, Fixture, FixtureHost, RoutedFixture, RoutedHost, SUMMARIZER, WRITER, component,
+    cycle_a_component, cycle_b_component, run, run_routed, sample_note, translator_component,
+    writer_component,
 };
 use wasm_junction_wasmtime::WasmtimeEngine;
 
@@ -249,6 +250,15 @@ impl Middleware for AwaitRoutedCall {
     }
 }
 
+struct CountCalls(Arc<AtomicUsize>);
+
+impl Middleware for CountCalls {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        self.0.fetch_add(1, Ordering::Relaxed);
+        next.run(call).await
+    }
+}
+
 #[test]
 fn nested_routed_call_can_await_on_a_current_thread_tokio_runtime() {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -282,6 +292,34 @@ fn nested_routed_call_can_await_on_a_current_thread_tokio_runtime() {
         .recv_timeout(Duration::from_secs(30))
         .expect("nested routed call deadlocked the current-thread Tokio runtime");
     assert_eq!(result.unwrap(), [Val::from("host: async #1")]);
+}
+
+#[test]
+fn cyclic_routed_calls_stop_at_the_depth_limit() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let app = App::builder()
+        .engine(WasmtimeEngine::new().unwrap())
+        .max_call_depth(3)
+        .middleware(CountCalls(calls.clone()))
+        .build()
+        .unwrap();
+    let a = Component::from_bytes(cycle_a_component())
+        .unwrap()
+        .named("a");
+    let b = Component::from_bytes(cycle_b_component())
+        .unwrap()
+        .named("b");
+    block_on(app.load_all([a, b])).unwrap();
+
+    let error = block_on(app.call("a", CYCLE_A, "recurse", vec![Val::U32(0)])).unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Trap);
+    assert!(
+        error
+            .to_string()
+            .ends_with("maximum call depth of 3 exceeded"),
+        "{error}"
+    );
+    assert_eq!(calls.load(Ordering::Relaxed), 4);
 }
 
 #[test]
