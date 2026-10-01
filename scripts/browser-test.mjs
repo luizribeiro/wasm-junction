@@ -14,6 +14,11 @@ const diagnosticsDirectory = mkdtempSync(join(tmpdir(), "wasm-junction-browser-"
 const diagnosticsPath = join(diagnosticsDirectory, `${browserName}.log`);
 process.env.DEBUG = "pw:browser";
 process.env.DEBUG_FILE = diagnosticsPath;
+if (process.platform === "linux") {
+  // Playwright checks libraries with the `ldd` on PATH, which in the dev shell searches only the
+  // Nix store; the browsers load system libraries, so a real gap still fails at launch.
+  process.env.PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS = "1";
+}
 
 const playwright = await import(join(playwrightRoot, "index.mjs"));
 const browserType = playwright[browserName];
