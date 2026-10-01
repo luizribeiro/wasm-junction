@@ -1,9 +1,10 @@
 use std::error::Error;
 use std::fmt::{self, Display};
 
-use wasm_junction::{App, CallError, Component, Engine, Val, Vals};
+use wasm_junction::{App, CallError, Component, Engine, Vals};
 
-use crate::{EXPECTED_TRACE, FixtureHost, SUMMARIZER, Trace, component, sample_summary};
+use crate::host::summary;
+use crate::{EXPECTED_TRACE, FixtureHost, SUMMARIZER, Trace, component, summarizer};
 
 /// A loaded conformance fixture available for additional engine assertions.
 pub struct Fixture {
@@ -69,13 +70,17 @@ impl Fixture {
 /// Returns [`FixtureError`] if setup, invocation, output, or tracing differs from the contract.
 pub async fn run(engine: impl Engine + 'static) -> Result<Fixture, FixtureError> {
     let fixture = Fixture::new(engine).await?;
-    let values = fixture
-        .call("summarize", vec![Val::from("daily")])
+    let handle = fixture
+        .app
+        .get::<summarizer::Summarizer>("summarizer")
+        .map_err(FixtureError::source)?;
+    let result = handle
+        .summarize("daily")
         .await
         .map_err(FixtureError::source)?;
-    if values != [sample_summary()] {
+    if result != Ok(summary()) {
         return Err(FixtureError::new(format!(
-            "unexpected summary values: {values:?}"
+            "unexpected summary result: {result:?}"
         )));
     }
     let expected = EXPECTED_TRACE

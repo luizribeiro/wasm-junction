@@ -1,9 +1,9 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use wasm_junction::{BoxFuture, Call, CallContext, CallError, Provided, Provider, Val, Vals};
+use wasm_junction::{CallContext, Provided, Val};
 
-use crate::NOTES;
+use crate::{notes, types};
 
 /// The host implementation used by the notes-summary fixture.
 #[derive(Clone, Default)]
@@ -15,7 +15,7 @@ impl FixtureHost {
     /// Wraps this host as the fixture's notes provider.
     #[must_use]
     pub fn provided(self) -> Provided {
-        Provided::new(NOTES, self)
+        notes::provider(self)
     }
 
     /// Returns the number of notes normalized by this host.
@@ -25,99 +25,74 @@ impl FixtureHost {
     }
 }
 
-impl Provider for FixtureHost {
-    fn call<'a>(
-        &'a self,
-        _context: &'a CallContext,
-        call: Call,
-    ) -> BoxFuture<'a, Result<Vals, CallError>> {
-        Box::pin(async move {
-            match call.function.as_ref() {
-                "read" => read(&call.args),
-                "normalize" => {
-                    self.normalizations.fetch_add(1, Ordering::Relaxed);
-                    normalize(call.args)
-                }
-                function => Err(CallError::trap(format!(
-                    "unknown notes function `{function}`"
-                ))),
-            }
-        })
+impl notes::Host for FixtureHost {
+    fn read(
+        &self,
+        _context: &CallContext,
+        name: String,
+    ) -> impl std::future::Future<Output = Result<types::Note, String>> {
+        std::future::ready(read(&name))
+    }
+
+    fn normalize(&self, _context: &CallContext, value: types::Note) -> types::Note {
+        self.normalizations.fetch_add(1, Ordering::Relaxed);
+        value
     }
 }
 
-fn read(args: &[Val]) -> Result<Vals, CallError> {
-    let [Val::String(name)] = args else {
-        return Err(CallError::trap("notes.read expected one string"));
-    };
-    let result = if name == "private" {
-        Err(Some(Box::new(Val::String("permission denied".to_owned()))))
+fn read(name: &str) -> Result<types::Note, String> {
+    if name == "private" {
+        Err("permission denied".to_owned())
     } else {
-        Ok(Some(Box::new(sample_note())))
-    };
-    Ok(vec![Val::Result(result)])
-}
-
-fn normalize(args: Vals) -> Result<Vals, CallError> {
-    if args.len() != 1 || !matches!(args.first(), Some(Val::Record(_))) {
-        return Err(CallError::trap("notes.normalize expected one note"));
+        Ok(note())
     }
-    Ok(args)
 }
 
 /// Returns the fixture note, containing every plain WIT value shape.
 #[must_use]
 pub fn sample_note() -> Val {
-    Val::Record(vec![
-        field("title", Val::String("Daily".to_owned())),
-        field("published", Val::Bool(true)),
-        field("signed-8", Val::S8(-8)),
-        field("unsigned-8", Val::U8(8)),
-        field("signed-16", Val::S16(-16)),
-        field("unsigned-16", Val::U16(16)),
-        field("signed-32", Val::S32(-32)),
-        field("unsigned-32", Val::U32(32)),
-        field("signed-64", Val::S64(-64)),
-        field("unsigned-64", Val::U64(64)),
-        field("score-32", Val::F32(3.5)),
-        field("score-64", Val::F64(7.25)),
-        field("marker", Val::Char('§')),
-        field(
-            "tags",
-            Val::List(vec![Val::from("rust"), Val::from("wasm")]),
-        ),
-        field("location", Val::Tuple(vec![Val::S32(-71), Val::S32(42)])),
-        field(
-            "attachment",
-            Val::Variant {
-                case: "text".to_owned(),
-                value: Some(Box::new(Val::from("diagram"))),
-            },
-        ),
-        field("mood", Val::Enum("upbeat".to_owned())),
-        field(
-            "emphasis",
-            Val::Flags(vec!["concise".to_owned(), "detailed".to_owned()]),
-        ),
-        field(
-            "subtitle",
-            Val::Option(Some(Box::new(Val::from("Engine notes")))),
-        ),
-        field("revision", Val::Result(Ok(Some(Box::new(Val::U64(7)))))),
-    ])
+    note().into()
 }
 
 /// Returns the fixture's successful summary result.
 #[must_use]
 pub fn sample_summary() -> Val {
-    Val::Result(Ok(Some(Box::new(Val::Record(vec![
-        field("text", Val::from("Daily: 2 tags")),
-        field("source", sample_note()),
-    ])))))
+    Val::Result(Ok(Some(Box::new(summary().into()))))
 }
 
-fn field(name: &str, value: Val) -> (String, Val) {
-    (name.to_owned(), value)
+pub(crate) fn note() -> types::Note {
+    types::Note {
+        title: "Daily".to_owned(),
+        published: true,
+        signed_8: -8,
+        unsigned_8: 8,
+        signed_16: -16,
+        unsigned_16: 16,
+        signed_32: -32,
+        unsigned_32: 32,
+        signed_64: -64,
+        unsigned_64: 64,
+        score_32: 3.5,
+        score_64: 7.25,
+        marker: '§',
+        tags: vec!["rust".to_owned(), "wasm".to_owned()],
+        location: (-71, 42),
+        attachment: types::Attachment::Text("diagram".to_owned()),
+        mood: types::Mood::Upbeat,
+        emphasis: types::Emphasis {
+            concise: true,
+            detailed: true,
+        },
+        subtitle: Some("Engine notes".to_owned()),
+        revision: Ok(7),
+    }
+}
+
+pub(crate) fn summary() -> types::Summary {
+    types::Summary {
+        text: "Daily: 2 tags".to_owned(),
+        source: note(),
+    }
 }
 
 #[cfg(test)]
@@ -126,12 +101,6 @@ mod tests {
 
     #[test]
     fn refusal_is_a_typed_result() {
-        let result = read(&[Val::from("private")]).unwrap();
-        assert_eq!(
-            result,
-            [Val::Result(Err(Some(Box::new(Val::from(
-                "permission denied"
-            )))))]
-        );
+        assert_eq!(read("private"), Err("permission denied".to_owned()));
     }
 }

@@ -7,16 +7,18 @@ mod host;
 mod runner;
 mod trace;
 
+wasm_junction::bindgen!({ path: "wit" });
+
 pub use host::{FixtureHost, sample_note, sample_summary};
 pub use runner::{Fixture, FixtureError, run};
 pub use trace::{EXPECTED_TRACE, Trace};
 
 /// The fixture's types-only interface.
-pub const TYPES: &str = "example:notes/types@0.1.0";
+pub const TYPES: &str = types::INTERFACE;
 /// The fixture's imported host interface.
-pub const NOTES: &str = "example:notes/notes@0.1.0";
+pub const NOTES: &str = notes::INTERFACE;
 /// The fixture's exported plugin interface.
-pub const SUMMARIZER: &str = "example:notes/summarizer@0.1.0";
+pub const SUMMARIZER: &str = summarizer::INTERFACE;
 
 /// Returns the notes-summary fixture component.
 #[must_use]
