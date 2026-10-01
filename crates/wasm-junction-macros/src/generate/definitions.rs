@@ -1,11 +1,98 @@
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::TokenStream;
 use quote::quote;
-use wit_parser::{Enum, Flags, Record, Type, TypeDefKind};
+use wit_parser::{Enum, Flags, Record, Type, TypeDefKind, Variant};
 
 use super::{Generator, rust_ident};
 
 impl Generator<'_> {
+    pub(super) fn variant(&self, name: &str, variant: &Variant) -> syn::Result<TokenStream> {
+        let type_ident = rust_ident(&name.to_upper_camel_case())?;
+        let cases = variant
+            .cases
+            .iter()
+            .map(|case| {
+                let ident = rust_ident(&case.name.to_upper_camel_case())?;
+                let payload = case
+                    .ty
+                    .map(|ty| self.rust_type(ty, name))
+                    .transpose()?
+                    .map(|ty| quote!((#ty)));
+                let wit_name = &case.name;
+                Ok(quote! {
+                    #[doc = concat!("The WIT `", #wit_name, "` case.")]
+                    #ident #payload
+                })
+            })
+            .collect::<syn::Result<Vec<_>>>()?;
+        let encode = variant
+            .cases
+            .iter()
+            .map(|case| {
+                let ident = rust_ident(&case.name.to_upper_camel_case())?;
+                let wit_name = &case.name;
+                if let Some(ty) = case.ty {
+                    let value = self.encode(ty, quote!(value), name)?;
+                    Ok(
+                        quote!(#type_ident::#ident(value) => ::wasm_junction::Val::Variant {
+                            case: #wit_name.to_owned(),
+                            value: Some(::std::boxed::Box::new(#value)),
+                        }),
+                    )
+                } else {
+                    Ok(
+                        quote!(#type_ident::#ident => ::wasm_junction::Val::Variant {
+                            case: #wit_name.to_owned(), value: None,
+                        }),
+                    )
+                }
+            })
+            .collect::<syn::Result<Vec<_>>>()?;
+        let decode = variant
+            .cases
+            .iter()
+            .map(|case| {
+                let ident = rust_ident(&case.name.to_upper_camel_case())?;
+                let wit_name = &case.name;
+                if let Some(ty) = case.ty {
+                    let value = self.decode(ty, quote!(*value), name)?;
+                    Ok(quote!((#wit_name, Some(value)) => #value.map(Self::#ident)))
+                } else {
+                    Ok(quote!((#wit_name, None) => Ok(Self::#ident)))
+                }
+            })
+            .collect::<syn::Result<Vec<_>>>()?;
+        let eq_hash = variant
+            .cases
+            .iter()
+            .all(|case| case.ty.is_none_or(|ty| self.has_eq(ty)))
+            .then(|| quote!(Eq, Hash,));
+        let expected = format!("expected {name} variant");
+        Ok(quote! {
+            #[doc = concat!("The WIT `", #name, "` variant.")]
+            #[derive(Debug, Clone, PartialEq, #eq_hash)]
+            pub enum #type_ident { #(#cases,)* }
+
+            impl ::std::convert::From<#type_ident> for ::wasm_junction::Val {
+                fn from(value: #type_ident) -> Self { match value { #(#encode,)* } }
+            }
+
+            impl ::std::convert::TryFrom<::wasm_junction::Val> for #type_ident {
+                type Error = ::wasm_junction::TypeError;
+
+                fn try_from(value: ::wasm_junction::Val) -> ::std::result::Result<Self, Self::Error> {
+                    let ::wasm_junction::Val::Variant { case, value } = value else {
+                        return Err(::wasm_junction::TypeError::new(#expected));
+                    };
+                    match (case.as_str(), value) {
+                        #(#decode,)*
+                        _ => Err(::wasm_junction::TypeError::new(#expected)),
+                    }
+                }
+            }
+        })
+    }
+
     pub(super) fn flags(name: &str, flags: &Flags) -> syn::Result<TokenStream> {
         let type_ident = rust_ident(&name.to_upper_camel_case())?;
         let fields = flags

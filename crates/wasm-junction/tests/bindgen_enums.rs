@@ -38,3 +38,48 @@ fn flags_round_trip_none_some_and_all() {
     let duplicate = wasm_junction::Val::Flags(vec!["read".to_owned(), "read".to_owned()]);
     assert!(controls::Permissions::try_from(duplicate).is_err());
 }
+
+#[test]
+fn every_variant_case_round_trips() {
+    for choice in [
+        controls::Choice::Text("draft".to_owned()),
+        controls::Choice::Number(4),
+        controls::Choice::None,
+    ] {
+        let value = wasm_junction::Val::from(choice.clone());
+        assert_eq!(controls::Choice::try_from(value).unwrap(), choice);
+    }
+    let wrong = wasm_junction::Val::Variant {
+        case: "number".to_owned(),
+        value: Some(Box::new(wasm_junction::Val::String("four".to_owned()))),
+    };
+    assert!(controls::Choice::try_from(wrong).is_err());
+}
+#[test]
+fn primitives_and_nested_shapes_round_trip() {
+    let scalars = controls::ScalarValues {
+        boolean: true,
+        unsigned_eight: 8,
+        unsigned_sixteen: 16,
+        unsigned_thirty_two: 32,
+        unsigned_sixty_four: 64,
+        signed_eight: -8,
+        signed_sixteen: -16,
+        signed_thirty_two: -32,
+        signed_sixty_four: -64,
+        float_thirty_two: 32.5,
+        float_sixty_four: 64.5,
+        character: '🦀',
+        text: "all scalars".to_owned(),
+    };
+    let nested = controls::NestedValues {
+        items: vec![scalars],
+        maybe_status: Some(controls::Status::Ready),
+        pair: (9, "tuple".to_owned()),
+        outcome: Ok(controls::Choice::Number(4)),
+        success_only: Ok(7),
+        failure_only: Err("denied".to_owned()),
+    };
+    let value = wasm_junction::Val::from(nested.clone());
+    assert_eq!(controls::NestedValues::try_from(value).unwrap(), nested);
+}

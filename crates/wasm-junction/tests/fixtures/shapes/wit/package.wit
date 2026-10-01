@@ -10,4 +10,33 @@ interface controls {
     read,
     write,
   }
+
+  variant choice {
+    text(string),
+    number(u32),
+    none,
+  }
+  record scalar-values {
+    boolean: bool,
+    unsigned-eight: u8,
+    unsigned-sixteen: u16,
+    unsigned-thirty-two: u32,
+    unsigned-sixty-four: u64,
+    signed-eight: s8,
+    signed-sixteen: s16,
+    signed-thirty-two: s32,
+    signed-sixty-four: s64,
+    float-thirty-two: f32,
+    float-sixty-four: f64,
+    character: char,
+    text: string,
+  }
+  record nested-values {
+    items: list<scalar-values>,
+    maybe-status: option<status>,
+    pair: tuple<u8, string>,
+    outcome: result<choice, string>,
+    success-only: result<u32>,
+    failure-only: result<_, string>,
+  }
 }
