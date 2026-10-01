@@ -1,0 +1,17 @@
+package example:resources@1.0.0;
+
+interface host {
+    resource session {
+        constructor(user: string);
+        profile: func() -> string;
+    }
+}
+
+interface client {
+    run: func(trap: bool) -> string;
+}
+
+world resource-client {
+    import host;
+    export client;
+}
