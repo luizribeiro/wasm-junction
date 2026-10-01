@@ -14,3 +14,15 @@ fn test_context_names_a_component_and_starts_empty() {
     );
     assert!(context.extensions().get::<String>().is_none());
 }
+
+#[test]
+fn test_context_carries_attached_data() {
+    struct SessionId(u32);
+
+    let context = CallContext::for_test("writer").with(SessionId(42));
+
+    assert_eq!(
+        context.extensions().get::<SessionId>().map(|value| value.0),
+        Some(42)
+    );
+}
