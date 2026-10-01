@@ -1,3 +1,14 @@
+call host → audit-log example:audit/runner@0.1.0.run("Ada")
+call audit-log → host example:audit/audit@0.1.0.[constructor]session("Ada")
+return audit-log → host example:audit/audit@0.1.0.[constructor]session(own(example:audit/audit@0.1.0/session#0))
+call audit-log → host example:audit/audit@0.1.0.[method]session.user(borrow(example:audit/audit@0.1.0/session#0))
+return audit-log → host example:audit/audit@0.1.0.[method]session.user("Ada")
+channel open stream#0 guest-to-host
+call audit-log → host example:audit/audit@0.1.0.audit(stream)
+channel close stream#0 guest-to-host
+return audit-log → host example:audit/audit@0.1.0.audit()
+resource drop example:audit/audit@0.1.0/session#0
+return host → audit-log example:audit/runner@0.1.0.run()
 stored [request 42] session opened for Ada
 stored [request 42] viewed dashboard
 stored [request 42] session complete

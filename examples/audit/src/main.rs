@@ -4,11 +4,13 @@
 #![warn(missing_docs)]
 
 mod bindings;
+mod trace;
 
 use std::error::Error;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use bindings::{audit, runner};
+use trace::Trace;
 use wasm_junction::{App, CallContext, Component, InputStream};
 
 const COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/audit.wasm"));
@@ -76,6 +78,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let audit = Arc::new(Audit::default());
     let app = App::builder()
         .provide(audit::provider(audit.clone()))
+        .middleware(Trace::default())
         .build()?;
     app.load(Component::from_bytes(COMPONENT)?.named("audit-log"))
         .await?;
