@@ -15,6 +15,8 @@ use crate::{
     Provided, Provider, Resource, Val, Vals, WasiConfig,
 };
 
+mod lifecycle;
+
 /// An application assembled from host providers, middleware, and WebAssembly components.
 #[derive(Clone)]
 pub struct App(pub(crate) Arc<AppInner>);
@@ -1019,6 +1021,41 @@ fn reject_resource_exports(mut interfaces: Vec<String>) -> Result<(), LoadError>
     interfaces.sort();
     interfaces.dedup();
     Err(LoadError::ResourceExports(interfaces))
+}
+
+/// A failure to replace one or more loaded components.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ReloadError {
+    /// No component is loaded under the requested name.
+    UnknownComponent(String),
+    /// Exported interfaces define resources, which cannot yet be routed between components.
+    ResourceExports(Vec<String>),
+    /// The selected engine could not compile the replacement.
+    Compile(EngineError),
+}
+
+impl Display for ReloadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownComponent(name) => write!(formatter, "component `{name}` is not loaded"),
+            Self::ResourceExports(interfaces) => write!(
+                formatter,
+                "component exports unsupported resources in: {}",
+                interfaces.join(", ")
+            ),
+            Self::Compile(error) => write!(formatter, "component compilation failed: {error}"),
+        }
+    }
+}
+
+impl Error for ReloadError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Compile(error) => Some(error),
+            Self::UnknownComponent(_) | Self::ResourceExports(_) => None,
+        }
+    }
 }
 
 /// A failure to obtain a typed interface handle.

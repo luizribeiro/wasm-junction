@@ -18,7 +18,7 @@ mod provider;
 
 pub use app::{
     App, AppBuilder, BuildError, Candidate, CheckError, GetError, Handle, InterfaceHandle,
-    IssueKind, LinkError, LoadError, MissingImports, ResolutionIssue,
+    IssueKind, LinkError, LoadError, MissingImports, ReloadError, ResolutionIssue,
 };
 pub use call::{Call, Caller, TypedCall};
 pub use component::{Component, ComponentError};
