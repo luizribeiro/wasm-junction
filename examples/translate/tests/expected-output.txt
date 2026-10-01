@@ -1,0 +1,17 @@
+call host → writer example:translate/writer@0.1.0.write("hello", "pt")
+call writer → deepl example:translate/translator@0.1.0.translate("hello", "pt")
+return writer → deepl example:translate/translator@0.1.0.translate(ok("[DeepL] olá"))
+return host → writer example:translate/writer@0.1.0.write(ok("Draft: [DeepL] olá"))
+deepl: Draft: [DeepL] olá
+google refused: load would make imports ambiguous: component `writer` import `example:translate/translator@0.1.0` is ambiguous: `deepl`, `google`
+call host → writer example:translate/writer@0.1.0.write("hello", "pt")
+call writer → deepl example:translate/translator@0.1.0.translate("hello", "pt")
+return writer → deepl example:translate/translator@0.1.0.translate(ok("[DeepL] olá"))
+return host → writer example:translate/writer@0.1.0.write(ok("Draft: [DeepL] olá"))
+linked to deepl: Draft: [DeepL] olá
+call host → writer example:translate/writer@0.1.0.write("hello", "pt")
+call writer → google example:translate/translator@0.1.0.translate("hello", "pt")
+return writer → google example:translate/translator@0.1.0.translate(ok("[Google] oi"))
+return host → writer example:translate/writer@0.1.0.write(ok("Draft: [Google] oi"))
+linked to google: Draft: [Google] oi
+check: clean
