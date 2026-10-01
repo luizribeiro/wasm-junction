@@ -9,18 +9,16 @@ type ExtensionValue = dyn Any + Send + Sync;
 #[cfg(target_arch = "wasm32")]
 type ExtensionValue = dyn Any;
 
-/// Type-indexed data visible to host providers during one call.
-///
-/// Middleware and handles will gain APIs for attaching values in a later release. An empty set is
-/// already available so provider signatures do not need to change when attachment is added.
-#[derive(Default)]
+/// Type-indexed data attached to one call.
+#[derive(Clone, Default)]
 pub struct Extensions {
-    values: HashMap<TypeId, Box<ExtensionValue>>,
+    values: HashMap<TypeId, Arc<ExtensionValue>>,
 }
 
 impl Extensions {
-    fn insert<T: Any + HostBound>(&mut self, value: T) {
-        self.values.insert(TypeId::of::<T>(), Box::new(value));
+    /// Attaches `value`, replacing the existing value of the same type.
+    pub fn insert<T: Any + HostBound>(&mut self, value: T) {
+        self.values.insert(TypeId::of::<T>(), Arc::new(value));
     }
 
     /// Returns the attached value of type `T`, if that type is present.
@@ -81,7 +79,9 @@ impl InvocationContext {
 
 #[cfg(test)]
 mod tests {
-    use super::InvocationContext;
+    use std::sync::Arc;
+
+    use super::{Extensions, InvocationContext};
 
     struct Marker(u32);
 
@@ -102,5 +102,19 @@ mod tests {
             context.extensions().get::<Marker>().map(|marker| marker.0),
             Some(42)
         );
+    }
+
+    #[test]
+    fn cloned_extensions_share_values_and_replace_by_type() {
+        let marker = Arc::new(Marker(42));
+        let mut extensions = Extensions::default();
+        extensions.insert(marker.clone());
+
+        let clone = extensions.clone();
+        assert!(Arc::ptr_eq(clone.get::<Arc<Marker>>().unwrap(), &marker));
+
+        extensions.insert(Arc::new(Marker(7)));
+        assert_eq!(extensions.get::<Arc<Marker>>().unwrap().0, 7);
+        assert_eq!(clone.get::<Arc<Marker>>().unwrap().0, 42);
     }
 }
