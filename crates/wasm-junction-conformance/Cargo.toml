@@ -1,0 +1,16 @@
+[package]
+name = "wasm-junction-conformance"
+description = "Reusable engine conformance fixtures for wasm-junction"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+publish = false
+build = "build.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+wasm-junction = { path = "../wasm-junction", version = "=0.0.0" }
