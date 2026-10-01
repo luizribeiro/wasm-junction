@@ -5,14 +5,14 @@
 
 use js_component_bindgen::{AsyncMode, InstantiationMode, TranspileOpts, transpile};
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(any(not(test), target_family = "wasm"), allow(dead_code))]
 #[derive(Debug)]
 struct TranspiledComponent {
     source: String,
     modules: Vec<(String, Vec<u8>)>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(any(not(test), target_family = "wasm"), allow(dead_code))]
 fn transpile_component(bytes: &[u8]) -> Result<TranspiledComponent, String> {
     let output = transpile(
         bytes,

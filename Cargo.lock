@@ -1697,6 +1697,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
+ "wasm-encoder 0.259.0",
  "wasm-junction-conformance",
  "wasm-junction-core",
 ]
