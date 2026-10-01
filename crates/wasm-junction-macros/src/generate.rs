@@ -1,7 +1,9 @@
-use heck::ToSnakeCase;
+use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use wit_parser::{InterfaceId, PackageId, Resolve};
+
+mod types;
 
 pub(crate) fn generate(resolve: &Resolve, package_id: PackageId) -> syn::Result<TokenStream> {
     let package = &resolve.packages[package_id];
@@ -25,12 +27,36 @@ impl Generator<'_> {
             .package
             .ok_or_else(|| syn::Error::new(Span::call_site(), "interface has no package"))?;
         let interface = self.resolve.packages[package_id].name.interface_id(name);
+        let types = self.resolve.interfaces[id]
+            .types
+            .iter()
+            .map(|(export, type_id)| {
+                let definition = &self.resolve.types[*type_id];
+                if definition.owner == wit_parser::TypeOwner::Interface(id) {
+                    self.type_definition(export, *type_id)
+                } else {
+                    let name = rust_ident(&export.to_upper_camel_case())?;
+                    let target = self.named_type(*type_id)?;
+                    Ok(quote!(pub use #target as #name;))
+                }
+            })
+            .collect::<syn::Result<Vec<_>>>()?;
         Ok(quote! {
             #[doc = concat!("Bindings for the `", #interface, "` interface.")]
             pub mod #module {
                 /// The fully qualified WIT interface name.
                 pub const INTERFACE: &str = #interface;
+                #(#types)*
             }
+        })
+    }
+
+    fn type_definition(&self, name: &str, id: wit_parser::TypeId) -> syn::Result<TokenStream> {
+        let ident = rust_ident(&name.to_upper_camel_case())?;
+        let ty = self.type_kind(&self.resolve.types[id].kind, name)?;
+        Ok(quote! {
+            #[doc = concat!("The WIT `", #name, "` type.")]
+            pub type #ident = #ty;
         })
     }
 }

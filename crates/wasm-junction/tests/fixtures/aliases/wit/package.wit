@@ -1,0 +1,13 @@
+package test:aliases;
+
+interface shared {
+  type count = u32;
+}
+
+interface aliases {
+  use shared.{count as imported-count};
+  type labels = list<string>;
+  type character-pair = tuple<char, bool>;
+  type outcome = result<u32, string>;
+  type count-copy = imported-count;
+}
