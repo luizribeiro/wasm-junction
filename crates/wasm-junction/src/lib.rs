@@ -16,7 +16,9 @@ mod context;
 mod middleware;
 mod provider;
 
-pub use app::{App, AppBuilder, BuildError, GetError, InterfaceHandle, LoadError, MissingImports};
+pub use app::{
+    App, AppBuilder, BuildError, GetError, InterfaceHandle, LinkError, LoadError, MissingImports,
+};
 pub use call::{Call, Caller, TypedCall};
 pub use component::{Component, ComponentError};
 pub use context::CallContext;

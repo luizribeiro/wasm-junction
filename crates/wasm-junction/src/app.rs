@@ -29,6 +29,7 @@ pub(crate) struct AppInner {
 struct LoadedComponent {
     name: Arc<str>,
     exports: Vec<Arc<str>>,
+    links: HashMap<String, String>,
     compiled: Arc<dyn CompiledComponent>,
 }
 
@@ -94,6 +95,7 @@ impl App {
             LoadedComponent {
                 name: Arc::from(name),
                 exports: exports.into_iter().map(Arc::from).collect(),
+                links: HashMap::new(),
                 compiled,
             },
         );
@@ -140,6 +142,37 @@ impl App {
         self.lock_components()
             .get(name)
             .is_some_and(|component| component.exports_interface(I::INTERFACE))
+    }
+
+    /// Directs one component import to a named component provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LinkError`] when either component is unknown or the provider does not export a
+    /// compatible interface.
+    pub fn link(
+        &self,
+        consumer: &str,
+        interface: impl Into<String>,
+        provider: &str,
+    ) -> Result<(), LinkError> {
+        let interface = interface.into();
+        let mut components = self.lock_components();
+        let target = components
+            .get(provider)
+            .ok_or_else(|| LinkError::UnknownComponent(provider.to_owned()))?;
+        if !target.exports_interface(&interface) {
+            return Err(LinkError::MissingExport {
+                component: provider.to_owned(),
+                interface,
+            });
+        }
+        components
+            .get_mut(consumer)
+            .ok_or_else(|| LinkError::UnknownComponent(consumer.to_owned()))?
+            .links
+            .insert(interface, provider.to_owned());
+        Ok(())
     }
 
     /// Calls an exported function through the application dispatcher.
@@ -295,6 +328,20 @@ impl App {
         caller: &str,
         requested: &str,
     ) -> Result<ResolvedImport, ResolveError> {
+        let components = self.lock_components();
+        if let Some(provider_name) = components
+            .get(caller)
+            .and_then(|component| component.links.get(requested))
+        {
+            let component = &components[provider_name];
+            return Ok(ResolvedImport::Component {
+                name: component.name.clone(),
+                interface: component
+                    .export_name(requested)
+                    .ok_or(ResolveError::Missing)?,
+                compiled: component.compiled.clone(),
+            });
+        }
         let hosts = self
             .0
             .providers
@@ -304,8 +351,7 @@ impl App {
                 interface,
                 provider: provider.clone(),
             });
-        let components = self
-            .lock_components()
+        let component_candidates = components
             .values()
             .filter(|component| component.name.as_ref() != caller)
             .filter_map(|component| {
@@ -316,7 +362,7 @@ impl App {
                 })
             })
             .collect::<Vec<_>>();
-        let mut candidates = hosts.chain(components);
+        let mut candidates = hosts.chain(component_candidates);
         let candidate = candidates.next().ok_or(ResolveError::Missing)?;
         if candidates.next().is_some() {
             Err(ResolveError::Ambiguous)
@@ -576,6 +622,38 @@ impl Display for GetError {
 }
 
 impl Error for GetError {}
+
+/// A failure to link one component import to another component.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LinkError {
+    /// No component is loaded under the given name.
+    UnknownComponent(String),
+    /// The selected provider does not export a compatible interface.
+    MissingExport {
+        /// The provider component name.
+        component: String,
+        /// The requested interface.
+        interface: String,
+    },
+}
+
+impl Display for LinkError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownComponent(name) => write!(formatter, "component `{name}` is not loaded"),
+            Self::MissingExport {
+                component,
+                interface,
+            } => write!(
+                formatter,
+                "component `{component}` does not export `{interface}`"
+            ),
+        }
+    }
+}
+
+impl Error for LinkError {}
 
 struct ProviderRegistration {
     provided: Provided,

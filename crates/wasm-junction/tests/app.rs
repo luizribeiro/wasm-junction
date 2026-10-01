@@ -205,6 +205,30 @@ fn component_imports_route_through_middleware() {
 }
 
 #[test]
+fn explicit_link_selects_one_component_provider() {
+    let trace = Arc::new(Mutex::new(Vec::new()));
+    let app = App::builder()
+        .engine(FakeEngine)
+        .middleware(Trace(trace.clone()))
+        .build()
+        .unwrap();
+    block_on(app.load(wit_component(TRANSLATOR_WIT, "service", "deepl"))).unwrap();
+    block_on(app.load(writer_component("writer"))).unwrap();
+    app.link("writer", "example:translate/translator@0.1.0", "deepl")
+        .unwrap();
+    block_on(app.load(wit_component(TRANSLATOR_WIT, "service", "google"))).unwrap();
+
+    block_on(app.call(
+        "writer",
+        "example:writer/article@1.0.0",
+        "write",
+        vec!["hello".into()],
+    ))
+    .unwrap();
+    assert_eq!(trace.lock().unwrap()[1].callee.as_ref(), "deepl");
+}
+
+#[test]
 fn typed_handle_queries_report_names_and_export_mismatches() {
     let app = App::builder()
         .engine(FakeEngine)
