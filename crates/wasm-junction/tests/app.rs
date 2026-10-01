@@ -10,8 +10,8 @@ use support::{
 };
 use wasm_junction::{
     App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Caller, CompiledComponent,
-    Component, Engine, EngineError, GetError, InterfaceHandle, LoadError, Middleware, Next,
-    Provided, Provider, TypedCall, Vals, WasiConfig,
+    Component, Engine, EngineError, GetError, InterfaceHandle, IssueKind, LoadError, Middleware,
+    Next, Provided, Provider, TypedCall, Vals, WasiConfig,
 };
 
 const CLOCK: &str = "example:journal/clock@0.1.0";
@@ -52,6 +52,19 @@ const WRITER_WIT: &str = r"
         export article;
     }
 ";
+const CYCLE_WIT: &str = r"
+    package example:cycle@1.0.0;
+    interface first-api { ping: func(); }
+    world first-component {
+        import second-api;
+        export first-api;
+    }
+    interface second-api { ping: func(); }
+    world second-component {
+        import first-api;
+        export second-api;
+    }
+";
 
 fn component(name: &str) -> Component {
     Component::from_bytes(component_bytes(PLUGIN_WIT, "plugin"))
@@ -75,6 +88,12 @@ fn writer_component(name: &str) -> Component {
     ))
     .unwrap()
     .named(name)
+}
+
+fn cyclic_component(world: &str, name: &str) -> Component {
+    Component::from_bytes(component_bytes(CYCLE_WIT, world))
+        .unwrap()
+        .named(name)
 }
 
 #[derive(Clone)]
@@ -268,6 +287,50 @@ fn load_refuses_to_make_an_existing_import_ambiguous() {
         issues[0].to_string(),
         "component `writer` import `example:translate/translator@0.1.0` is ambiguous: `deepl`, `google`"
     );
+}
+
+#[test]
+fn load_all_accepts_mutually_dependent_components_in_any_order() {
+    let app = App::builder().engine(FakeEngine).build().unwrap();
+    let first = cyclic_component("first-component", "first");
+    let second = cyclic_component("second-component", "second");
+    block_on(app.load_all([second, first])).unwrap();
+    app.check().unwrap();
+    let error = block_on(app.call("first", "example:cycle/first-api@1.0.0", "ping", Vec::new()))
+        .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Trap);
+}
+
+#[test]
+fn load_all_inserts_nothing_when_validation_fails() {
+    let app = App::builder().engine(FakeEngine).build().unwrap();
+    let translator = wit_component(TRANSLATOR_WIT, "service", "translator");
+    assert!(block_on(app.load_all([translator, component("writer")])).is_err());
+    let error = block_on(app.call(
+        "translator",
+        "example:translate/translator@0.1.7",
+        "translate",
+        vec!["hello".into()],
+    ))
+    .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Unavailable);
+}
+
+#[test]
+fn load_all_refuses_batch_providers_that_ambiguate_a_batch_import() {
+    let app = App::builder().engine(FakeEngine).build().unwrap();
+    let deepl = wit_component(TRANSLATOR_WIT, "service", "deepl");
+    let google = wit_component(TRANSLATOR_WIT, "service", "google");
+
+    let error = block_on(app.load_all([deepl, google, writer_component("writer")])).unwrap_err();
+    let LoadError::WouldMakeAmbiguous { issues } = error else {
+        panic!("expected ambiguous load refusal");
+    };
+    let IssueKind::Ambiguous { candidates } = &issues[0].kind else {
+        panic!("expected candidate list");
+    };
+    assert_eq!(issues[0].component, "writer");
+    assert_eq!(candidates.len(), 2);
 }
 
 #[test]

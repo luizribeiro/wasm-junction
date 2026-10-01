@@ -34,6 +34,13 @@ struct LoadedComponent {
     compiled: Arc<dyn CompiledComponent>,
 }
 
+struct PendingComponent {
+    bytes: Arc<[u8]>,
+    name: String,
+    imports: Vec<String>,
+    exports: Vec<String>,
+}
+
 impl LoadedComponent {
     fn export_name(&self, interface: &str) -> Option<Arc<str>> {
         self.exports
@@ -83,6 +90,95 @@ impl App {
             },
         );
         Ok(())
+    }
+
+    /// Compiles and loads a set of components.
+    /// Imports may resolve to any component in the set, regardless of iteration order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LoadError`] when a component is unnamed, resolution would fail or become
+    /// ambiguous, or an engine compilation fails.
+    pub async fn load_all(
+        &self,
+        components: impl IntoIterator<Item = Component>,
+    ) -> Result<(), LoadError> {
+        let mut pending = Vec::new();
+        for component in components {
+            let (bytes, name, imports, exports) = component.into_parts();
+            pending.push(PendingComponent {
+                bytes,
+                name: name.ok_or(LoadError::UnnamedComponent)?,
+                imports,
+                exports,
+            });
+        }
+        self.validate_batch(&pending, &self.lock_components())?;
+        for component in pending {
+            let compiled = self
+                .0
+                .engine
+                .compile(component.bytes.clone(), self.0.wasi.clone())
+                .await
+                .map_err(LoadError::Compile)?;
+            self.lock_components().insert(
+                component.name.clone(),
+                LoadedComponent {
+                    name: Arc::from(component.name),
+                    imports: component.imports.into_iter().map(Arc::from).collect(),
+                    exports: component.exports.into_iter().map(Arc::from).collect(),
+                    links: HashMap::new(),
+                    compiled,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    fn validate_batch(
+        &self,
+        pending: &[PendingComponent],
+        loaded: &BTreeMap<String, LoadedComponent>,
+    ) -> Result<(), LoadError> {
+        let added_candidates = |interface: &str, excluded: Option<&str>| {
+            pending
+                .iter()
+                .filter(|component| excluded != Some(component.name.as_str()))
+                .filter(|component| {
+                    component
+                        .exports
+                        .iter()
+                        .any(|export| interfaces_compatible(interface, export))
+                })
+                .map(|component| Candidate::Component(component.name.clone()))
+                .collect::<Vec<_>>()
+        };
+        let mut missing = Vec::new();
+        let mut issues = Vec::new();
+        for component in pending {
+            for import in &component.imports {
+                if self.0.engine.supports_import(import) {
+                    continue;
+                }
+                let mut candidates = resolution_candidates_excluding(
+                    &self.0.providers,
+                    loaded,
+                    import,
+                    Some(&component.name),
+                );
+                candidates.extend(added_candidates(import, Some(&component.name)));
+                match candidates.len() {
+                    0 => missing.push(import.clone()),
+                    1 => {}
+                    _ => issues.push(ResolutionIssue::ambiguous(
+                        component.name.clone(),
+                        import.clone(),
+                        candidates,
+                    )),
+                }
+            }
+        }
+        load_resolution_result(missing, issues)
     }
 
     fn validate_load(
