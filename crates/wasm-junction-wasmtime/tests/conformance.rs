@@ -17,6 +17,7 @@ const WASI_COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wasi-tes
 const ENVIRONMENT: &str = "test:wasi/environment@0.1.0";
 const WASI_ENVIRONMENT: &str = "wasi:cli/environment@0.2.12";
 const WALL_CLOCK: &str = "wasi:clocks/wall-clock@0.2.12";
+const MONOTONIC_CLOCK: &str = "wasi:clocks/monotonic-clock@0.2.12";
 
 struct ThreadWake(std::thread::Thread);
 
@@ -69,6 +70,11 @@ impl Middleware for EnvironmentBehavior {
                 ("nanoseconds".to_owned(), Val::U32(123_456_789)),
             ])]);
         }
+        if call.interface.as_ref() == MONOTONIC_CLOCK && call.function.as_ref() == "now" {
+            self.0.lock().unwrap().push(call.clone());
+            next.run(call).await?;
+            return Ok(vec![Val::U64(987_654_321)]);
+        }
         if call.interface.as_ref() != WASI_ENVIRONMENT {
             return next.run(call).await;
         }
@@ -113,6 +119,8 @@ fn environment_gate_traces_refuses_and_rewrites() {
     let current_directory =
         block_on(app.call("wasi", ENVIRONMENT, "current-directory", Vec::new())).unwrap();
     let wall_time = block_on(app.call("wasi", ENVIRONMENT, "wall-time", Vec::new())).unwrap();
+    let monotonic_time =
+        block_on(app.call("wasi", ENVIRONMENT, "monotonic-time", Vec::new())).unwrap();
 
     assert_eq!(
         configured,
@@ -130,14 +138,16 @@ fn environment_gate_traces_refuses_and_rewrites() {
             Val::U32(123_456_789)
         ])]
     );
+    assert_eq!(monotonic_time, [Val::U64(987_654_321)]);
     let calls = calls.lock().unwrap();
-    assert_eq!(calls.len(), 7);
+    assert_eq!(calls.len(), 8);
     assert_eq!(calls[0].caller, Caller::Component(Arc::from("wasi")));
     assert_eq!(calls[0].function.as_ref(), "get-environment");
     assert!(calls[0].args.is_empty());
     assert_eq!(calls[4].function.as_ref(), "get-arguments");
     assert_eq!(calls[5].function.as_ref(), "initial-cwd");
     assert_eq!(calls[6].interface.as_ref(), WALL_CLOCK);
+    assert_eq!(calls[7].interface.as_ref(), MONOTONIC_CLOCK);
 }
 
 #[test]

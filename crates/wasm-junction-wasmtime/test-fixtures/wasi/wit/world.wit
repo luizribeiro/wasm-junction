@@ -5,6 +5,7 @@ interface environment {
   arguments: func() -> list<string>;
   current-directory: func() -> option<string>;
   wall-time: func() -> tuple<u64, u32>;
+  monotonic-time: func() -> u64;
 }
 
 world fixture {

@@ -17,7 +17,7 @@ pub(crate) struct StoreData {
     pub(crate) imports: Arc<dyn ImportDispatcher>,
     pub(crate) context: InvocationContext,
     pub(crate) component: Arc<str>,
-    wasi: WasiState,
+    pub(crate) wasi: WasiState,
     pub(crate) gated_wasi: Arc<std::sync::Mutex<WasiState>>,
 }
 

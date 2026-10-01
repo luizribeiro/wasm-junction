@@ -24,6 +24,10 @@ impl exports::test::wasi::environment::Guest for Component {
             .unwrap_or_default();
         (elapsed.as_secs(), elapsed.subsec_nanos())
     }
+
+    fn monotonic_time() -> u64 {
+        wasi::clocks::monotonic_clock::now()
+    }
 }
 
 export!(Component);
