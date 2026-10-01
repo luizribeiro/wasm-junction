@@ -9,9 +9,9 @@ use support::{
     FakeEngine, NOTES, Read, UnusedProvider, block_on, component_bytes, component_bytes_from,
 };
 use wasm_junction::{
-    App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Caller, CompiledComponent,
-    Component, Engine, EngineError, GetError, InterfaceHandle, IssueKind, LoadError, Middleware,
-    Next, Provided, Provider, TypedCall, Vals, WasiConfig,
+    App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Caller, Candidate,
+    CompiledComponent, Component, Engine, EngineError, GetError, InterfaceHandle, IssueKind,
+    LoadError, Middleware, Next, Provided, Provider, TypedCall, Vals, WasiConfig,
 };
 
 const CLOCK: &str = "example:journal/clock@0.1.0";
@@ -314,6 +314,32 @@ fn load_all_inserts_nothing_when_validation_fails() {
     ))
     .unwrap_err();
     assert_eq!(error.kind(), CallErrorKind::Unavailable);
+}
+
+#[test]
+fn load_all_refuses_batch_providers_that_ambiguate_an_existing_import() {
+    let app = App::builder().engine(FakeEngine).build().unwrap();
+    block_on(app.load(wit_component(TRANSLATOR_WIT, "service", "deepl"))).unwrap();
+    block_on(app.load(writer_component("writer"))).unwrap();
+
+    let google = wit_component(TRANSLATOR_WIT, "service", "google");
+    let local = wit_component(TRANSLATOR_WIT, "service", "local");
+    let error = block_on(app.load_all([google, local])).unwrap_err();
+    let LoadError::WouldMakeAmbiguous { issues } = error else {
+        panic!("expected ambiguous load refusal");
+    };
+    let IssueKind::Ambiguous { candidates } = &issues[0].kind else {
+        panic!("expected candidate list");
+    };
+    assert_eq!(issues[0].component, "writer");
+    assert_eq!(
+        candidates,
+        &[
+            Candidate::Component("deepl".into()),
+            Candidate::Component("google".into()),
+            Candidate::Component("local".into()),
+        ]
+    );
 }
 
 #[test]

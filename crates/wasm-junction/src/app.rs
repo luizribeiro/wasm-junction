@@ -190,6 +190,29 @@ impl App {
                 }
             }
         }
+        for (consumer, component) in loaded {
+            for import in &component.imports {
+                if component.links.contains_key(import.as_ref()) {
+                    continue;
+                }
+                let mut candidates = resolution_candidates_excluding(
+                    &self.0.providers,
+                    loaded,
+                    import,
+                    Some(consumer),
+                );
+                if candidates.len() == 1 {
+                    candidates.extend(added_candidates(import, None));
+                }
+                if candidates.len() > 1 {
+                    issues.push(ResolutionIssue::ambiguous(
+                        consumer.clone(),
+                        import.to_string(),
+                        candidates,
+                    ));
+                }
+            }
+        }
         load_resolution_result(missing, issues)
     }
 
