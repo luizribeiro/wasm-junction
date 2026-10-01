@@ -27,4 +27,11 @@ pub use wasm_junction_core::{
     HostBound, ImportDispatcher, ImportTarget, InvocationContext, MaybeSend, TypeError, Val, Vals,
     WasiConfig,
 };
+/// Generates bindings for every interface in a local WIT package.
+///
+/// Resources, futures, and streams are rejected until their runtime support is available.
+///
+/// ```compile_fail
+/// wasm_junction::bindgen!({ path: "tests/fixtures/unsupported/wit" });
+/// ```
 pub use wasm_junction_macros::bindgen;
