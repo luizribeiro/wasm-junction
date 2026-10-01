@@ -10,7 +10,7 @@ use crate::middleware::{CallTarget, ErasedMiddleware};
 use crate::{
     BoxFuture, Call, CallContext, CallError, Caller, CompiledComponent, Component, Engine,
     EngineError, Event, ImportDispatcher, ImportTarget, InvocationContext, Middleware, Provided,
-    Provider, Vals, WasiConfig,
+    Provider, Val, Vals, WasiConfig,
 };
 
 /// An application assembled from host providers, middleware, and WebAssembly components.
@@ -191,6 +191,7 @@ impl App {
                 imports: Arc::new(self.clone()),
                 context,
                 component: component_name.clone(),
+                component_boundary: false,
             }),
             Call::new(Caller::Host, component_name, interface, function, args),
         )
@@ -227,6 +228,7 @@ impl App {
                         imports: Arc::new(self.clone()),
                         context,
                         component: name,
+                        component_boundary: true,
                     }),
                 ),
                 Err(ResolveError::Missing) => {
@@ -394,6 +396,7 @@ struct ComponentTarget {
     imports: Arc<dyn ImportDispatcher>,
     context: InvocationContext,
     component: Arc<str>,
+    component_boundary: bool,
 }
 
 struct EngineTarget {
@@ -413,8 +416,14 @@ impl CallTarget for ComponentTarget {
         let imports = self.imports.clone();
         let context = self.context.clone();
         let component = self.component.clone();
+        let component_boundary = self.component_boundary;
         Box::pin(async move {
-            compiled
+            if component_boundary && !values_are_plain(&call.args) {
+                return Err(CallError::refused(
+                    "only plain values can cross between components",
+                ));
+            }
+            let result = compiled
                 .call(
                     imports,
                     context,
@@ -423,9 +432,47 @@ impl CallTarget for ComponentTarget {
                     call.function,
                     call.args,
                 )
-                .await
+                .await?;
+            if component_boundary && !values_are_plain(&result) {
+                return Err(CallError::refused(
+                    "only plain values can cross between components",
+                ));
+            }
+            Ok(result)
         })
     }
+}
+
+fn values_are_plain(values: &[Val]) -> bool {
+    values.iter().all(|value| match value {
+        Val::List(values) | Val::Tuple(values) => values_are_plain(values),
+        Val::Record(fields) => fields
+            .iter()
+            .all(|(_, value)| values_are_plain(std::slice::from_ref(value))),
+        Val::Variant { value, .. } | Val::Option(value) => value
+            .as_deref()
+            .is_none_or(|value| values_are_plain(std::slice::from_ref(value))),
+        Val::Result(result) => result
+            .as_ref()
+            .map_or_else(|error| error.as_deref(), |ok| ok.as_deref())
+            .is_none_or(|value| values_are_plain(std::slice::from_ref(value))),
+        Val::Bool(_)
+        | Val::S8(_)
+        | Val::U8(_)
+        | Val::S16(_)
+        | Val::U16(_)
+        | Val::S32(_)
+        | Val::U32(_)
+        | Val::S64(_)
+        | Val::U64(_)
+        | Val::F32(_)
+        | Val::F64(_)
+        | Val::Char(_)
+        | Val::String(_)
+        | Val::Enum(_)
+        | Val::Flags(_) => true,
+        _ => false,
+    })
 }
 
 /// The construction contract implemented by each generated interface handle.
@@ -833,5 +880,15 @@ mod tests {
             assert!(!interfaces_compatible(left, right));
             assert!(!interfaces_compatible(right, left));
         }
+    }
+
+    #[test]
+    fn nested_values_are_plain() {
+        let values = vec![Val::Record(vec![(
+            String::from("items"),
+            Val::List(vec![Val::Option(Some(Box::new(Val::U32(3))))]),
+        )])];
+
+        assert!(values_are_plain(&values));
     }
 }
