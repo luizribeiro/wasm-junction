@@ -8,6 +8,13 @@ use super::{
 use crate::Component;
 use crate::component::ComponentParts;
 
+struct PendingReload {
+    bytes: Arc<[u8]>,
+    name: String,
+    imports: Vec<String>,
+    exports: Vec<String>,
+}
+
 impl App {
     /// Removes a component when no component or live handle depends on it.
     ///
@@ -97,27 +104,48 @@ impl App {
             resource_exports.dedup();
             return Err(ReloadError::ResourceExports(resource_exports));
         }
-        if !self.lock_components().contains_key(name) {
-            return Err(ReloadError::UnknownComponent(name.to_owned()));
+        let pending = vec![PendingReload {
+            bytes,
+            name: name.to_owned(),
+            imports,
+            exports,
+        }];
+        self.validate_reload(
+            &pending[0].name,
+            &pending[0].imports,
+            &pending[0].exports,
+            force,
+            &self.lock_components(),
+        )?;
+        let mut compiled = Vec::with_capacity(pending.len());
+        for replacement in &pending {
+            compiled.push(
+                self.0
+                    .engine
+                    .compile(replacement.bytes.clone(), self.0.wasi.clone())
+                    .await
+                    .map_err(ReloadError::Compile)?,
+            );
         }
-        self.validate_reload(name, &imports, &exports, force, &self.lock_components())?;
-        let compiled = self
-            .0
-            .engine
-            .compile(bytes, self.0.wasi.clone())
-            .await
-            .map_err(ReloadError::Compile)?;
         let mut components = self.lock_components();
-        self.validate_reload(name, &imports, &exports, force, &components)?;
-        let loaded = components
-            .get_mut(name)
-            .ok_or_else(|| ReloadError::UnknownComponent(name.to_owned()))?;
-        loaded.links = retained_links(loaded, &imports);
-        loaded.generation = Arc::new(Generation {
-            imports: imports.into_iter().map(Arc::from).collect(),
-            exports: exports.into_iter().map(Arc::from).collect(),
-            compiled,
-        });
+        self.validate_reload(
+            &pending[0].name,
+            &pending[0].imports,
+            &pending[0].exports,
+            force,
+            &components,
+        )?;
+        for (replacement, compiled) in pending.into_iter().zip(compiled) {
+            let loaded = components
+                .get_mut(&replacement.name)
+                .ok_or_else(|| ReloadError::UnknownComponent(replacement.name.clone()))?;
+            loaded.links = retained_links(loaded, &replacement.imports);
+            loaded.generation = Arc::new(Generation {
+                imports: replacement.imports.into_iter().map(Arc::from).collect(),
+                exports: replacement.exports.into_iter().map(Arc::from).collect(),
+                compiled,
+            });
+        }
         Ok(())
     }
 
