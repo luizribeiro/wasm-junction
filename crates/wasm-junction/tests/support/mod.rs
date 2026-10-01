@@ -6,7 +6,8 @@
 )]
 
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::task::{Context, Poll, Waker};
 
 use wasm_junction::{
@@ -90,6 +91,108 @@ impl Engine for FakeEngine {
         _wasi: WasiConfig,
     ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
         Box::pin(async { Ok(Arc::new(UnusedComponent) as Arc<dyn CompiledComponent>) })
+    }
+}
+
+/// Shared observations and synchronization for [`GenerationEngine`].
+#[derive(Default)]
+pub struct GenerationState {
+    compilations: AtomicUsize,
+    generations: Mutex<Vec<Weak<GenerationComponent>>>,
+    gate: Gate,
+}
+
+impl GenerationState {
+    /// Waits until the first generation has entered its call.
+    pub fn wait_until_called(&self) {
+        self.gate.wait_until_entered();
+    }
+
+    /// Lets the first generation's call finish.
+    pub fn release(&self) {
+        self.gate.release();
+    }
+
+    /// Returns a weak reference to the compiled generation at `index`.
+    pub fn generation(&self, index: usize) -> Weak<GenerationComponent> {
+        self.generations.lock().unwrap()[index].clone()
+    }
+}
+
+/// An engine whose successive generations return `old` and `new`.
+pub struct GenerationEngine(pub Arc<GenerationState>);
+
+impl Engine for GenerationEngine {
+    fn compile(
+        &self,
+        _bytes: Arc<[u8]>,
+        _wasi: WasiConfig,
+    ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
+        let version = self.0.compilations.fetch_add(1, Ordering::SeqCst);
+        let component = Arc::new(GenerationComponent {
+            value: if version == 0 { "old" } else { "new" },
+            gate: (version == 0).then(|| self.0.gate.clone()),
+        });
+        self.0
+            .generations
+            .lock()
+            .unwrap()
+            .push(Arc::downgrade(&component));
+        Box::pin(async move { Ok(component as Arc<dyn CompiledComponent>) })
+    }
+}
+
+#[derive(Clone, Default)]
+struct Gate(Arc<(Mutex<(bool, bool)>, Condvar)>);
+
+impl Gate {
+    fn enter(&self) {
+        let (lock, changed) = &*self.0;
+        let mut state = lock.lock().unwrap();
+        state.0 = true;
+        changed.notify_all();
+        while !state.1 {
+            state = changed.wait(state).unwrap();
+        }
+    }
+
+    fn wait_until_entered(&self) {
+        let (lock, changed) = &*self.0;
+        let mut state = lock.lock().unwrap();
+        while !state.0 {
+            state = changed.wait(state).unwrap();
+        }
+    }
+
+    fn release(&self) {
+        let (lock, changed) = &*self.0;
+        lock.lock().unwrap().1 = true;
+        changed.notify_all();
+    }
+}
+
+/// A compiled generation observable through a weak reference.
+pub struct GenerationComponent {
+    value: &'static str,
+    gate: Option<Gate>,
+}
+
+impl CompiledComponent for GenerationComponent {
+    fn call(
+        &self,
+        _imports: Arc<dyn ImportDispatcher>,
+        _context: InvocationContext,
+        _component: Arc<str>,
+        _interface: Arc<str>,
+        _function: Arc<str>,
+        _args: Vals,
+    ) -> BoxFuture<'_, Result<Vals, CallError>> {
+        Box::pin(async move {
+            if let Some(gate) = &self.gate {
+                gate.enter();
+            }
+            Ok(vec![Val::from(self.value)])
+        })
     }
 }
 
