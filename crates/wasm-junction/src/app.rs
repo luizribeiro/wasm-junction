@@ -31,9 +31,13 @@ pub(crate) struct AppInner {
 
 struct LoadedComponent {
     name: Arc<str>,
+    generation: Arc<Generation>,
+    links: HashMap<String, String>,
+}
+
+struct Generation {
     imports: Vec<Arc<str>>,
     exports: Vec<Arc<str>>,
-    links: HashMap<String, String>,
     compiled: Arc<dyn CompiledComponent>,
 }
 
@@ -46,7 +50,8 @@ struct PendingComponent {
 
 impl LoadedComponent {
     fn export_name(&self, interface: &str) -> Option<Arc<str>> {
-        self.exports
+        self.generation
+            .exports
             .iter()
             .find(|export| interfaces_compatible(interface, export))
             .cloned()
@@ -93,10 +98,12 @@ impl App {
             name.clone(),
             LoadedComponent {
                 name: Arc::from(name),
-                imports: imports.into_iter().map(Arc::from).collect(),
-                exports: exports.into_iter().map(Arc::from).collect(),
+                generation: Arc::new(Generation {
+                    imports: imports.into_iter().map(Arc::from).collect(),
+                    exports: exports.into_iter().map(Arc::from).collect(),
+                    compiled,
+                }),
                 links: HashMap::new(),
-                compiled,
             },
         );
         Ok(())
@@ -148,10 +155,12 @@ impl App {
                 component.name.clone(),
                 LoadedComponent {
                     name: Arc::from(component.name),
-                    imports: component.imports.into_iter().map(Arc::from).collect(),
-                    exports: component.exports.into_iter().map(Arc::from).collect(),
+                    generation: Arc::new(Generation {
+                        imports: component.imports.into_iter().map(Arc::from).collect(),
+                        exports: component.exports.into_iter().map(Arc::from).collect(),
+                        compiled,
+                    }),
                     links: HashMap::new(),
-                    compiled,
                 },
             );
         }
@@ -208,7 +217,7 @@ impl App {
             }
         }
         for (consumer, component) in loaded {
-            for import in &component.imports {
+            for import in &component.generation.imports {
                 if component.links.contains_key(import.as_ref()) {
                     continue;
                 }
@@ -262,7 +271,7 @@ impl App {
             }
         }
         for (consumer, component) in components {
-            for import in &component.imports {
+            for import in &component.generation.imports {
                 if component.links.contains_key(import.as_ref())
                     || !exports
                         .iter()
@@ -373,6 +382,7 @@ impl App {
             .iter()
             .flat_map(|(name, component)| {
                 component
+                    .generation
                     .imports
                     .iter()
                     .map(|interface| (name.clone(), interface.clone()))
@@ -447,7 +457,11 @@ impl App {
                     "component `{component}` does not export `{interface}`"
                 ))
             })?;
-            (loaded.compiled.clone(), loaded.name.clone(), resolved)
+            (
+                loaded.generation.compiled.clone(),
+                loaded.name.clone(),
+                resolved,
+            )
         };
         let call = call_for_invocation(
             &context,
@@ -621,7 +635,7 @@ impl App {
                 interface: component
                     .export_name(requested)
                     .ok_or(ResolveError::Missing)?,
-                compiled: component.compiled.clone(),
+                compiled: component.generation.compiled.clone(),
             });
         }
         let hosts = self
@@ -640,7 +654,7 @@ impl App {
                 Some(ResolvedImport::Component {
                     name: component.name.clone(),
                     interface: component.export_name(requested)?,
-                    compiled: component.compiled.clone(),
+                    compiled: component.generation.compiled.clone(),
                 })
             })
             .collect::<Vec<_>>();
