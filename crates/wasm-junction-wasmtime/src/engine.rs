@@ -11,7 +11,7 @@ use wasmtime_wasi::{WasiCtxBuilder, WasiCtxView, WasiView};
 
 use crate::imports::define_imports;
 use crate::values::{from_wasmtime, to_wasmtime};
-use crate::wasi::{WasiState, add_gates};
+use crate::wasi::{WasiState, add_gates, add_ungated_interfaces};
 
 pub(crate) struct StoreData {
     pub(crate) imports: Arc<dyn ImportDispatcher>,
@@ -75,7 +75,7 @@ impl Engine for WasmtimeEngine {
             let component = Component::new(&self.engine, bytes)
                 .map_err(|error| EngineError::new(error.to_string()))?;
             let mut linker = Linker::new(&self.engine);
-            wasmtime_wasi::p2::add_to_linker_async(&mut linker)
+            add_ungated_interfaces(&mut linker)
                 .map_err(|error| EngineError::new(error.to_string()))?;
             add_gates(&mut linker).map_err(|error| EngineError::new(error.to_string()))?;
             define_imports(&mut linker, &component)

@@ -11,6 +11,9 @@ use crate::GATED_WASI_INTERFACES;
 use crate::engine::StoreData;
 
 mod clocks;
+mod linker;
+
+pub(crate) use linker::add_ungated_interfaces;
 
 const INTERFACE: &str = GATED_WASI_INTERFACES[0];
 
