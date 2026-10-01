@@ -57,6 +57,7 @@ impl Generator<'_> {
                 Ok(quote!((#(#types,)*)))
             }
             TypeDefKind::Resource | TypeDefKind::Handle(_) => Ok(quote!(::wasm_junction::Resource)),
+            TypeDefKind::Stream(Some(Type::U8)) => Ok(quote!(::wasm_junction::StreamHandle)),
             other => Err(Self::unsupported(item, other.as_str())),
         }
     }

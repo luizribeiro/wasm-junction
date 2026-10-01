@@ -174,6 +174,18 @@ mod tests {
     }
 
     #[test]
+    fn byte_streams_generate_opaque_call_views() {
+        let config = Config {
+            path: LitStr::new("tests/fixtures/stream", Span::call_site()),
+            interfaces: None,
+            with: Vec::new(),
+        };
+        let tokens = expand(&config).unwrap().to_string();
+        assert!(tokens.contains("StreamHandle"), "{tokens}");
+        assert!(tokens.contains("Val :: Stream"), "{tokens}");
+    }
+
+    #[test]
     fn unknown_interface_lists_the_available_interfaces() {
         let config = Config {
             path: LitStr::new(

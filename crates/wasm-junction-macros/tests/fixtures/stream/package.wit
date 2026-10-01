@@ -2,4 +2,5 @@ package test:streams;
 
 interface data {
   type chunks = stream<u8>;
+  send: func(value: option<chunks>) -> result<stream<u8>, string>;
 }

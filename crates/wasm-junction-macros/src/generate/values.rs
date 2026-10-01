@@ -26,6 +26,10 @@ impl Generator<'_> {
                     ::wasm_junction::Val::Resource(value) => Ok(value),
                     _ => Err(::wasm_junction::TypeError::new("expected resource")),
                 })),
+                TypeDefKind::Stream(Some(Type::U8)) => Ok(quote!(match #value {
+                    ::wasm_junction::Val::Stream(value) => Ok(value),
+                    _ => Err(::wasm_junction::TypeError::new("expected stream<u8>")),
+                })),
                 kind => self.decode_kind(kind, value, item),
             },
             Type::ErrorContext => Err(Self::unsupported(item, "error-context")),
@@ -49,6 +53,9 @@ impl Generator<'_> {
                 }
                 TypeDefKind::Resource | TypeDefKind::Handle(_) => {
                     Ok(quote!(::wasm_junction::Val::Resource(#value)))
+                }
+                TypeDefKind::Stream(Some(Type::U8)) => {
+                    Ok(quote!(::wasm_junction::Val::Stream(#value)))
                 }
                 kind => self.encode_kind(kind, value, item),
             },

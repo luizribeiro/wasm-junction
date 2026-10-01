@@ -1,0 +1,5 @@
+package test:streams-nesting;
+
+interface data {
+  nested: func(value: list<stream<u8>>);
+}
