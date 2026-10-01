@@ -1,0 +1,11 @@
+package test:keywords;
+
+interface %super {
+  record %self {
+    %type: string,
+    %match: bool,
+    %self: string,
+    %super: string,
+    %crate: string,
+  }
+}

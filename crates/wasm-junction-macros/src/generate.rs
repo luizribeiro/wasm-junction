@@ -117,8 +117,10 @@ impl Generator<'_> {
 }
 
 pub(crate) fn rust_ident(name: &str) -> syn::Result<Ident> {
+    if matches!(name, "self" | "Self" | "super" | "crate") {
+        return syn::parse_str(&format!("{name}_"));
+    }
     syn::parse_str(name)
         .or_else(|_| syn::parse_str(&format!("r#{name}")))
-        .or_else(|_| syn::parse_str(&format!("{name}_")))
         .map_err(|_| syn::Error::new(Span::call_site(), format!("invalid Rust name `{name}`")))
 }
