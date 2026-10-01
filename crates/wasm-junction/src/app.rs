@@ -33,12 +33,14 @@ pub(crate) struct AppInner {
     unloaded: Mutex<BTreeMap<String, Vec<Arc<str>>>>,
 }
 
+#[derive(Clone)]
 struct LoadedComponent {
     name: Arc<str>,
     generation: Arc<Generation>,
     links: HashMap<String, String>,
 }
 
+#[derive(Clone)]
 struct Generation {
     imports: Vec<Arc<str>>,
     exports: Vec<Arc<str>>,

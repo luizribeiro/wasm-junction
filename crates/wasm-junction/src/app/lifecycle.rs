@@ -110,13 +110,7 @@ impl App {
             imports,
             exports,
         }];
-        self.validate_reload(
-            &pending[0].name,
-            &pending[0].imports,
-            &pending[0].exports,
-            force,
-            &self.lock_components(),
-        )?;
+        self.validate_reloads(&pending, force, &self.lock_components())?;
         let mut compiled = Vec::with_capacity(pending.len());
         for replacement in &pending {
             compiled.push(
@@ -128,13 +122,7 @@ impl App {
             );
         }
         let mut components = self.lock_components();
-        self.validate_reload(
-            &pending[0].name,
-            &pending[0].imports,
-            &pending[0].exports,
-            force,
-            &components,
-        )?;
+        self.validate_reloads(&pending, force, &components)?;
         for (replacement, compiled) in pending.into_iter().zip(compiled) {
             let loaded = components
                 .get_mut(&replacement.name)
@@ -149,77 +137,78 @@ impl App {
         Ok(())
     }
 
-    fn validate_reload(
+    fn validate_reloads(
         &self,
-        name: &str,
-        imports: &[String],
-        exports: &[String],
+        pending: &[PendingReload],
         force: bool,
         components: &std::collections::BTreeMap<String, LoadedComponent>,
     ) -> Result<(), ReloadError> {
-        let loaded = components
-            .get(name)
-            .ok_or_else(|| ReloadError::UnknownComponent(name.to_owned()))?;
-        let links = retained_links(loaded, imports);
-        if !force {
-            let handles = lock_or_recover(&self.0.handle_counts);
-            let dependents =
-                breaking_dependents(&self.0.providers, components, &handles, name, exports);
-            if !dependents.is_empty() {
-                return Err(ReloadError::Breaking {
-                    component: name.to_owned(),
-                    dependents,
-                });
+        let handles = lock_or_recover(&self.0.handle_counts);
+        let mut prospective = components.clone();
+        for replacement in pending {
+            let loaded = components
+                .get(&replacement.name)
+                .ok_or_else(|| ReloadError::UnknownComponent(replacement.name.clone()))?;
+            if !force {
+                let dependents = breaking_dependents(
+                    &self.0.providers,
+                    components,
+                    &handles,
+                    &replacement.name,
+                    &replacement.exports,
+                );
+                if !dependents.is_empty() {
+                    return Err(ReloadError::Breaking {
+                        component: replacement.name.clone(),
+                        dependents,
+                    });
+                }
             }
+            let next = prospective
+                .get_mut(&replacement.name)
+                .ok_or_else(|| ReloadError::UnknownComponent(replacement.name.clone()))?;
+            next.links = retained_links(loaded, &replacement.imports);
+            next.generation = Arc::new(Generation {
+                imports: replacement.imports.iter().cloned().map(Arc::from).collect(),
+                exports: replacement.exports.iter().cloned().map(Arc::from).collect(),
+                compiled: loaded.generation.compiled.clone(),
+            });
         }
         let mut missing = Vec::new();
         let mut issues = Vec::new();
-        for import in imports {
-            if self.0.engine.supports_import(import) {
-                continue;
-            }
-            let candidates = links.get(import.as_str()).map_or_else(
-                || {
-                    resolution_candidates_excluding(
+        for replacement in pending {
+            for import in &replacement.imports {
+                let candidates = if self.0.engine.supports_import(import) {
+                    vec![Candidate::Host]
+                } else {
+                    prospective_candidates(
                         &self.0.providers,
-                        components,
+                        &prospective,
+                        &replacement.name,
                         import,
-                        Some(name),
                     )
-                },
-                |provider| {
-                    components
-                        .get(provider)
-                        .filter(|component| component.exports_interface(import))
-                        .map_or_else(Vec::new, |_| vec![Candidate::Component(provider.clone())])
-                },
-            );
-            match candidates.len() {
-                0 => missing.push(import.clone()),
-                1 => {}
-                _ => issues.push(ResolutionIssue::ambiguous(
-                    name.to_owned(),
-                    import.clone(),
-                    candidates,
-                )),
+                };
+                match candidates.len() {
+                    0 => missing.push(import.clone()),
+                    1 => {}
+                    _ => issues.push(ResolutionIssue::ambiguous(
+                        replacement.name.clone(),
+                        import.clone(),
+                        candidates,
+                    )),
+                }
             }
         }
-        for (consumer, component) in components {
-            if consumer == name {
-                continue;
-            }
+        for (consumer, component) in &prospective {
             for import in &component.generation.imports {
                 if component.links.contains_key(import.as_ref()) {
                     continue;
                 }
-                let candidates = prospective_candidates(
-                    &self.0.providers,
-                    components,
-                    consumer,
-                    import,
-                    name,
-                    exports,
-                );
+                let candidates = if self.0.engine.supports_import(import) {
+                    vec![Candidate::Host]
+                } else {
+                    prospective_candidates(&self.0.providers, &prospective, consumer, import)
+                };
                 if candidates.len() > 1 {
                     issues.push(ResolutionIssue::ambiguous(
                         consumer.clone(),
@@ -303,27 +292,17 @@ fn prospective_candidates(
     components: &std::collections::BTreeMap<String, LoadedComponent>,
     consumer: &str,
     requested: &str,
-    replacement: &str,
-    exports: &[String],
 ) -> Vec<Candidate> {
-    providers
-        .keys()
-        .filter(|provided| interfaces_compatible(requested, provided))
-        .map(|_| Candidate::Host)
-        .chain(components.iter().filter_map(|(name, component)| {
-            if name == consumer {
-                return None;
-            }
-            let matches = if name == replacement {
-                exports
-                    .iter()
-                    .any(|export| interfaces_compatible(requested, export))
-            } else {
-                component.exports_interface(requested)
-            };
-            matches.then(|| Candidate::Component(name.clone()))
-        }))
-        .collect()
+    if let Some(provider) = components
+        .get(consumer)
+        .and_then(|component| component.links.get(requested))
+    {
+        return components
+            .get(provider)
+            .filter(|component| component.exports_interface(requested))
+            .map_or_else(Vec::new, |_| vec![Candidate::Component(provider.clone())]);
+    }
+    resolution_candidates_excluding(providers, components, requested, Some(consumer))
 }
 
 fn retained_links(component: &LoadedComponent, imports: &[String]) -> HashMap<String, String> {
