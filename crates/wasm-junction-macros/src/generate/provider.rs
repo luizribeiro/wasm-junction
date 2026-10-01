@@ -171,7 +171,21 @@ impl Generator<'_> {
         match &self.resolve.types[id].kind {
             TypeDefKind::Type(ty) => self.provider_argument(*ty, name),
             TypeDefKind::Handle(_) => self.map_handle(id, name),
+            TypeDefKind::Stream(Some(Type::U8)) => Ok((
+                quote!(),
+                quote!(::wasm_junction::InputStream::try_from(#name).map_err(
+                    |error| ::wasm_junction::CallError::trap(error.to_string())
+                )?),
+            )),
             TypeDefKind::Option(ty) => {
+                if self.direct_stream(*ty) {
+                    return Ok((
+                        quote!(),
+                        quote!(#name.map(::wasm_junction::InputStream::try_from)
+                            .transpose().map_err(|error|
+                                ::wasm_junction::CallError::trap(error.to_string()))?),
+                    ));
+                }
                 let Some(resource) = self.direct_resource(*ty)? else {
                     return Ok((quote!(), quote!(#name)));
                 };
@@ -216,9 +230,20 @@ impl Generator<'_> {
     }
 
     fn direct_resource(&self, ty: Type) -> syn::Result<Option<ResourceUse>> {
+        Ok(match self.direct_boundary(ty)? {
+            Some(BoundaryUse::Resource(resource)) => Some(resource),
+            _ => None,
+        })
+    }
+
+    fn direct_stream(&self, ty: Type) -> bool {
+        matches!(self.direct_boundary(ty), Ok(Some(BoundaryUse::Stream)))
+    }
+
+    fn direct_boundary(&self, ty: Type) -> syn::Result<Option<BoundaryUse>> {
         let Type::Id(id) = ty else { return Ok(None) };
         match &self.resolve.types[id].kind {
-            TypeDefKind::Type(ty) => self.direct_resource(*ty),
+            TypeDefKind::Type(ty) => self.direct_boundary(*ty),
             TypeDefKind::Handle(handle) => {
                 let (id, borrowed) = match handle {
                     Handle::Own(id) => (*id, false),
@@ -228,11 +253,12 @@ impl Generator<'_> {
                     .name
                     .as_deref()
                     .ok_or_else(|| Self::unsupported("resource", "anonymous resource"))?;
-                Ok(Some(ResourceUse {
+                Ok(Some(BoundaryUse::Resource(ResourceUse {
                     table: resource_table_ident(name)?,
                     borrowed,
-                }))
+                })))
             }
+            TypeDefKind::Stream(Some(Type::U8)) => Ok(Some(BoundaryUse::Stream)),
             _ => Ok(None),
         }
     }
@@ -256,7 +282,13 @@ impl Generator<'_> {
                 let table = resource.table;
                 Ok(quote!(self.#table.insert(#value)?))
             }
+            TypeDefKind::Stream(Some(Type::U8)) => {
+                Ok(quote!(::std::convert::Into::<::wasm_junction::StreamHandle>::into(#value)))
+            }
             TypeDefKind::Option(ty) => {
+                if self.direct_stream(*ty) {
+                    return Ok(quote!(#value.map(::std::convert::Into::into)));
+                }
                 let Some(resource) = self.direct_resource(*ty)? else {
                     return Ok(value);
                 };
@@ -267,9 +299,11 @@ impl Generator<'_> {
                 Ok(quote!(#value.map(|value| self.#table.insert(value)).transpose()?))
             }
             TypeDefKind::Result(result) => {
+                let stream_ok = result.ok.is_some_and(|ty| self.direct_stream(ty));
+                let stream_err = result.err.is_some_and(|ty| self.direct_stream(ty));
                 let (ok, err) = self.direct_result_resources(result.ok, result.err)?;
-                let ok = Self::output_arm(ok.as_ref(), true, item)?;
-                let err = Self::output_arm(err.as_ref(), false, item)?;
+                let ok = Self::output_arm(ok.as_ref(), stream_ok, true, item)?;
+                let err = Self::output_arm(err.as_ref(), stream_err, false, item)?;
                 Ok(quote!(match #value { #ok, #err }))
             }
             _ => Ok(value),
@@ -278,10 +312,16 @@ impl Generator<'_> {
 
     fn output_arm(
         resource: Option<&ResourceUse>,
+        stream: bool,
         ok: bool,
         item: &str,
     ) -> syn::Result<TokenStream> {
         let constructor = if ok { quote!(Ok) } else { quote!(Err) };
+        if stream {
+            return Ok(quote!(#constructor(value) => #constructor(
+                ::std::convert::Into::<::wasm_junction::StreamHandle>::into(value)
+            )));
+        }
         let Some(resource) = resource else {
             return Ok(quote!(#constructor(value) => #constructor(value)));
         };
@@ -298,14 +338,16 @@ impl Generator<'_> {
         err: Option<Type>,
         name: &proc_macro2::Ident,
     ) -> syn::Result<(TokenStream, TokenStream)> {
+        let stream_ok = ok.is_some_and(|ty| self.direct_stream(ty));
+        let stream_err = err.is_some_and(|ty| self.direct_stream(ty));
         let (ok, err) = self.direct_result_resources(ok, err)?;
         let ok_store = Self::borrowed_result(ok.as_ref(), name, "ok")?;
         let err_store = Self::borrowed_result(err.as_ref(), name, "err")?;
         let preparations = [&ok_store, &err_store]
             .into_iter()
             .filter_map(|value| value.as_ref().map(|(_, tokens)| tokens));
-        let ok_arm = Self::result_arm(ok.as_ref(), ok_store.as_ref(), true)?;
-        let err_arm = Self::result_arm(err.as_ref(), err_store.as_ref(), false)?;
+        let ok_arm = Self::result_arm(ok.as_ref(), ok_store.as_ref(), stream_ok, true)?;
+        let err_arm = Self::result_arm(err.as_ref(), err_store.as_ref(), stream_err, false)?;
         Ok((
             quote!(#(#preparations)*),
             quote!(match #name { #ok_arm, #err_arm }),
@@ -350,9 +392,16 @@ impl Generator<'_> {
     fn result_arm(
         resource: Option<&ResourceUse>,
         storage: Option<&(proc_macro2::Ident, TokenStream)>,
+        stream: bool,
         ok: bool,
     ) -> syn::Result<TokenStream> {
         let constructor = if ok { quote!(Ok) } else { quote!(Err) };
+        if stream {
+            return Ok(quote!(#constructor(value) => #constructor(
+                ::wasm_junction::InputStream::try_from(value).map_err(|error|
+                    ::wasm_junction::CallError::trap(error.to_string()))?
+            )));
+        }
         let Some(resource) = resource else {
             return Ok(quote!(#constructor(value) => #constructor(value)));
         };
@@ -407,6 +456,11 @@ fn test_provider<N: quote::ToTokens>(
 struct ResourceUse {
     table: proc_macro2::Ident,
     borrowed: bool,
+}
+
+enum BoundaryUse {
+    Resource(ResourceUse),
+    Stream,
 }
 
 fn resource_table_ident(name: &str) -> syn::Result<proc_macro2::Ident> {

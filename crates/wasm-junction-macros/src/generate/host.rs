@@ -96,7 +96,7 @@ impl Generator<'_> {
             .collect::<syn::Result<Vec<_>>>()?;
         let output = function.result.map_or_else(
             || Ok(quote!(())),
-            |ty| self.host_type(interface, ty, wit_name),
+            |ty| self.host_output_type(interface, ty, wit_name),
         )?;
         let return_type = if function.kind.is_async() {
             quote!(impl ::std::future::Future<Output = #output> + ::wasm_junction::MaybeSend)
@@ -147,6 +147,7 @@ impl Generator<'_> {
                 })
             }
             TypeDefKind::Type(ty) => self.host_type(interface, *ty, item),
+            TypeDefKind::Stream(Some(Type::U8)) => Ok(quote!(::wasm_junction::InputStream)),
             TypeDefKind::Option(ty) => {
                 let ty = self.host_type(interface, *ty, item)?;
                 Ok(quote!(::std::option::Option<#ty>))
@@ -161,6 +162,32 @@ impl Generator<'_> {
                 Ok(quote!(::std::result::Result<#ok, #err>))
             }
             _ => self.rust_type(ty, item),
+        }
+    }
+
+    fn host_output_type(&self, interface: &str, ty: Type, item: &str) -> syn::Result<TokenStream> {
+        let Type::Id(id) = ty else {
+            return self.rust_type(ty, item);
+        };
+        match &self.resolve.types[id].kind {
+            TypeDefKind::Type(ty) => self.host_output_type(interface, *ty, item),
+            TypeDefKind::Stream(Some(Type::U8)) => Ok(quote!(::wasm_junction::OutputStream)),
+            TypeDefKind::Option(ty) => {
+                let ty = self.host_output_type(interface, *ty, item)?;
+                Ok(quote!(::std::option::Option<#ty>))
+            }
+            TypeDefKind::Result(result) => {
+                let ok = result.ok.map_or_else(
+                    || Ok(quote!(())),
+                    |ty| self.host_output_type(interface, ty, item),
+                )?;
+                let err = result.err.map_or_else(
+                    || Ok(quote!(())),
+                    |ty| self.host_output_type(interface, ty, item),
+                )?;
+                Ok(quote!(::std::result::Result<#ok, #err>))
+            }
+            _ => self.host_type(interface, ty, item),
         }
     }
 }

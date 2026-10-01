@@ -183,6 +183,19 @@ mod tests {
         let tokens = expand(&config).unwrap().to_string();
         assert!(tokens.contains("StreamHandle"), "{tokens}");
         assert!(tokens.contains("Val :: Stream"), "{tokens}");
+        assert!(
+            tokens.contains("Option < :: wasm_junction :: InputStream >"),
+            "{tokens}"
+        );
+        assert!(
+            tokens.contains("Result < :: wasm_junction :: OutputStream"),
+            "{tokens}"
+        );
+        assert!(tokens.contains("InputStream :: try_from"), "{tokens}");
+        assert!(
+            tokens.contains("Into :: < :: wasm_junction :: StreamHandle >"),
+            "{tokens}"
+        );
     }
 
     #[test]
