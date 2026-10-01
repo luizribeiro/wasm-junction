@@ -1,9 +1,9 @@
-use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::TokenStream;
 use quote::quote;
 use wit_parser::Function;
 
-use super::{Generator, rust_ident};
+use super::Generator;
+use super::collisions::{call_ident, parameter_ident};
 
 impl Generator<'_> {
     pub(super) fn typed_call(
@@ -11,12 +11,12 @@ impl Generator<'_> {
         interface: &str,
         function: &Function,
     ) -> syn::Result<TokenStream> {
-        let call = rust_ident(&function.name.to_upper_camel_case())?;
+        let call = call_ident(interface, &function.name)?;
         let function_name = &function.name;
         let fields = function
             .params
             .iter()
-            .map(|param| rust_ident(&param.name.to_snake_case()))
+            .map(|param| parameter_ident(&param.name))
             .collect::<syn::Result<Vec<_>>>()?;
         let field_types = function
             .params

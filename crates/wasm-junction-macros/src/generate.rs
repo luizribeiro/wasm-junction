@@ -153,6 +153,21 @@ mod tests {
     use wit_parser::Resolve;
 
     #[test]
+    fn call_and_parameter_names_reserve_generated_bindings() {
+        assert_eq!(
+            [
+                super::collisions::call_ident("notes", "host").unwrap(),
+                super::collisions::call_ident("notes", "notes").unwrap(),
+                super::collisions::call_ident("notes", "provider").unwrap(),
+            ]
+            .map(|name| name.to_string()),
+            ["Host_", "Notes_", "Provider"]
+        );
+        assert_eq!(super::collisions::parameter_ident("cx").unwrap(), "cx_");
+        assert_eq!(super::collisions::parameter_ident("call").unwrap(), "call");
+    }
+
+    #[test]
     fn unchanged_use_omits_redundant_alias() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../wasm-junction/tests/fixtures/dependencies/wit");

@@ -6,6 +6,36 @@ use wit_parser::{InterfaceId, PackageId, Resolve, Type, TypeDefKind, TypeId, Typ
 
 use super::{rust_ident, walk};
 
+pub(super) fn call_ident(interface: &str, name: &str) -> syn::Result<proc_macro2::Ident> {
+    let fixed = fixed_names(interface);
+    generated_ident(&name.to_upper_camel_case(), &fixed)
+}
+
+pub(super) fn method_ident(name: &str) -> syn::Result<proc_macro2::Ident> {
+    generated_ident(&name.to_snake_case(), &[])
+}
+
+pub(super) fn parameter_ident(name: &str) -> syn::Result<proc_macro2::Ident> {
+    generated_ident(&name.to_snake_case(), &["cx".to_owned()])
+}
+
+fn generated_ident(name: &str, reserved: &[String]) -> syn::Result<proc_macro2::Ident> {
+    if reserved.iter().any(|reserved| reserved == name) {
+        rust_ident(&format!("{name}_"))
+    } else {
+        rust_ident(name)
+    }
+}
+
+fn fixed_names(interface: &str) -> [String; 4] {
+    [
+        "Host".to_owned(),
+        "HostProvider".to_owned(),
+        "INTERFACE".to_owned(),
+        interface.to_upper_camel_case(),
+    ]
+}
+
 pub(super) fn check(resolve: &Resolve, package: PackageId, span: Span) -> syn::Result<()> {
     let (interfaces, types) = reachable(resolve, package)?;
     let mut names = HashMap::new();
@@ -26,12 +56,23 @@ pub(super) fn check(resolve: &Resolve, package: PackageId, span: Span) -> syn::R
     for interface_id in interfaces {
         names.clear();
         let interface = &resolve.interfaces[interface_id];
+        let interface_name = interface
+            .name
+            .as_deref()
+            .ok_or_else(|| syn::Error::new(span, "reachable interface has no WIT name"))?;
+        for fixed in fixed_names(interface_name) {
+            names.insert(fixed.clone(), format!("generated `{fixed}`"));
+        }
         for (name, id) in &interface.types {
             if !types.contains(id) {
                 continue;
             }
             let rust = rust_ident(&name.to_upper_camel_case())?.to_string();
             unique(&mut names, &rust, name, "type", span)?;
+        }
+        for function in interface.functions.values() {
+            let rust = call_ident(interface_name, &function.name)?.to_string();
+            unique(&mut names, &rust, &function.name, "function", span)?;
         }
     }
     for id in types {

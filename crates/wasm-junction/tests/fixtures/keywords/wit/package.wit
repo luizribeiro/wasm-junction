@@ -8,4 +8,9 @@ interface %super {
     %super: string,
     %crate: string,
   }
+
+  host: func(cx: string) -> string;
+  provider: func(call: string) -> string;
+  call: func(call: string, args: string, value: string, host: string, %self: string) -> string;
+  %super: func() -> string;
 }

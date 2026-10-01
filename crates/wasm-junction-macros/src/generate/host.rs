@@ -1,9 +1,9 @@
-use heck::ToSnakeCase;
 use proc_macro2::TokenStream;
 use quote::quote;
 use wit_parser::Function;
 
-use super::{Generator, rust_ident};
+use super::Generator;
+use super::collisions::{method_ident, parameter_ident};
 
 impl Generator<'_> {
     pub(super) fn host_trait<'a>(
@@ -32,11 +32,11 @@ impl Generator<'_> {
 
     fn host_method(&self, function: &Function, forward: bool) -> syn::Result<TokenStream> {
         let wit_name = &function.name;
-        let method = rust_ident(&wit_name.to_snake_case())?;
+        let method = method_ident(wit_name)?;
         let parameters = function
             .params
             .iter()
-            .map(|param| rust_ident(&param.name.to_snake_case()))
+            .map(|param| parameter_ident(&param.name))
             .collect::<syn::Result<Vec<_>>>()?;
         let parameter_types = function
             .params
