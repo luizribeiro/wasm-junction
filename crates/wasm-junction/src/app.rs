@@ -405,6 +405,10 @@ impl App {
                     Err(ResolveError::Ambiguous { candidates }) => Some(
                         ResolutionIssue::ambiguous(component, interface.to_string(), candidates),
                     ),
+                    Err(
+                        ResolveError::MissingLinkedExport { .. }
+                        | ResolveError::ComponentUnloaded(_),
+                    ) => Some(ResolutionIssue::missing(component, interface.to_string())),
                 }
             })
             .collect::<Vec<_>>();
@@ -540,6 +544,19 @@ impl App {
                         display_candidates(&candidates)
                     )));
                 }
+                Err(ResolveError::MissingLinkedExport {
+                    component,
+                    interface,
+                }) => {
+                    return Err(CallError::unavailable(format!(
+                        "linked component `{component}` no longer exports `{interface}`"
+                    )));
+                }
+                Err(ResolveError::ComponentUnloaded(component)) => {
+                    return Err(CallError::unavailable(format!(
+                        "component `{component}` was unloaded"
+                    )));
+                }
             };
         let call = call_for_invocation(
             &context,
@@ -632,12 +649,17 @@ impl App {
             .get(caller)
             .and_then(|component| component.links.get(requested))
         {
-            let component = &components[provider_name];
+            let component = components
+                .get(provider_name)
+                .ok_or_else(|| ResolveError::ComponentUnloaded(provider_name.clone()))?;
             return Ok(ResolvedImport::Component {
                 name: component.name.clone(),
-                interface: component
-                    .export_name(requested)
-                    .ok_or(ResolveError::Missing)?,
+                interface: component.export_name(requested).ok_or_else(|| {
+                    ResolveError::MissingLinkedExport {
+                        component: provider_name.clone(),
+                        interface: requested.to_owned(),
+                    }
+                })?,
                 compiled: component.generation.compiled.clone(),
             });
         }
@@ -681,7 +703,14 @@ impl App {
 
 enum ResolveError {
     Missing,
-    Ambiguous { candidates: Vec<Candidate> },
+    Ambiguous {
+        candidates: Vec<Candidate>,
+    },
+    MissingLinkedExport {
+        component: String,
+        interface: String,
+    },
+    ComponentUnloaded(String),
 }
 
 enum ResolvedImport {

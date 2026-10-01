@@ -20,6 +20,25 @@ impl App {
     /// Returns [`ReloadError`] if the name is not loaded, the replacement exports resources, or
     /// the engine cannot compile it.
     pub async fn reload(&self, name: &str, component: Component) -> Result<(), ReloadError> {
+        self.reload_inner(name, component, false).await
+    }
+
+    /// Replaces a loaded component even when the change breaks its dependents.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReloadError`] for structural, resolution, or compilation failures unrelated to
+    /// dependents.
+    pub async fn reload_force(&self, name: &str, component: Component) -> Result<(), ReloadError> {
+        self.reload_inner(name, component, true).await
+    }
+
+    async fn reload_inner(
+        &self,
+        name: &str,
+        component: Component,
+        force: bool,
+    ) -> Result<(), ReloadError> {
         let ComponentParts {
             bytes,
             imports,
@@ -35,7 +54,7 @@ impl App {
         if !self.lock_components().contains_key(name) {
             return Err(ReloadError::UnknownComponent(name.to_owned()));
         }
-        self.validate_reload(name, &imports, &exports, &self.lock_components())?;
+        self.validate_reload(name, &imports, &exports, force, &self.lock_components())?;
         let compiled = self
             .0
             .engine
@@ -43,7 +62,7 @@ impl App {
             .await
             .map_err(ReloadError::Compile)?;
         let mut components = self.lock_components();
-        self.validate_reload(name, &imports, &exports, &components)?;
+        self.validate_reload(name, &imports, &exports, force, &components)?;
         let loaded = components
             .get_mut(name)
             .ok_or_else(|| ReloadError::UnknownComponent(name.to_owned()))?;
@@ -61,20 +80,23 @@ impl App {
         name: &str,
         imports: &[String],
         exports: &[String],
+        force: bool,
         components: &std::collections::BTreeMap<String, LoadedComponent>,
     ) -> Result<(), ReloadError> {
         let loaded = components
             .get(name)
             .ok_or_else(|| ReloadError::UnknownComponent(name.to_owned()))?;
         let links = retained_links(loaded, imports);
-        let handles = lock_or_recover(&self.0.handle_counts);
-        let dependents =
-            breaking_dependents(&self.0.providers, components, &handles, name, exports);
-        if !dependents.is_empty() {
-            return Err(ReloadError::Breaking {
-                component: name.to_owned(),
-                dependents,
-            });
+        if !force {
+            let handles = lock_or_recover(&self.0.handle_counts);
+            let dependents =
+                breaking_dependents(&self.0.providers, components, &handles, name, exports);
+            if !dependents.is_empty() {
+                return Err(ReloadError::Breaking {
+                    component: name.to_owned(),
+                    dependents,
+                });
+            }
         }
         let mut missing = Vec::new();
         let mut issues = Vec::new();

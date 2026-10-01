@@ -7,7 +7,7 @@ use std::sync::Arc;
 use support::{
     FakeEngine, GenerationEngine, GenerationState, block_on, component_bytes, component_bytes_from,
 };
-use wasm_junction::{App, CallContext, Component, ReloadError, Val};
+use wasm_junction::{App, CallContext, CallErrorKind, Component, ReloadError, Val};
 
 mod handles {
     wasm_junction::bindgen!({ path: "tests/fixtures/handles/wit" });
@@ -154,7 +154,7 @@ fn reload_refuses_to_make_an_existing_import_ambiguous() {
 }
 
 #[test]
-fn breaking_reload_names_component_dependents() {
+fn breaking_reload_names_component_dependents_and_force_is_clear() {
     let app = App::builder().engine(FakeEngine).build().unwrap();
     block_on(
         app.load(
@@ -184,6 +184,18 @@ fn breaking_reload_names_component_dependents() {
             .iter()
             .any(|item| item.contains("resolved-writer"))
     );
+
+    block_on(app.reload_force("translator", replacement())).unwrap();
+    let error = block_on(app.call(
+        "linked-writer",
+        "example:writer/article@1.0.0",
+        "write",
+        vec![Val::from("hello")],
+    ))
+    .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Unavailable);
+    assert!(error.to_string().contains("translator"));
+    assert!(error.to_string().contains("no longer exports"));
 }
 
 #[test]
