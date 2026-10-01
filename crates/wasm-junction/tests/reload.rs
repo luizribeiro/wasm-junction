@@ -6,8 +6,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use support::{
-    CompileState, FailingEngine, FakeEngine, GatedCompileEngine, GenerationEngine, GenerationState,
-    RoutingGenerationEngine, block_on, component_bytes, component_bytes_from,
+    CompileState, ConcurrentCompileEngine, FailingEngine, FakeEngine, GatedCompileEngine,
+    GenerationEngine, GenerationState, RoutingGenerationEngine, block_on, component_bytes,
+    component_bytes_from,
 };
 use wasm_junction::{
     App, Call, CallContext, CallError, CallErrorKind, Component, Event, InterfaceHandle,
@@ -19,6 +20,20 @@ mod handles {
 }
 
 struct EventLog(Arc<Mutex<Vec<Event>>>);
+
+struct Export<const MARKER: bool>;
+
+impl<const MARKER: bool> InterfaceHandle for Export<MARKER> {
+    const INTERFACE: &'static str = if MARKER {
+        "example:marker/marker@1.0.0"
+    } else {
+        TRANSLATOR
+    };
+
+    fn from_app(_app: App, _component: Arc<str>) -> Self {
+        Self
+    }
+}
 
 impl Middleware for EventLog {
     async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
@@ -588,4 +603,28 @@ fn pending_compilation_does_not_lock_out_old_generation_calls() {
     call.join().unwrap();
 
     assert_eq!(while_compiling.unwrap().unwrap(), [Val::from("old")]);
+}
+
+#[test]
+fn concurrent_reloads_leave_one_complete_generation() {
+    let app = App::builder()
+        .engine(ConcurrentCompileEngine::default())
+        .build()
+        .unwrap();
+    block_on(app.load(component().named("service"))).unwrap();
+    let first = app.clone();
+    let first = std::thread::spawn(move || block_on(first.reload("service", component())));
+    let second = app.clone();
+    let second = std::thread::spawn(move || {
+        block_on(second.reload(
+            "service",
+            Component::from_bytes(component_bytes(MARKER_WIT, "service")).unwrap(),
+        ))
+    });
+
+    first.join().unwrap().unwrap();
+    second.join().unwrap().unwrap();
+    let translator = app.has::<Export<false>>("service");
+    let marker = app.has::<Export<true>>("service");
+    assert_ne!(translator, marker);
 }

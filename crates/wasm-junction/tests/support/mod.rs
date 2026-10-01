@@ -7,7 +7,7 @@
 
 use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, Weak};
+use std::sync::{Arc, Barrier, Condvar, Mutex, Weak};
 use std::task::{Context, Poll, Waker};
 
 use wasm_junction::{
@@ -245,6 +245,37 @@ impl Engine for GatedCompileEngine {
                 value: if replacement { "new" } else { "old" },
                 gate: None,
             }) as Arc<dyn CompiledComponent>)
+        })
+    }
+}
+
+/// An engine that releases two replacement compilations at the same time.
+pub struct ConcurrentCompileEngine {
+    compilations: AtomicUsize,
+    replacements: Barrier,
+}
+
+impl Default for ConcurrentCompileEngine {
+    fn default() -> Self {
+        Self {
+            compilations: AtomicUsize::new(0),
+            replacements: Barrier::new(2),
+        }
+    }
+}
+
+impl Engine for ConcurrentCompileEngine {
+    fn compile(
+        &self,
+        _bytes: Arc<[u8]>,
+        _wasi: WasiConfig,
+    ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
+        let replacement = self.compilations.fetch_add(1, Ordering::SeqCst) > 0;
+        Box::pin(async move {
+            if replacement {
+                self.replacements.wait();
+            }
+            Ok(Arc::new(UnusedComponent) as Arc<dyn CompiledComponent>)
         })
     }
 }
