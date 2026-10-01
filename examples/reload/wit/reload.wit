@@ -1,0 +1,15 @@
+package example:reload@0.1.0;
+
+interface gate {
+  wait: async func();
+}
+
+interface greeter {
+  greet: func(name: string) -> string;
+  greet-slow: async func(name: string) -> string;
+}
+
+world greeter-component {
+  import gate;
+  export greeter;
+}

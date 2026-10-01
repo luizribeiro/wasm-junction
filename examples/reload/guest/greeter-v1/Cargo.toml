@@ -1,0 +1,11 @@
+[package]
+name = "reload-greeter-v1"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen.workspace = true
