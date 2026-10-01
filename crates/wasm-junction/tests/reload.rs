@@ -509,6 +509,24 @@ fn reload_all_changes_nothing_when_a_later_compile_fails() {
 }
 
 #[test]
+fn reload_all_allows_a_consumer_and_provider_to_drop_their_dependency() {
+    let app = App::builder().engine(FakeEngine).build().unwrap();
+    block_on(
+        app.load(
+            Component::from_bytes(component_bytes(TRANSLATOR_V0_WIT, "service"))
+                .unwrap()
+                .named("translator"),
+        ),
+    )
+    .unwrap();
+    block_on(app.load(writer().named("writer"))).unwrap();
+    let marker = || Component::from_bytes(component_bytes(MARKER_WIT, "service")).unwrap();
+
+    block_on(app.reload_all([("translator", marker()), ("writer", marker())])).unwrap();
+    app.check().unwrap();
+}
+
+#[test]
 fn middleware_observes_load_reload_and_unload_exports() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let app = App::builder()

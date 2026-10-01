@@ -45,8 +45,14 @@ impl App {
         }
         if !force {
             let handles = lock_or_recover(&self.0.handle_counts);
-            let dependents =
-                breaking_dependents(&self.0.providers, &components, &handles, name, &[]);
+            let dependents = breaking_dependents(
+                &self.0.providers,
+                &components,
+                &components,
+                &handles,
+                name,
+                &[],
+            );
             if !dependents.is_empty() {
                 return Err(UnloadError::HasDependents {
                     component: name.to_owned(),
@@ -190,10 +196,22 @@ impl App {
             let loaded = components
                 .get(&replacement.name)
                 .ok_or_else(|| ReloadError::UnknownComponent(replacement.name.clone()))?;
-            if !force {
+            let next = prospective
+                .get_mut(&replacement.name)
+                .ok_or_else(|| ReloadError::UnknownComponent(replacement.name.clone()))?;
+            next.links = retained_links(loaded, &replacement.imports);
+            next.generation = Arc::new(Generation {
+                imports: replacement.imports.iter().cloned().map(Arc::from).collect(),
+                exports: replacement.exports.iter().cloned().map(Arc::from).collect(),
+                compiled: loaded.generation.compiled.clone(),
+            });
+        }
+        if !force {
+            for replacement in pending {
                 let dependents = breaking_dependents(
                     &self.0.providers,
                     components,
+                    &prospective,
                     &handles,
                     &replacement.name,
                     &replacement.exports,
@@ -205,15 +223,6 @@ impl App {
                     });
                 }
             }
-            let next = prospective
-                .get_mut(&replacement.name)
-                .ok_or_else(|| ReloadError::UnknownComponent(replacement.name.clone()))?;
-            next.links = retained_links(loaded, &replacement.imports);
-            next.generation = Arc::new(Generation {
-                imports: replacement.imports.iter().cloned().map(Arc::from).collect(),
-                exports: replacement.exports.iter().cloned().map(Arc::from).collect(),
-                compiled: loaded.generation.compiled.clone(),
-            });
         }
         let mut missing = Vec::new();
         let mut issues = Vec::new();
@@ -298,12 +307,13 @@ fn pending_reload(name: String, component: Component) -> Result<PendingReload, R
 fn breaking_dependents(
     providers: &HashMap<&'static str, Arc<dyn crate::Provider>>,
     components: &std::collections::BTreeMap<String, LoadedComponent>,
+    consumers: &std::collections::BTreeMap<String, LoadedComponent>,
     handles: &HashMap<(String, &'static str), usize>,
     name: &str,
     exports: &[String],
 ) -> Vec<String> {
     let mut dependents = Vec::new();
-    for (consumer, component) in components {
+    for (consumer, component) in consumers {
         if consumer == name {
             continue;
         }
