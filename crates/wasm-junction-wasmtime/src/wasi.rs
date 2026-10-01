@@ -7,11 +7,12 @@ use wasmtime_wasi::cli::WasiCliView;
 use wasmtime_wasi::p2::bindings::cli::environment;
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
+use crate::GATED_WASI_INTERFACES;
 use crate::engine::StoreData;
 
 mod clocks;
 
-const INTERFACE: &str = "wasi:cli/environment@0.2.12";
+const INTERFACE: &str = GATED_WASI_INTERFACES[0];
 
 pub(crate) struct WasiState {
     pub(crate) context: WasiCtx,

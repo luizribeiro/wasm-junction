@@ -7,9 +7,10 @@ use wasmtime_wasi::p2::DynPollable;
 use wasmtime_wasi::p2::bindings::clocks::{monotonic_clock, wall_clock};
 
 use super::{Gate, GateData, StoreData, WasiState, lock, project};
+use crate::GATED_WASI_INTERFACES;
 
-const INTERFACE: &str = "wasi:clocks/wall-clock@0.2.12";
-const MONOTONIC_INTERFACE: &str = "wasi:clocks/monotonic-clock@0.2.12";
+const MONOTONIC_INTERFACE: &str = GATED_WASI_INTERFACES[1];
+const INTERFACE: &str = GATED_WASI_INTERFACES[2];
 
 #[derive(Clone, Copy)]
 enum Operation {
