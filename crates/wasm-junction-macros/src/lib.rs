@@ -39,6 +39,10 @@ impl Parse for Config {
 }
 
 /// Generates bindings for every interface in a local WIT package.
+///
+/// Generated WIT errors display enum and payload-free variant cases by their
+/// kebab-case names. Variant payloads follow the case name and use `Display`
+/// when available, otherwise a compact debug representation.
 #[proc_macro]
 pub fn bindgen(input: TokenStream) -> TokenStream {
     syn::parse::<Config>(input)

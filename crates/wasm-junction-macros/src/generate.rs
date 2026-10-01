@@ -5,6 +5,7 @@ use wit_parser::{InterfaceId, PackageId, Resolve};
 
 mod collisions;
 mod definitions;
+mod display;
 mod errors;
 mod reachability;
 mod types;
@@ -115,24 +116,10 @@ impl Generator<'_> {
                 )
             }
         };
-        let error = nominal.then(|| self.error_impl(name, id, &ident));
+        let error = nominal
+            .then(|| self.error_display(name, id, &ident))
+            .transpose()?;
         Ok(quote!(#definition #error))
-    }
-
-    fn error_impl(&self, name: &str, id: wit_parser::TypeId, ident: &Ident) -> TokenStream {
-        if !self.errors.contains(&id) {
-            return TokenStream::new();
-        }
-        quote! {
-            #[doc = "Formats the WIT type name followed by its structured debug form."]
-            impl ::std::fmt::Display for #ident {
-                fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                    write!(formatter, concat!(#name, ": {:?}"), self)
-                }
-            }
-
-            impl ::std::error::Error for #ident {}
-        }
     }
 }
 

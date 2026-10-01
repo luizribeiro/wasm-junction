@@ -29,6 +29,11 @@ pub use wasm_junction_core::{
 };
 /// Generates bindings for every interface in a local WIT package.
 ///
+/// Generated WIT errors display enum and payload-free variant cases by their
+/// kebab-case names. Variant payloads follow the case name, while record
+/// errors display declaration-ordered `field: value` pairs. Values use
+/// [`Display`](std::fmt::Display) when available and compact debug output otherwise.
+///
 /// Resources, futures, and streams are rejected until their runtime support is available.
 ///
 /// ```compile_fail

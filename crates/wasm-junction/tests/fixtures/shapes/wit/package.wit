@@ -41,5 +41,13 @@ interface controls {
   }
 
   enum problem { denied, invalid }
+  variant failure {
+    not-found,
+    message(string),
+    retry-after(u32),
+    structured(choice),
+    nested(problem),
+  }
   decide: func() -> result<_, problem>;
+  fail: func() -> result<_, failure>;
 }

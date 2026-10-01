@@ -89,10 +89,32 @@ fn primitives_and_nested_shapes_round_trip() {
 #[test]
 fn result_error_types_implement_display_and_error() {
     requires_error::<controls::Problem>();
-    assert_eq!(controls::Problem::Denied.to_string(), "problem: Denied");
+    assert_eq!(controls::Problem::Denied.to_string(), "denied");
     let value = wasm_junction::Val::from(controls::Problem::Invalid);
     assert_eq!(
         controls::Problem::try_from(value).unwrap(),
         controls::Problem::Invalid
+    );
+}
+
+#[test]
+fn variant_errors_display_as_messages() {
+    requires_error::<controls::Failure>();
+    assert_eq!(controls::Failure::NotFound.to_string(), "not-found");
+    assert_eq!(
+        controls::Failure::Message("bad input".into()).to_string(),
+        "message: bad input"
+    );
+    assert_eq!(
+        controls::Failure::RetryAfter(5).to_string(),
+        "retry-after: 5"
+    );
+    assert_eq!(
+        controls::Failure::Structured(controls::Choice::None).to_string(),
+        "structured: None"
+    );
+    assert_eq!(
+        controls::Failure::Nested(controls::Problem::Denied).to_string(),
+        "nested: denied"
     );
 }
