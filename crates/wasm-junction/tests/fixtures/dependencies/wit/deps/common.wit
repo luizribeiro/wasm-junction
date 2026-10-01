@@ -1,0 +1,9 @@
+package test:common;
+
+interface types {
+  record author { name: string }
+}
+
+interface unused {
+  record hidden { value: string }
+}

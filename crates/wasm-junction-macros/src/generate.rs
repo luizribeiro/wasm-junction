@@ -5,19 +5,27 @@ use wit_parser::{InterfaceId, PackageId, Resolve};
 
 mod definitions;
 mod errors;
+mod reachability;
 mod types;
 mod values;
 
 pub(crate) fn generate(resolve: &Resolve, package_id: PackageId) -> syn::Result<TokenStream> {
-    let package = &resolve.packages[package_id];
+    let selected = reachability::find(resolve, package_id);
     let generator = Generator {
         resolve,
         errors: errors::find(resolve, package_id),
+        selected,
     };
-    let modules = package
+    let modules = resolve
         .interfaces
         .iter()
-        .map(|(name, id)| generator.interface(name, *id))
+        .filter(|(id, _)| generator.selected.contains_key(id))
+        .map(|(id, interface)| {
+            let name = interface.name.as_deref().ok_or_else(|| {
+                syn::Error::new(Span::call_site(), "selected interface has no name")
+            })?;
+            generator.interface(name, id)
+        })
         .collect::<syn::Result<Vec<_>>>()?;
     Ok(quote!(#(#modules)*))
 }
@@ -25,6 +33,7 @@ pub(crate) fn generate(resolve: &Resolve, package_id: PackageId) -> syn::Result<
 struct Generator<'a> {
     resolve: &'a Resolve,
     errors: std::collections::HashSet<wit_parser::TypeId>,
+    selected: std::collections::HashMap<InterfaceId, std::collections::HashSet<wit_parser::TypeId>>,
 }
 
 impl Generator<'_> {
@@ -37,6 +46,7 @@ impl Generator<'_> {
         let types = self.resolve.interfaces[id]
             .types
             .iter()
+            .filter(|(_, type_id)| self.selected[&id].contains(*type_id))
             .map(|(export, type_id)| {
                 let definition = &self.resolve.types[*type_id];
                 if definition.owner == wit_parser::TypeOwner::Interface(id) {

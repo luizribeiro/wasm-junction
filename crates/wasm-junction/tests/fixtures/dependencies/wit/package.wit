@@ -1,0 +1,6 @@
+package test:notes;
+
+interface notes {
+  use test:common/types.{author};
+  record note { author: author }
+}
