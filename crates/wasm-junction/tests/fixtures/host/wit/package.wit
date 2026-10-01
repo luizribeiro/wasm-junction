@@ -1,4 +1,4 @@
-package test:journal@1.0.0;
+package example:journal@0.1.0;
 
 interface notes {
   record note { title: string, body: option<string> }

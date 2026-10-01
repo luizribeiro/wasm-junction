@@ -6,11 +6,22 @@ mod support;
 
 use std::sync::Arc;
 
-use wasm_junction::{Call, CallContext, Caller, TypedCall};
+use wasm_junction::{
+    App, Call, CallContext, CallError, CallErrorKind, Caller, Component, Middleware, Next,
+    TypedCall, Vals,
+};
 
 wasm_junction::bindgen!({ path: "tests/fixtures/host/wit" });
 
 struct Journal;
+
+const SUMMARIES: &str = "example:journal/summaries@0.1.0";
+const PLUGIN_WIT: &str = r"
+    package example:journal@0.1.0;
+    interface notes { read: func(name: string) -> string; }
+    interface summaries { summarize: func(note: string) -> string; }
+    world plugin { import notes; export summaries; }
+";
 
 impl notes::Host for Journal {
     fn read(&self, _cx: &CallContext, name: String) -> Result<notes::Note, notes::AccessError> {
@@ -29,6 +40,19 @@ impl notes::Host for Journal {
     }
 
     fn clear(&self, _cx: &CallContext) {}
+}
+
+struct DenySecrets;
+
+impl Middleware for DenySecrets {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        if let Some(read) = call.view::<notes::Read>()?
+            && read.name == "secret"
+        {
+            return Ok(notes::Read::output(Err(notes::AccessError::Denied)));
+        }
+        next.run(call).await
+    }
 }
 
 #[test]
@@ -66,6 +90,45 @@ fn arc_hosts_forward_plain_and_async_methods() {
     assert_eq!(found[0].title, "rust:3");
 }
 
+#[test]
+fn provider_calls_and_typed_refusals_cross_the_app() {
+    let app = App::builder()
+        .engine(support::FakeEngine)
+        .provide(notes::provider(Journal))
+        .middleware(DenySecrets)
+        .build()
+        .unwrap();
+    let component = Component::from_bytes(support::component_bytes(PLUGIN_WIT, "plugin"))
+        .unwrap()
+        .named("summarizer");
+    support::block_on(app.load(component)).unwrap();
+
+    let invoke = |name| {
+        support::block_on(app.call(
+            "summarizer",
+            SUMMARIES,
+            "summarize",
+            notes::Read { name }.into_vals(),
+        ))
+    };
+    let note = notes::Read::decode_output(&invoke("daily".into()).unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (note.title.as_str(), note.body.as_deref()),
+        ("daily", Some("contents"))
+    );
+    assert_eq!(
+        notes::Read::decode_output(&invoke("secret".into()).unwrap()).unwrap(),
+        Err(notes::AccessError::Denied)
+    );
+
+    let error =
+        support::block_on(app.call("summarizer", SUMMARIES, "unknown", Vec::new())).unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert!(error.to_string().contains("unknown function `unknown`"));
+}
+
 #[cfg(target_arch = "wasm32")]
 const _: () = {
     struct BrowserHost(std::rc::Rc<()>);
@@ -81,4 +144,10 @@ const _: () = {
         }
         fn clear(&self, _: &CallContext) {}
     }
+
+    fn accepts_non_send_provider() {
+        let _ = notes::provider(BrowserHost(std::rc::Rc::new(())));
+    }
+
+    let _ = accepts_non_send_provider as fn();
 };

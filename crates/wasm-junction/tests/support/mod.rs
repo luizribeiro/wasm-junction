@@ -82,15 +82,17 @@ impl CompiledComponent for UnusedComponent {
             if interface.as_ref() != "example:journal/summaries@0.1.0" {
                 return Err(CallError::trap("engine received an unresolved export"));
             }
-            if function.as_ref() != "summarize" {
-                return Err(CallError::trap("engine received the wrong function"));
-            }
+            let import = match function.as_ref() {
+                "summarize" => "read",
+                "unknown" => "unknown",
+                _ => return Err(CallError::trap("engine received the wrong function")),
+            };
             imports
                 .call(
                     context,
                     component,
                     Arc::from(NOTES),
-                    Arc::from("read"),
+                    Arc::from(import),
                     args,
                 )
                 .await
