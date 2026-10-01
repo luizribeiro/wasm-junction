@@ -1,0 +1,9 @@
+package test:wasi@0.1.0;
+
+interface environment {
+  read: func(name: string) -> option<string>;
+}
+
+world fixture {
+  export environment;
+}

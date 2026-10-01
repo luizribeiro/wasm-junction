@@ -15,6 +15,9 @@ pub(crate) fn define_imports(
 ) -> Result<(), wasmtime::Error> {
     let engine = linker.engine().clone();
     for (interface, item) in component.component_type().imports(&engine) {
+        if interface.starts_with("wasi:") {
+            continue;
+        }
         let ComponentItem::ComponentInstance(instance) = item.ty else {
             bail!("unsupported component import `{interface}`");
         };

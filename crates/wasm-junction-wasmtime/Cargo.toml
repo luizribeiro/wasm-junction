@@ -14,6 +14,7 @@ workspace = true
 [dependencies]
 wasm-junction-core = { path = "../wasm-junction-core", version = "=0.0.0" }
 wasmtime = { version = "=49.0.1", default-features = false, features = ["component-model-async", "cranelift", "runtime", "std"] }
+wasmtime-wasi = { version = "=49.0.1", default-features = false, features = ["p2"] }
 
 [dev-dependencies]
 wasm-junction = { path = "../wasm-junction", version = "=0.0.0", default-features = false }

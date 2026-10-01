@@ -5,8 +5,10 @@ use wasm_junction_core::{
     BoxFuture, CallError, CompiledComponent, Engine, EngineError, ImportDispatcher,
     InvocationContext, Vals, WasiConfig,
 };
+use wasmtime::component::ResourceTable;
 use wasmtime::component::{Component, InstancePre, Linker, Val as WasmtimeVal};
 use wasmtime::{Config, Engine as RuntimeEngine, Store};
+use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 use crate::imports::define_imports;
 use crate::values::{from_wasmtime, to_wasmtime};
@@ -15,6 +17,17 @@ pub(crate) struct StoreData {
     pub(crate) imports: Arc<dyn ImportDispatcher>,
     pub(crate) context: InvocationContext,
     pub(crate) component: Arc<str>,
+    wasi: WasiCtx,
+    table: ResourceTable,
+}
+
+impl WasiView for StoreData {
+    fn ctx(&mut self) -> WasiCtxView<'_> {
+        WasiCtxView {
+            ctx: &mut self.wasi,
+            table: &mut self.table,
+        }
+    }
 }
 
 /// A native component engine backed by Wasmtime.
@@ -49,15 +62,21 @@ impl WasmtimeEngine {
 }
 
 impl Engine for WasmtimeEngine {
+    fn supports_import(&self, interface: &str) -> bool {
+        interface.starts_with("wasi:")
+    }
+
     fn compile(
         &self,
         bytes: Arc<[u8]>,
-        _wasi: WasiConfig,
+        wasi: WasiConfig,
     ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
         Box::pin(async move {
             let component = Component::new(&self.engine, bytes)
                 .map_err(|error| EngineError::new(error.to_string()))?;
             let mut linker = Linker::new(&self.engine);
+            wasmtime_wasi::p2::add_to_linker_async(&mut linker)
+                .map_err(|error| EngineError::new(error.to_string()))?;
             define_imports(&mut linker, &component)
                 .map_err(|error| EngineError::new(error.to_string()))?;
             let pre = linker
@@ -66,6 +85,7 @@ impl Engine for WasmtimeEngine {
             Ok(Arc::new(Compiled {
                 pre,
                 instantiations: self.instantiations.clone(),
+                wasi,
             }) as Arc<dyn CompiledComponent>)
         })
     }
@@ -74,6 +94,7 @@ impl Engine for WasmtimeEngine {
 struct Compiled {
     pre: InstancePre<StoreData>,
     instantiations: Arc<AtomicU64>,
+    wasi: WasiConfig,
 }
 
 impl CompiledComponent for Compiled {
@@ -110,6 +131,8 @@ impl Compiled {
                 imports,
                 context,
                 component,
+                wasi: wasi_context(&self.wasi),
+                table: ResourceTable::new(),
             },
         );
         self.instantiations.fetch_add(1, Ordering::Relaxed);
@@ -137,6 +160,14 @@ impl Compiled {
             .await??;
         results.into_iter().map(from_wasmtime).collect()
     }
+}
+
+fn wasi_context(configuration: &WasiConfig) -> WasiCtx {
+    let mut builder = WasiCtxBuilder::new();
+    for (name, value) in configuration.environment() {
+        builder.env(name, value);
+    }
+    builder.build()
 }
 
 #[cfg(test)]

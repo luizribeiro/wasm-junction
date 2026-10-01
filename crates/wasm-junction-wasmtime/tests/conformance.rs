@@ -12,6 +12,9 @@ use wasm_junction::{
 use wasm_junction_conformance::{Fixture, FixtureHost, SUMMARIZER, component, run, sample_note};
 use wasm_junction_wasmtime::WasmtimeEngine;
 
+const WASI_COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wasi-test.wasm"));
+const ENVIRONMENT: &str = "test:wasi/environment@0.1.0";
+
 struct ThreadWake(std::thread::Thread);
 
 impl Wake for ThreadWake {
@@ -49,6 +52,26 @@ fn every_call_uses_a_fresh_store() {
     block_on(fixture.call("echo", vec![sample_note()])).unwrap();
     assert_eq!(engine.instantiations(), 2);
     assert_eq!(fixture.host().normalizations(), 2);
+}
+
+#[test]
+fn wasi_guest_reads_only_configured_environment() {
+    let app = App::builder()
+        .engine(WasmtimeEngine::new().unwrap())
+        .wasi(WasiConfig::new().env("GREETING", "hello from WASI"))
+        .build()
+        .unwrap();
+    block_on(app.load(Component::from_bytes(WASI_COMPONENT).unwrap().named("wasi"))).unwrap();
+
+    let configured =
+        block_on(app.call("wasi", ENVIRONMENT, "read", vec![Val::from("GREETING")])).unwrap();
+    let absent = block_on(app.call("wasi", ENVIRONMENT, "read", vec![Val::from("PATH")])).unwrap();
+
+    assert_eq!(
+        configured,
+        [Val::Option(Some(Box::new(Val::from("hello from WASI"))))]
+    );
+    assert_eq!(absent, [Val::Option(None)]);
 }
 
 #[test]

@@ -64,7 +64,9 @@ impl App {
         }
         let mut missing = imports
             .iter()
-            .filter(|import| self.find_provider(import).is_none())
+            .filter(|import| {
+                self.find_provider(import).is_none() && !self.0.engine.supports_import(import)
+            })
             .cloned()
             .collect::<Vec<_>>();
         missing.sort();
