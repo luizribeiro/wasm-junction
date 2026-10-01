@@ -11,6 +11,10 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["parallel-compilation"]
+parallel-compilation = ["wasmtime/parallel-compilation"]
+
 [dependencies]
 wasm-junction-core = { path = "../wasm-junction-core", version = "=0.0.0" }
 wasmtime = { version = "=49.0.1", default-features = false, features = ["component-model-async", "cranelift", "runtime", "std"] }
