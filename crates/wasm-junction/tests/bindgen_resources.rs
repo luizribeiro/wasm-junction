@@ -6,6 +6,7 @@ mod support;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Waker};
 
 use wasm_junction::{
     App, CallContext, CallErrorKind, Component, ImportDispatcher, InvocationContext, Provided,
@@ -35,6 +36,41 @@ struct SessionState(String);
 
 struct DropProbe(Arc<AtomicUsize>);
 
+#[derive(Default)]
+struct Gate {
+    paused: AtomicUsize,
+    released: AtomicUsize,
+    waker: Mutex<Option<Waker>>,
+}
+
+impl Gate {
+    fn pause(&self) {
+        self.released.store(0, Ordering::Relaxed);
+        self.paused.store(1, Ordering::Relaxed);
+    }
+
+    async fn wait(&self) {
+        std::future::poll_fn(|cx| {
+            if self.paused.load(Ordering::Relaxed) == 0
+                || self.released.load(Ordering::Relaxed) == 1
+            {
+                Poll::Ready(())
+            } else {
+                *self.waker.lock().unwrap() = Some(cx.waker().clone());
+                Poll::Pending
+            }
+        })
+        .await;
+    }
+
+    fn release(&self) {
+        self.released.store(1, Ordering::Relaxed);
+        if let Some(waker) = self.waker.lock().unwrap().take() {
+            waker.wake();
+        }
+    }
+}
+
 impl Drop for DropProbe {
     fn drop(&mut self) {
         self.0.fetch_add(1, Ordering::Relaxed);
@@ -45,6 +81,7 @@ impl Drop for DropProbe {
 struct ResourceHost {
     dropped: Mutex<Vec<String>>,
     default_drops: Arc<AtomicUsize>,
+    gate: Gate,
 }
 
 impl resources::Host for ResourceHost {
@@ -57,7 +94,7 @@ impl resources::Host for ResourceHost {
     }
 
     async fn session_profile(&self, _cx: &CallContext, session: &SessionState) -> String {
-        std::future::ready(()).await;
+        self.gate.wait().await;
         format!("profile:{}", session.0)
     }
 
@@ -258,6 +295,68 @@ fn resource_app_with(provider: Provided) -> App {
     app
 }
 
+#[test]
+fn async_resource_borrows_release_the_table_lock() {
+    use std::future::Future;
+
+    let host = Arc::new(ResourceHost::default());
+    let app = resource_app(host.clone());
+    let session = one_resource(
+        &support::block_on(app.call(
+            "plugin",
+            support::RESOURCE_BINDGEN_CLIENT,
+            "open",
+            vec![Val::from("Ada")],
+        ))
+        .unwrap(),
+    );
+    host.gate.pause();
+    let borrowed = Resource::borrowed(session.interface(), session.name(), session.id());
+    let mut profile = std::pin::pin!(app.call(
+        "plugin",
+        support::RESOURCE_BINDGEN_CLIENT,
+        "profile",
+        vec![Val::Resource(borrowed)],
+    ));
+    assert!(matches!(
+        profile
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Pending
+    ));
+
+    let lookup = support::block_on(app.call(
+        "plugin",
+        support::RESOURCE_BINDGEN_CLIENT,
+        "lookup",
+        vec![Val::from("Grace")],
+    ));
+    assert!(lookup.is_ok());
+    let error = support::block_on(app.call(
+        "plugin",
+        support::RESOURCE_BINDGEN_CLIENT,
+        "consume",
+        vec![Val::Resource(session.clone())],
+    ))
+    .unwrap_err();
+    assert!(error.to_string().contains("while it is borrowed"));
+
+    host.gate.release();
+    assert_eq!(
+        support::block_on(profile).unwrap(),
+        [Val::from("profile:Ada")]
+    );
+    assert_eq!(
+        support::block_on(app.call(
+            "plugin",
+            support::RESOURCE_BINDGEN_CLIENT,
+            "consume",
+            vec![Val::Resource(session)],
+        ))
+        .unwrap(),
+        [Val::from("Ada")]
+    );
+}
 fn one_resource(values: &[Val]) -> Resource {
     let [Val::Resource(resource)] = values else {
         panic!("expected resource")
