@@ -4,12 +4,14 @@
 #![warn(missing_docs)]
 
 mod host;
+mod resources;
 mod runner;
 mod trace;
 
 wasm_junction::bindgen!({ path: "wit" });
 
 pub use host::{FixtureHost, RoutedHost, sample_note, sample_summary};
+pub use resources::ResourceHost;
 pub use runner::{Fixture, FixtureError, RoutedFixture, run, run_routed};
 pub use trace::{EXPECTED_ROUTED_TRACE, EXPECTED_TRACE, Trace};
 
