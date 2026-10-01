@@ -30,7 +30,7 @@ impl ResourceHost {
     /// Wraps this host as the resource fixture's provider.
     #[must_use]
     pub fn provided(self) -> Provided {
-        Provided::new(RESOURCE_HOST, self)
+        host::provider(self)
     }
 
     /// Returns the number of session values still owned by guests.
@@ -70,18 +70,6 @@ impl ResourceHost {
         }
         self.0.active.fetch_sub(1, Ordering::Relaxed);
         Ok(())
-    }
-
-    /// Reads a session directly to verify stale-id failures in conformance tests.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CallError`] when `id` has been dropped or was never allocated.
-    pub fn profile(&self, id: u32) -> Result<String, CallError> {
-        let resource = wasm_junction::Resource::borrowed(RESOURCE_HOST, "session", id);
-        self.0
-            .sessions
-            .with(&resource, |user| format!("profile:{user}"))
     }
 
     fn insert(

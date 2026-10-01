@@ -2,13 +2,16 @@ use std::error::Error;
 use std::fmt::{self, Display};
 use std::sync::Arc;
 
-use wasm_junction::{App, CallError, CallErrorKind, Component, Engine, Val, Vals};
+use wasm_junction::{
+    App, CallError, CallErrorKind, Component, Engine, ImportDispatcher, InvocationContext,
+    Resource, Val, Vals,
+};
 
 use crate::host::summary;
 use crate::{
     EXPECTED_RESOURCE_TRACE, EXPECTED_ROUTED_TRACE, EXPECTED_TRACE, FixtureHost, RESOURCE_CLIENT,
-    ResourceHost, RoutedHost, SUMMARIZER, SessionId, Trace, component, resource_component,
-    summarizer, translator_component, writer, writer_component,
+    RESOURCE_HOST, ResourceHost, RoutedHost, SUMMARIZER, SessionId, Trace, component,
+    resource_component, summarizer, translator_component, writer, writer_component,
 };
 
 /// A loaded conformance fixture available for additional engine assertions.
@@ -68,6 +71,22 @@ impl ResourceFixture {
                 vec![Val::Bool(trap)],
             )
             .await
+    }
+
+    async fn profile_dropped(&self, id: u32) -> Result<Vals, CallError> {
+        ImportDispatcher::call(
+            &self.app,
+            InvocationContext::default(),
+            Arc::from("resource-client"),
+            Arc::from(RESOURCE_HOST),
+            Arc::from("[method]session.profile"),
+            vec![Val::Resource(Resource::borrowed(
+                RESOURCE_HOST,
+                "session",
+                id,
+            ))],
+        )
+        .await
     }
 }
 
@@ -276,7 +295,7 @@ pub async fn run_resources(engine: impl Engine + 'static) -> Result<ResourceFixt
             "unexpected resource output: {output:?}"
         )));
     }
-    if fixture.host.active_resources() != 0 || fixture.host.profile(0).is_ok() {
+    if fixture.host.active_resources() != 0 {
         return Err(FixtureError::new("normal resource invocation leaked"));
     }
     if fixture.trace.entries() != EXPECTED_RESOURCE_TRACE {
@@ -284,6 +303,9 @@ pub async fn run_resources(engine: impl Engine + 'static) -> Result<ResourceFixt
             "unexpected resource trace: {:#?}",
             fixture.trace.entries()
         )));
+    }
+    if fixture.profile_dropped(0).await.is_ok() {
+        return Err(FixtureError::new("normal resource invocation leaked"));
     }
 
     fixture.trace.clear();
@@ -300,7 +322,10 @@ pub async fn run_resources(engine: impl Engine + 'static) -> Result<ResourceFixt
             "unexpected resource failure: {error}"
         )));
     }
-    if fixture.host.active_resources() != 0 || fixture.host.profile(1).is_ok() {
+    if fixture.host.active_resources() != 0 {
+        return Err(FixtureError::new("trapped resource invocation leaked"));
+    }
+    if fixture.profile_dropped(1).await.is_ok() {
         return Err(FixtureError::new("trapped resource invocation leaked"));
     }
     Ok(fixture)
