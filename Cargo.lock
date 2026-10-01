@@ -1324,6 +1324,14 @@ name = "wasm-junction-core"
 version = "0.0.0"
 
 [[package]]
+name = "wasm-junction-example-audit"
+version = "0.0.0"
+dependencies = [
+ "tokio",
+ "wasm-junction",
+]
+
+[[package]]
 name = "wasm-junction-example-clock"
 version = "0.0.0"
 dependencies = [

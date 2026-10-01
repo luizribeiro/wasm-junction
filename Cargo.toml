@@ -10,6 +10,7 @@ members = [
   "examples/greeter",
   "examples/clock",
   "examples/translate",
+  "examples/audit",
 ]
 
 [workspace.package]
