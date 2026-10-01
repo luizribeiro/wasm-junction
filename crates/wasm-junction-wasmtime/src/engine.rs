@@ -8,7 +8,14 @@ use wasm_junction::{
 use wasmtime::component::{Component, InstancePre, Linker, Val as WasmtimeVal};
 use wasmtime::{Config, Engine as RuntimeEngine, Store};
 
+use crate::imports::define_imports;
 use crate::values::{from_wasmtime, to_wasmtime};
+
+pub(crate) struct StoreData {
+    pub(crate) imports: Arc<dyn ImportDispatcher>,
+    pub(crate) context: InvocationContext,
+    pub(crate) component: Arc<str>,
+}
 
 /// A native component engine backed by Wasmtime.
 #[derive(Clone)]
@@ -50,8 +57,7 @@ impl Engine for WasmtimeEngine {
             let component = Component::new(&self.engine, bytes)
                 .map_err(|error| EngineError::new(error.to_string()))?;
             let mut linker = Linker::new(&self.engine);
-            linker
-                .define_unknown_imports_as_traps(&component)
+            define_imports(&mut linker, &component)
                 .map_err(|error| EngineError::new(error.to_string()))?;
             let pre = linker
                 .instantiate_pre(&component)
@@ -65,22 +71,22 @@ impl Engine for WasmtimeEngine {
 }
 
 struct Compiled {
-    pre: InstancePre<()>,
+    pre: InstancePre<StoreData>,
     instantiations: Arc<AtomicU64>,
 }
 
 impl CompiledComponent for Compiled {
     fn call(
         &self,
-        _imports: Arc<dyn ImportDispatcher>,
-        _context: InvocationContext,
-        _component: Arc<str>,
+        imports: Arc<dyn ImportDispatcher>,
+        context: InvocationContext,
+        component: Arc<str>,
         interface: Arc<str>,
         function: Arc<str>,
         args: Vals,
     ) -> BoxFuture<'_, Result<Vals, Trap>> {
         Box::pin(async move {
-            self.call_export(&interface, &function, args)
+            self.call_export(imports, context, component, &interface, &function, args)
                 .await
                 .map_err(|error| Trap::new(error.to_string()))
         })
@@ -90,11 +96,21 @@ impl CompiledComponent for Compiled {
 impl Compiled {
     async fn call_export(
         &self,
+        imports: Arc<dyn ImportDispatcher>,
+        context: InvocationContext,
+        component: Arc<str>,
         interface: &str,
         function: &str,
         args: Vals,
     ) -> Result<Vals, wasmtime::Error> {
-        let mut store = Store::new(self.pre.engine(), ());
+        let mut store = Store::new(
+            self.pre.engine(),
+            StoreData {
+                imports,
+                context,
+                component,
+            },
+        );
         self.instantiations.fetch_add(1, Ordering::Relaxed);
         let instance = self.pre.instantiate_async(&mut store).await?;
         let interface = instance

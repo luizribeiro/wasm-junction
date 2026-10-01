@@ -4,6 +4,7 @@
 #![warn(missing_docs)]
 
 mod engine;
+mod imports;
 mod values;
 
 pub use engine::WasmtimeEngine;
