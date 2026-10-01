@@ -1,11 +1,9 @@
-use heck::ToUpperCamelCase;
 use proc_macro2::TokenStream;
 use quote::quote;
 use wit_parser::{Function, Type, TypeDefKind};
 
 use super::Generator;
-use super::collisions::{call_ident, method_ident, parameter_ident};
-use super::rust_ident;
+use super::collisions::{call_ident, handle_ident, method_ident, parameter_ident};
 
 impl Generator<'_> {
     pub(super) fn handle<'a>(
@@ -13,7 +11,7 @@ impl Generator<'_> {
         interface: &str,
         functions: impl Iterator<Item = &'a Function>,
     ) -> syn::Result<TokenStream> {
-        let handle = rust_ident(&interface.to_upper_camel_case())?;
+        let handle = handle_ident(interface)?;
         let methods = functions
             .map(|function| self.handle_method(interface, function))
             .collect::<syn::Result<Vec<_>>>()?;

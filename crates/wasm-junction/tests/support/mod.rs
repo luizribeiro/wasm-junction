@@ -22,6 +22,9 @@ pub const NOTES: &str = "example:journal/notes@0.1.0";
 /// The generated-handle fixture interface.
 pub const HANDLE_SUMMARIES: &str = "test:handles/summaries@1.0.0";
 
+/// The reserved interface-name fixture.
+pub const RESERVED_HOST: &str = "test:keywords/host";
+
 /// Builds a real component from inline WIT and a matching dummy core module.
 pub fn component_bytes(wit: &str, world_name: &str) -> Vec<u8> {
     component_bytes_from(&[("fixture.wit", wit)], world_name)
@@ -82,6 +85,11 @@ impl CompiledComponent for UnusedComponent {
         args: Vals,
     ) -> BoxFuture<'_, Result<Vals, CallError>> {
         Box::pin(async move {
+            if interface.as_ref() == RESERVED_HOST {
+                return imports
+                    .call(context, component, interface, function, args)
+                    .await;
+            }
             if interface.as_ref() == HANDLE_SUMMARIES {
                 return handle_call(&function, args);
             }

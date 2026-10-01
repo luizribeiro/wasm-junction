@@ -14,3 +14,16 @@ interface %super {
   call: func(call: string, args: string, value: string, host: string, %self: string) -> string;
   %super: func() -> string;
 }
+
+interface host {
+  host-handle: func(value: string) -> string;
+}
+
+interface host-provider {
+  ping: func() -> string;
+}
+
+world plugin {
+  import host;
+  export host;
+}

@@ -2,7 +2,10 @@
 
 #![forbid(unsafe_code)]
 
-use wasm_junction::{CallContext, TypedCall};
+mod support;
+
+use support::{FakeEngine, block_on, component_bytes};
+use wasm_junction::{App, CallContext, Component, InterfaceHandle, TypedCall};
 
 wasm_junction::bindgen!({ path: "tests/fixtures/keywords/wit" });
 
@@ -33,6 +36,22 @@ impl super_::Host for Names {
         "super".into()
     }
 }
+
+impl host::Host for Names {
+    fn host_handle(&self, _cx: &CallContext, value: String) -> String {
+        value
+    }
+}
+
+struct ProviderNames;
+
+impl host_provider::Host for ProviderNames {
+    fn ping(&self, _cx: &CallContext) -> String {
+        "pong".to_owned()
+    }
+}
+
+fn requires_handle<T: InterfaceHandle>() {}
 
 #[test]
 fn keywords_generate_valid_documented_identifiers() {
@@ -77,4 +96,33 @@ fn generated_names_do_not_clash_with_the_host_surface() {
         "call:args:value:host:self"
     );
     let _provided = super_::provider(Names);
+}
+
+#[test]
+fn reserved_interface_names_generate_distinct_handles() {
+    let app = App::builder()
+        .engine(FakeEngine)
+        .provide(host::provider(Names))
+        .build()
+        .unwrap();
+    let component = component_bytes(include_str!("fixtures/keywords/wit/package.wit"), "plugin");
+    block_on(app.load(Component::from_bytes(component).unwrap().named("plugin"))).unwrap();
+
+    let handle = app.get::<host::HostHandle>("plugin").unwrap();
+    assert_eq!(
+        block_on(handle.host_handle("round trip")).unwrap(),
+        "round trip"
+    );
+    let call = host::HostHandle_ {
+        value: "call view".to_owned(),
+    };
+    assert_eq!(
+        host::HostHandle_::from_vals(&call.into_vals())
+            .unwrap()
+            .value,
+        "call view"
+    );
+
+    requires_handle::<host_provider::HostProviderHandle>();
+    let _provided = host_provider::provider(ProviderNames);
 }
