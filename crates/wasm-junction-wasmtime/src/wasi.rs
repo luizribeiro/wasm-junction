@@ -3,8 +3,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use wasm_junction_core::{BoxFuture, CallError, ImportTarget, InvocationContext, Val, Vals};
 use wasmtime::component::{HasData, Linker, ResourceTable};
+use wasmtime::{AsContextMut, StoreContextMut};
 use wasmtime_wasi::cli::WasiCliView;
-use wasmtime_wasi::p2::bindings::cli::environment;
+use wasmtime_wasi::p2::bindings::cli;
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 use crate::GATED_WASI_INTERFACES;
@@ -51,6 +52,26 @@ fn project(state: &mut StoreData) -> Gate<'_> {
     Gate(state)
 }
 
+impl Gate<'_> {
+    fn dispatch(
+        &mut self,
+        interface: impl Into<Arc<str>>,
+        function: impl Into<Arc<str>>,
+        args: Vals,
+        target: Arc<dyn ImportTarget>,
+    ) -> wasmtime::Result<Vals> {
+        futures::executor::block_on(self.0.imports.call_engine(
+            self.0.context.clone(),
+            self.0.component.clone(),
+            interface.into(),
+            function.into(),
+            args,
+            target,
+        ))
+        .map_err(wasmtime::Error::new)
+    }
+}
+
 #[derive(Clone, Copy)]
 enum EnvironmentOperation {
     Variables,
@@ -75,7 +96,7 @@ impl ImportTarget for EnvironmentTarget {
             let mut state = lock(&state);
             match operation {
                 EnvironmentOperation::Variables => {
-                    environment::Host::get_environment(&mut state.cli()).map(|entries| {
+                    cli::environment::Host::get_environment(&mut state.cli()).map(|entries| {
                         Val::List(
                             entries
                                 .into_iter()
@@ -85,11 +106,11 @@ impl ImportTarget for EnvironmentTarget {
                     })
                 }
                 EnvironmentOperation::Arguments => {
-                    environment::Host::get_arguments(&mut state.cli())
+                    cli::environment::Host::get_arguments(&mut state.cli())
                         .map(|values| Val::List(values.into_iter().map(Val::from).collect()))
                 }
                 EnvironmentOperation::InitialCwd => {
-                    environment::Host::initial_cwd(&mut state.cli())
+                    cli::environment::Host::initial_cwd(&mut state.cli())
                         .map(|value| Val::Option(value.map(|value| Box::new(Val::from(value)))))
                 }
             }
@@ -99,79 +120,82 @@ impl ImportTarget for EnvironmentTarget {
     }
 }
 
-impl environment::Host for Gate<'_> {
-    fn get_environment(&mut self) -> wasmtime::Result<Vec<(String, String)>> {
-        decode_environment(&self.call("get-environment", EnvironmentOperation::Variables)?)
-    }
-
-    fn get_arguments(&mut self) -> wasmtime::Result<Vec<String>> {
-        let values = self.call("get-arguments", EnvironmentOperation::Arguments)?;
-        let [Val::List(values)] = values.as_slice() else {
-            return Err(wasmtime::Error::msg(
-                "get-arguments returned the wrong shape",
-            ));
-        };
-        values
-            .iter()
-            .map(|value| match value {
-                Val::String(value) => Ok(value.clone()),
-                _ => Err(wasmtime::Error::msg("argument is not a string")),
-            })
-            .collect()
-    }
-
-    fn initial_cwd(&mut self) -> wasmtime::Result<Option<String>> {
-        let values = self.call("initial-cwd", EnvironmentOperation::InitialCwd)?;
-        match values.as_slice() {
-            [Val::Option(Some(value))] => match value.as_ref() {
-                Val::String(value) => Ok(Some(value.clone())),
-                _ => Err(wasmtime::Error::msg("initial-cwd is not a string")),
-            },
-            [Val::Option(None)] => Ok(None),
-            _ => Err(wasmtime::Error::msg("initial-cwd returned the wrong shape")),
-        }
-    }
+pub(crate) fn add_gates(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    add_environment_gate(linker)?;
+    clocks::add_wall_clock_gate(linker)
 }
 
-impl Gate<'_> {
-    fn dispatch(
-        &mut self,
-        interface: impl Into<Arc<str>>,
-        function: impl Into<Arc<str>>,
-        args: Vals,
-        target: Arc<dyn ImportTarget>,
-    ) -> wasmtime::Result<Vals> {
-        futures::executor::block_on(self.0.imports.call_engine(
-            self.0.context.clone(),
-            self.0.component.clone(),
-            interface.into(),
-            function.into(),
+fn add_environment_gate(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    let mut instance = linker.instance(INTERFACE)?;
+    instance.func_wrap_async("get-environment", |mut store, (): ()| {
+        Box::new(async move {
+            let values = call_environment(
+                &mut store,
+                "get-environment",
+                EnvironmentOperation::Variables,
+            )
+            .await?;
+            Ok((decode_environment(&values)?,))
+        })
+    })?;
+    instance.func_wrap_async("get-arguments", |mut store, (): ()| {
+        Box::new(async move {
+            let values =
+                call_environment(&mut store, "get-arguments", EnvironmentOperation::Arguments)
+                    .await?;
+            Ok((decode_arguments(&values)?,))
+        })
+    })?;
+    instance.func_wrap_async("initial-cwd", |mut store, (): ()| {
+        Box::new(async move {
+            let values =
+                call_environment(&mut store, "initial-cwd", EnvironmentOperation::InitialCwd)
+                    .await?;
+            Ok((decode_initial_cwd(&values)?,))
+        })
+    })
+}
+
+async fn call_environment(
+    store: &mut StoreContextMut<'_, StoreData>,
+    function: &'static str,
+    operation: EnvironmentOperation,
+) -> wasmtime::Result<Vals> {
+    let target = {
+        let mut context = store.as_context_mut();
+        let data = context.data_mut();
+        Arc::new(EnvironmentTarget(data.gated_wasi.clone(), operation))
+    };
+    dispatch(store, INTERFACE, function, Vec::new(), target).await
+}
+
+pub(super) async fn dispatch(
+    store: &mut StoreContextMut<'_, StoreData>,
+    interface: &'static str,
+    function: &'static str,
+    args: Vals,
+    target: Arc<dyn ImportTarget>,
+) -> wasmtime::Result<Vals> {
+    let (imports, context, component) = {
+        let mut store = store.as_context_mut();
+        let data = store.data_mut();
+        (
+            data.imports.clone(),
+            data.context.clone(),
+            data.component.clone(),
+        )
+    };
+    imports
+        .call_engine(
+            context,
+            component,
+            Arc::from(interface),
+            Arc::from(function),
             args,
             target,
-        ))
-        .map_err(wasmtime::Error::new)
-    }
-
-    fn call(
-        &mut self,
-        function: &'static str,
-        operation: EnvironmentOperation,
-    ) -> wasmtime::Result<Vals> {
-        self.dispatch(
-            INTERFACE,
-            function,
-            Vec::new(),
-            Arc::new(EnvironmentTarget(self.0.gated_wasi.clone(), operation)),
         )
-    }
-}
-
-pub(crate) fn add_gates(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
-    linker.allow_shadowing(true);
-    let result = environment::add_to_linker::<StoreData, GateData>(linker, project)
-        .and_then(|()| clocks::add_wall_clock_gate(linker));
-    linker.allow_shadowing(false);
-    result
+        .await
+        .map_err(wasmtime::Error::new)
 }
 
 fn decode_environment(values: &[Val]) -> wasmtime::Result<Vec<(String, String)>> {
@@ -192,6 +216,32 @@ fn decode_environment(values: &[Val]) -> wasmtime::Result<Vec<(String, String)>>
             _ => Err(wasmtime::Error::msg("environment entry is not a tuple")),
         })
         .collect()
+}
+
+fn decode_arguments(values: &[Val]) -> wasmtime::Result<Vec<String>> {
+    let [Val::List(values)] = values else {
+        return Err(wasmtime::Error::msg(
+            "get-arguments returned the wrong shape",
+        ));
+    };
+    values
+        .iter()
+        .map(|value| match value {
+            Val::String(value) => Ok(value.clone()),
+            _ => Err(wasmtime::Error::msg("argument is not a string")),
+        })
+        .collect()
+}
+
+fn decode_initial_cwd(values: &[Val]) -> wasmtime::Result<Option<String>> {
+    match values {
+        [Val::Option(Some(value))] => match value.as_ref() {
+            Val::String(value) => Ok(Some(value.clone())),
+            _ => Err(wasmtime::Error::msg("initial-cwd is not a string")),
+        },
+        [Val::Option(None)] => Ok(None),
+        _ => Err(wasmtime::Error::msg("initial-cwd returned the wrong shape")),
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
