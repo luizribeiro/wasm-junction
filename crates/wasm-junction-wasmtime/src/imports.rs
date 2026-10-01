@@ -5,7 +5,7 @@ use wasmtime::AsContextMut;
 use wasmtime::bail;
 use wasmtime::component::types::ComponentItem;
 use wasmtime::component::{
-    Component, Linker, LinkerInstance, ResourceAny, ResourceType, Type, Val as WasmtimeVal,
+    Component, Linker, LinkerInstance, ResourceType, Type, Val as WasmtimeVal,
 };
 
 use crate::engine::{StoreData, lift_resource, lower_resource};
@@ -129,8 +129,10 @@ fn define_concurrent(
         let function = function.clone();
         let result_types = ty.results().collect::<Vec<_>>();
         Box::pin(async move {
-            let args = convert_params(params, &mut |resource| {
-                accessor.with(|store| lift_resource(resource, store))
+            let args = convert_params(params, &mut |value| {
+                from_wasmtime(value, &mut |resource| {
+                    accessor.with(|store| lift_resource(resource, store))
+                })
             })?;
             let (imports, context, component) = accessor.with(|mut store| {
                 let data = store.get();
@@ -168,8 +170,10 @@ fn define_plain(
         let function = function.clone();
         let result_types = ty.results().collect::<Vec<_>>();
         Box::new(async move {
-            let args = convert_params(params, &mut |resource| {
-                lift_resource(resource, store.as_context_mut())
+            let args = convert_params(params, &mut |value| {
+                from_wasmtime(value, &mut |resource| {
+                    lift_resource(resource, store.as_context_mut())
+                })
             })?;
             let (imports, context, component) = {
                 let mut store = store.as_context_mut();
@@ -196,13 +200,9 @@ fn define_plain(
 
 fn convert_params(
     params: &[WasmtimeVal],
-    resource: &mut impl FnMut(ResourceAny) -> Result<Resource, wasmtime::Error>,
+    convert: &mut impl FnMut(WasmtimeVal) -> Result<Val, wasmtime::Error>,
 ) -> Result<Vals, wasmtime::Error> {
-    params
-        .iter()
-        .cloned()
-        .map(|value| from_wasmtime(value, resource))
-        .collect()
+    params.iter().cloned().map(convert).collect()
 }
 
 async fn call(
