@@ -47,16 +47,11 @@ impl audit::Host for Audit {
         let request = cx
             .extensions()
             .get::<RequestId>()
-            .map_or_else(|| "?".to_owned(), |request| request.0.to_string());
+            .ok_or_else(|| CallError::refused("audit requires a request id"))?
+            .0;
         loop {
-            let bytes = match lines.read().await {
-                Ok(Some(bytes)) => bytes,
-                Ok(None) => break,
-                Err(error) => {
-                    self.lines()
-                        .push(format!("[request {request}] log truncated: {error}"));
-                    break;
-                }
+            let Some(bytes) = lines.read().await? else {
+                break;
             };
             let text = match String::from_utf8(bytes) {
                 Ok(text) => text,
