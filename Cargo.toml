@@ -5,6 +5,7 @@ members = [
   "crates/wasm-junction-conformance",
   "crates/wasm-junction-core",
   "crates/wasm-junction-guest-build",
+  "crates/wasm-junction-jco",
   "crates/wasm-junction-macros",
   "crates/wasm-junction-wasmtime",
   "examples/greeter",
