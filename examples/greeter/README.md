@@ -16,8 +16,8 @@ The files are intentionally self-contained:
   component world.
 - `guest/` is an isolated Rust workspace for the component implementation.
 - `build.rs` builds that guest for `wasm32-unknown-unknown` and componentizes it without WASI.
-- `src/bindings.rs` contains temporary hand-written bindings. A single
-  `wasm_junction::bindgen!` invocation will replace them once the macro exists.
+- `src/bindings.rs` generates the host traits, providers, typed call views, and typed handles from
+  the WIT package with `wasm_junction::bindgen!`.
 - `src/trace.rs` is the example's tracing middleware.
 - `src/main.rs` uses Tokio to provide users, build the app, load the component, and make typed
   calls.
