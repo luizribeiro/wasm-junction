@@ -1,30 +1,39 @@
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use wasm_junction::{Call, CallError, Event, Middleware, Next, ResourceOwnership, Val, Vals};
+use wasm_junction::{
+    Call, CallError, ChannelDirection, Event, Middleware, Next, ResourceOwnership, Val, Vals,
+};
 
 use crate::{SessionId, TranslatorHop};
 
+#[derive(Default)]
+struct TraceState {
+    entries: Vec<String>,
+    streams: HashMap<u64, usize>,
+}
+
 /// Middleware that records calls, returns, traps, and invocation boundaries.
 #[derive(Clone, Default)]
-pub struct Trace(Arc<Mutex<Vec<String>>>);
+pub struct Trace(Arc<Mutex<TraceState>>);
 
 impl Trace {
     /// Returns a snapshot of the recorded entries.
     #[must_use]
     pub fn entries(&self) -> Vec<String> {
-        self.lock().clone()
+        self.lock().entries.clone()
     }
 
     /// Removes all recorded entries.
     pub fn clear(&self) {
-        self.lock().clear();
+        *self.lock() = TraceState::default();
     }
 
     fn record(&self, entry: String) {
-        self.lock().push(entry);
+        self.lock().entries.push(entry);
     }
 
-    fn lock(&self) -> MutexGuard<'_, Vec<String>> {
+    fn lock(&self) -> MutexGuard<'_, TraceState> {
         match self.0.lock() {
             Ok(entries) => entries,
             Err(poisoned) => poisoned.into_inner(),
@@ -62,8 +71,29 @@ impl Middleware for Trace {
                 resource,
                 id,
             } => self.record(format!("resource drop {interface}/{resource}#{id}")),
+            Event::ChannelOpen { stream, direction } => {
+                self.channel("open", *stream, *direction);
+            }
+            Event::ChannelClose { stream, direction } => {
+                self.channel("close", *stream, *direction);
+            }
             _ => {}
         }
+    }
+}
+
+impl Trace {
+    fn channel(&self, action: &str, stream: u64, direction: ChannelDirection) {
+        let mut state = self.lock();
+        let next = state.streams.len();
+        let label = *state.streams.entry(stream).or_insert(next);
+        let direction = match direction {
+            ChannelDirection::HostToGuest => "host-to-guest",
+            ChannelDirection::GuestToHost => "guest-to-host",
+        };
+        state
+            .entries
+            .push(format!("channel {action} stream#{label} {direction}"));
     }
 }
 
@@ -134,6 +164,7 @@ fn val(value: &Val) -> String {
             resource.name(),
             resource.id()
         ),
+        Val::Stream(_) => "stream".to_owned(),
         _ => format!("{value:?}"),
     }
 }
@@ -247,5 +278,25 @@ mod tests {
         assert!(val(&sample_summary()).starts_with("ok({text:"));
         assert_eq!(EXPECTED_TRACE.len(), 12);
         assert_eq!(EXPECTED_RESOURCE_TRACE.len(), 13);
+    }
+
+    #[test]
+    fn channel_trace_correlates_opaque_ids_with_stable_labels() {
+        let trace = Trace::default();
+        trace.event(&Event::ChannelOpen {
+            stream: 91,
+            direction: ChannelDirection::HostToGuest,
+        });
+        trace.event(&Event::ChannelClose {
+            stream: 91,
+            direction: ChannelDirection::HostToGuest,
+        });
+        assert_eq!(
+            trace.entries(),
+            [
+                "channel open stream#0 host-to-guest",
+                "channel close stream#0 host-to-guest",
+            ]
+        );
     }
 }
