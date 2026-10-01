@@ -11,11 +11,11 @@ use wasm_junction::{
 
 use crate::host::summary;
 use crate::{
-    EXPECTED_RESOURCE_TRACE, EXPECTED_ROUTED_TRACE, EXPECTED_STREAM_TRACE, EXPECTED_TRACE,
-    FixtureHost, RELOAD_GREETER, RELOAD_WRITER, RESOURCE_CLIENT, RESOURCE_HOST, ReloadGreeter,
-    ReloadHost, ResourceHost, RoutedHost, STREAM_PROBE, SUMMARIZER, SessionId, StreamHost, Trace,
-    component, reload_breaking_component, reload_v1_component, reload_v2_component,
-    reload_writer_component, resource_component, stream_component, summarizer,
+    EXPECTED_RELOAD_TRACE, EXPECTED_RESOURCE_TRACE, EXPECTED_ROUTED_TRACE, EXPECTED_STREAM_TRACE,
+    EXPECTED_TRACE, FixtureHost, RELOAD_GREETER, RELOAD_WRITER, RESOURCE_CLIENT, RESOURCE_HOST,
+    ReloadGreeter, ReloadHost, ResourceHost, RoutedHost, STREAM_PROBE, SUMMARIZER, SessionId,
+    StreamHost, Trace, component, reload_breaking_component, reload_v1_component,
+    reload_v2_component, reload_writer_component, resource_component, stream_component, summarizer,
     translator_component, writer, writer_component,
 };
 
@@ -499,6 +499,12 @@ pub async fn run_reload(engine: impl Engine + 'static) -> Result<(), FixtureErro
     app.unload_force("greeter")
         .await
         .map_err(FixtureError::source)?;
+    if trace.entries() != EXPECTED_RELOAD_TRACE {
+        return Err(FixtureError::new(format!(
+            "unexpected reload trace: {:#?}",
+            trace.entries()
+        )));
+    }
     Ok(())
 }
 

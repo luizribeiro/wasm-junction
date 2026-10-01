@@ -251,6 +251,39 @@ pub const EXPECTED_TRACE: &[&str] = &[
     "invocation end summarizer",
 ];
 
+/// Exact trace produced by the reload scenario.
+pub const EXPECTED_RELOAD_TRACE: &[&str] = &[
+    "load greeter [example:reload/greeter@0.1.0, example:reload/legacy@0.1.0]",
+    "load writer [example:reload/writer@0.1.0]",
+    "invocation start greeter",
+    "call host → greeter example:reload/greeter@0.1.0.greet-slow(\"Ada\")",
+    "invocation start host",
+    "call greeter → host example:reload/gate@0.1.0.wait()",
+    "reload greeter [example:reload/greeter@0.1.0, example:reload/legacy@0.1.0] -> [example:reload/greeter@0.1.0, example:reload/legacy@0.1.0]",
+    "invocation start greeter",
+    "call host → greeter example:reload/greeter@0.1.0.greet(\"Bob\")",
+    "return host → greeter example:reload/greeter@0.1.0.greet(\"v2: hello, Bob\")",
+    "invocation end greeter",
+    "invocation start writer",
+    "call host → writer example:reload/writer@0.1.0.write(\"Lin\")",
+    "invocation start greeter",
+    "call writer → greeter example:reload/greeter@0.1.0.greet(\"Lin\")",
+    "return writer → greeter example:reload/greeter@0.1.0.greet(\"v2: hello, Lin\")",
+    "invocation end greeter",
+    "return host → writer example:reload/writer@0.1.0.write(\"v2: hello, Lin\")",
+    "invocation end writer",
+    "return greeter → host example:reload/gate@0.1.0.wait()",
+    "invocation end host",
+    "return host → greeter example:reload/greeter@0.1.0.greet-slow(\"v1: hello, Ada\")",
+    "invocation end greeter",
+    "reload greeter [example:reload/greeter@0.1.0, example:reload/legacy@0.1.0] -> [example:reload/legacy@0.1.0]",
+    "invocation start writer",
+    "call host → writer example:reload/writer@0.1.0.write(\"Eve\")",
+    "trap host → writer example:reload/writer@0.1.0.write(linked component `greeter` no longer exports `example:reload/greeter@0.1.0`)",
+    "invocation end writer",
+    "unload greeter",
+];
+
 /// Exact trace produced by the successful routed-call scenario.
 pub const EXPECTED_ROUTED_TRACE: &[&str] = &[
     "invocation start writer",

@@ -25,7 +25,8 @@ pub use runner::{
 };
 pub use stream_host::StreamHost;
 pub use trace::{
-    EXPECTED_RESOURCE_TRACE, EXPECTED_ROUTED_TRACE, EXPECTED_STREAM_TRACE, EXPECTED_TRACE, Trace,
+    EXPECTED_RELOAD_TRACE, EXPECTED_RESOURCE_TRACE, EXPECTED_ROUTED_TRACE, EXPECTED_STREAM_TRACE,
+    EXPECTED_TRACE, Trace,
 };
 
 /// The fixture's types-only interface.
