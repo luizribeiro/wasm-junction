@@ -4,8 +4,10 @@ mod support;
 
 use std::sync::Arc;
 
-use support::{GenerationEngine, GenerationState, block_on, component_bytes};
-use wasm_junction::{App, Component, Val};
+use support::{
+    FakeEngine, GenerationEngine, GenerationState, block_on, component_bytes, component_bytes_from,
+};
+use wasm_junction::{App, Component, ReloadError, Val};
 
 const TRANSLATOR: &str = "example:translate/translator@1.0.0";
 const TRANSLATOR_WIT: &str = r"
@@ -13,9 +15,34 @@ const TRANSLATOR_WIT: &str = r"
     interface translator { translate: func(text: string) -> string; }
     world service { export translator; }
 ";
+const TRANSLATOR_V0_WIT: &str = r"
+    package example:translate@0.1.7;
+    interface translator { translate: func(text: string) -> string; }
+    world service { export translator; }
+";
+const TRANSLATOR_API_WIT: &str = r"
+    package example:translate@0.1.0;
+    interface translator { translate: func(text: string) -> string; }
+";
+const WRITER_WIT: &str = r"
+    package example:writer@1.0.0;
+    interface article { write: func(text: string) -> string; }
+    world writer { import example:translate/translator@0.1.0; export article; }
+";
 
 fn component() -> Component {
     Component::from_bytes(component_bytes(TRANSLATOR_WIT, "service")).unwrap()
+}
+
+fn writer() -> Component {
+    Component::from_bytes(component_bytes_from(
+        &[
+            ("translator.wit", TRANSLATOR_API_WIT),
+            ("writer.wit", WRITER_WIT),
+        ],
+        "example:writer/writer@1.0.0",
+    ))
+    .unwrap()
 }
 
 #[test]
@@ -42,5 +69,45 @@ fn in_flight_calls_pin_the_old_generation_until_they_finish() {
     assert_eq!(
         block_on(app.call("translator", TRANSLATOR, "translate", Vec::new())).unwrap(),
         [Val::from("new")]
+    );
+    assert!(matches!(
+        block_on(app.reload("translator", writer())).unwrap_err(),
+        ReloadError::MissingImports(_)
+    ));
+}
+
+#[test]
+fn reload_checks_imports_and_preserves_compatible_links() {
+    let app = App::builder().engine(FakeEngine).build().unwrap();
+    block_on(
+        app.load(
+            Component::from_bytes(component_bytes(TRANSLATOR_V0_WIT, "service"))
+                .unwrap()
+                .named("one"),
+        ),
+    )
+    .unwrap();
+    block_on(app.load(writer().named("writer"))).unwrap();
+    app.link("writer", "example:translate/translator@0.1.0", "one")
+        .unwrap();
+    block_on(
+        app.load(
+            Component::from_bytes(component_bytes(TRANSLATOR_V0_WIT, "service"))
+                .unwrap()
+                .named("two"),
+        ),
+    )
+    .unwrap();
+
+    block_on(app.reload("writer", writer())).unwrap();
+    assert_eq!(
+        block_on(app.call(
+            "writer",
+            "example:writer/article@1.0.0",
+            "write",
+            vec![Val::from("hello")],
+        ))
+        .unwrap(),
+        [Val::from("translated: hello")]
     );
 }

@@ -1031,6 +1031,8 @@ pub enum ReloadError {
     UnknownComponent(String),
     /// Exported interfaces define resources, which cannot yet be routed between components.
     ResourceExports(Vec<String>),
+    /// One or more imported interfaces have no unique provider.
+    MissingImports(MissingImports),
     /// The selected engine could not compile the replacement.
     Compile(EngineError),
 }
@@ -1044,6 +1046,7 @@ impl Display for ReloadError {
                 "component exports unsupported resources in: {}",
                 interfaces.join(", ")
             ),
+            Self::MissingImports(error) => Display::fmt(error, formatter),
             Self::Compile(error) => write!(formatter, "component compilation failed: {error}"),
         }
     }
@@ -1052,6 +1055,7 @@ impl Display for ReloadError {
 impl Error for ReloadError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::MissingImports(error) => Some(error),
             Self::Compile(error) => Some(error),
             Self::UnknownComponent(_) | Self::ResourceExports(_) => None,
         }
