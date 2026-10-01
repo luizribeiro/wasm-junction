@@ -49,3 +49,28 @@ world notes-summary {
   import notes;
   export summarizer;
 }
+
+interface decoration {
+  decorate: func(text: string) -> string;
+  decorate-async: async func(text: string) -> string;
+}
+
+interface translator {
+  translate: func(text: string) -> string;
+  translate-async: async func(text: string) -> string;
+}
+
+interface writer {
+  write: func(text: string) -> string;
+  write-async: async func(text: string) -> string;
+}
+
+world writer-component {
+  import translator;
+  export writer;
+}
+
+world translator-component {
+  import decoration;
+  export translator;
+}

@@ -9,5 +9,11 @@ fn main() -> std::io::Result<()> {
         "guest/Cargo.toml",
         "notes_summary_guest.wasm",
         "notes-summary.wasm",
-    )
+    )?;
+    build(
+        "guest/Cargo.toml",
+        "translator_guest.wasm",
+        "translator.wasm",
+    )?;
+    build("guest/Cargo.toml", "writer_guest.wasm", "writer.wasm")
 }

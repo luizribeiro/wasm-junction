@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["notes-summary"]
+members = ["notes-summary", "translator", "writer"]
 
 [workspace.package]
 edition = "2024"

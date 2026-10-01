@@ -189,6 +189,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "translator-guest"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen",
+]
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -317,6 +324,13 @@ dependencies = [
  "serde_json",
  "unicode-ident",
  "wasmparser",
+]
+
+[[package]]
+name = "writer-guest"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen",
 ]
 
 [[package]]
