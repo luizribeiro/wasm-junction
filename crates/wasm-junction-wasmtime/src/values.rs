@@ -39,6 +39,19 @@ pub(crate) fn from_wasmtime(value: WasmtimeVal) -> Result<Val, wasmtime::Error> 
         }),
         WasmtimeVal::Enum(case) => Ok(Val::Enum(case)),
         WasmtimeVal::Flags(names) => Ok(Val::Flags(names)),
+        WasmtimeVal::Option(value) => Ok(Val::Option(
+            value
+                .map(|value| from_wasmtime(*value).map(Box::new))
+                .transpose()?,
+        )),
+        WasmtimeVal::Result(result) => Ok(Val::Result(match result {
+            Ok(value) => Ok(value
+                .map(|value| from_wasmtime(*value).map(Box::new))
+                .transpose()?),
+            Err(value) => Err(value
+                .map(|value| from_wasmtime(*value).map(Box::new))
+                .transpose()?),
+        })),
         other => Err(wasmtime::Error::msg(format!(
             "unsupported component value: {other:?}"
         ))),
@@ -75,6 +88,19 @@ pub(crate) fn to_wasmtime(value: Val) -> Result<WasmtimeVal, wasmtime::Error> {
         )),
         Val::Enum(case) => Ok(WasmtimeVal::Enum(case)),
         Val::Flags(names) => Ok(WasmtimeVal::Flags(names)),
+        Val::Option(value) => Ok(WasmtimeVal::Option(
+            value
+                .map(|value| to_wasmtime(*value).map(Box::new))
+                .transpose()?,
+        )),
+        Val::Result(result) => Ok(WasmtimeVal::Result(match result {
+            Ok(value) => Ok(value
+                .map(|value| to_wasmtime(*value).map(Box::new))
+                .transpose()?),
+            Err(value) => Err(value
+                .map(|value| to_wasmtime(*value).map(Box::new))
+                .transpose()?),
+        })),
         other => Err(wasmtime::Error::msg(format!(
             "unsupported framework value: {other:?}"
         ))),
@@ -88,6 +114,7 @@ fn convert_values(values: Vec<Val>) -> Result<Vec<WasmtimeVal>, wasmtime::Error>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wasm_junction_conformance::sample_note;
 
     fn round_trip(value: Val) -> Val {
         from_wasmtime(to_wasmtime(value).unwrap()).unwrap()
@@ -162,5 +189,23 @@ mod tests {
         for value in values {
             assert_eq!(round_trip(value.clone()), value);
         }
+    }
+
+    #[test]
+    fn option_and_payload_free_results_round_trip() {
+        let values = [
+            Val::Option(None),
+            Val::Result(Err(None)),
+            Val::Result(Ok(None)),
+        ];
+        for value in values {
+            assert_eq!(round_trip(value.clone()), value);
+        }
+    }
+
+    #[test]
+    fn every_plain_shape_round_trips_both_converters() {
+        let note = sample_note();
+        assert_eq!(round_trip(note.clone()), note);
     }
 }
