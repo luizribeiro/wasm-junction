@@ -25,6 +25,18 @@ jobs:
         run: nix develop -c pre-commit run --all-files --show-diff-on-failure
       - name: Check generated bindings for wasm32
         run: nix develop -c cargo check -p wasm-junction --test bindgen_calls --test bindgen_handles --test bindgen_resources --test bindgen_streams --test bindgen_with --target wasm32-unknown-unknown --no-default-features --locked
+      - name: Read Playwright version
+        id: playwright
+        run: |
+          version="$(nix develop -c sh -c 'node "$PLAYWRIGHT_NODE_PATH/cli.js" --version')"
+          echo "version=${version#Version }" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+      - name: Install Playwright browsers and system dependencies
+        run: nix develop -c sh -c 'node "$PLAYWRIGHT_NODE_PATH/cli.js" install --with-deps chromium firefox webkit'
       - name: Run pre-push hooks
         run: nix develop -c pre-commit run --all-files --hook-stage pre-push --show-diff-on-failure
       - name: Test without the default engine
