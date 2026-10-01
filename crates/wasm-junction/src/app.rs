@@ -90,7 +90,10 @@ impl App {
             resource_exports,
         } = component.into_parts();
         let name = name.ok_or(LoadError::UnnamedComponent)?;
-        reject_resource_exports(resource_exports)?;
+        let resource_exports = sorted_resource_exports(resource_exports);
+        if !resource_exports.is_empty() {
+            return Err(LoadError::ResourceExports(resource_exports));
+        }
         self.validate_load(&name, &imports, &exports, &self.lock_components())?;
         let compiled = self
             .0
@@ -142,7 +145,10 @@ impl App {
                 exports,
                 resource_exports,
             } = component.into_parts();
-            reject_resource_exports(resource_exports)?;
+            let resource_exports = sorted_resource_exports(resource_exports);
+            if !resource_exports.is_empty() {
+                return Err(LoadError::ResourceExports(resource_exports));
+            }
             pending.push(PendingComponent {
                 bytes,
                 name: name.ok_or(LoadError::UnnamedComponent)?,
@@ -1121,13 +1127,10 @@ impl Error for LoadError {
     }
 }
 
-fn reject_resource_exports(mut interfaces: Vec<String>) -> Result<(), LoadError> {
-    if interfaces.is_empty() {
-        return Ok(());
-    }
+fn sorted_resource_exports(mut interfaces: Vec<String>) -> Vec<String> {
     interfaces.sort();
     interfaces.dedup();
-    Err(LoadError::ResourceExports(interfaces))
+    interfaces
 }
 
 /// A failure to replace one or more loaded components.

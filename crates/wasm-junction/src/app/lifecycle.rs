@@ -4,6 +4,7 @@ use std::sync::Arc;
 use super::{
     App, Candidate, Generation, LoadedComponent, MissingImports, ReloadError, ResolutionIssue,
     UnloadError, interfaces_compatible, lock_or_recover, resolution_candidates_excluding,
+    sorted_resource_exports,
 };
 use crate::Component;
 use crate::component::ComponentParts;
@@ -288,12 +289,11 @@ fn pending_reload(name: String, component: Component) -> Result<PendingReload, R
         bytes,
         imports,
         exports,
-        mut resource_exports,
+        resource_exports,
         ..
     } = component.into_parts();
+    let resource_exports = sorted_resource_exports(resource_exports);
     if !resource_exports.is_empty() {
-        resource_exports.sort();
-        resource_exports.dedup();
         return Err(ReloadError::ResourceExports(resource_exports));
     }
     Ok(PendingReload {
