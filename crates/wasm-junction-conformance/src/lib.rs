@@ -114,6 +114,18 @@ pub fn reload_v2_component() -> &'static [u8] {
     include_bytes!(concat!(env!("OUT_DIR"), "/reload-v2.wasm"))
 }
 
+/// Returns a reload fixture generation without the greeter interface.
+#[must_use]
+pub fn reload_breaking_component() -> &'static [u8] {
+    include_bytes!(concat!(env!("OUT_DIR"), "/reload-breaking.wasm"))
+}
+
+/// Returns the reload fixture's routed caller.
+#[must_use]
+pub fn reload_writer_component() -> &'static [u8] {
+    include_bytes!(concat!(env!("OUT_DIR"), "/reload-writer.wasm"))
+}
+
 #[cfg(test)]
 mod tests {
     use wasm_junction::Component;

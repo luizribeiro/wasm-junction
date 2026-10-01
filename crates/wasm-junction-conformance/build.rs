@@ -31,6 +31,8 @@ fn main() -> std::io::Result<()> {
     for (binary, output) in [
         ("reload_v1_guest.wasm", "reload-v1.wasm"),
         ("reload_v2_guest.wasm", "reload-v2.wasm"),
+        ("reload_breaking_guest.wasm", "reload-breaking.wasm"),
+        ("reload_writer_guest.wasm", "reload-writer.wasm"),
     ] {
         build("guest/Cargo.toml", binary, output)?;
     }

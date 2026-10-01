@@ -1,8 +1,8 @@
 [workspace]
 resolver = "3"
 members = [
-  "cycle-a", "cycle-b", "notes-summary", "reload-v1", "reload-v2", "resource-client",
-  "streams", "translator", "writer",
+  "cycle-a", "cycle-b", "notes-summary", "reload-breaking", "reload-v1", "reload-v2",
+  "reload-writer", "resource-client", "streams", "translator", "writer",
 ]
 
 [workspace.package]
