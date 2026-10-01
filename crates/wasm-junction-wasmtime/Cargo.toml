@@ -1,0 +1,19 @@
+[package]
+name = "wasm-junction-wasmtime"
+description = "Wasmtime engine for wasm-junction"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+wasm-junction = { path = "../wasm-junction", version = "=0.0.0" }
+wasmtime = { version = "=49.0.1", default-features = false, features = ["component-model-async", "cranelift", "runtime", "std"] }
+
+[dev-dependencies]
+wasm-junction-conformance = { path = "../wasm-junction-conformance", version = "=0.0.0" }

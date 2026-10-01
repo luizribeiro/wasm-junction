@@ -1,6 +1,10 @@
 [workspace]
 resolver = "3"
-members = ["crates/wasm-junction", "crates/wasm-junction-conformance"]
+members = [
+  "crates/wasm-junction",
+  "crates/wasm-junction-conformance",
+  "crates/wasm-junction-wasmtime",
+]
 
 [workspace.package]
 edition = "2024"
