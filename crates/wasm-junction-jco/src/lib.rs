@@ -10,9 +10,6 @@ mod types;
 #[cfg(target_family = "wasm")]
 mod values;
 
-#[cfg(all(test, target_family = "wasm"))]
-wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_dedicated_worker);
-
 #[derive(Debug)]
 struct TranspiledComponent {
     source: String,

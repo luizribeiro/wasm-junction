@@ -4,9 +4,14 @@
 
 use js_sys::Uint8Array;
 use wasm_bindgen::prelude::*;
+use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 use wasm_encoder::{CodeSection, EntityType, ExportKind, ExportSection, Function, FunctionSection};
 use wasm_encoder::{ImportSection, Instruction, Module, TypeSection, ValType};
+use wasm_junction::{App, BoxFuture, Call, CallContext, CallError, Component, Provided, Provider};
+use wasm_junction::{Val, Vals};
+use wasm_junction_conformance::{DECORATION, TRANSLATOR, translator_component};
+use wasm_junction_jco::JcoEngine;
 
 wasm_bindgen_test_configure!(run_in_dedicated_worker);
 
@@ -23,10 +28,16 @@ export async function jspiSmoke(bytes) {
   });
   return WebAssembly.promising(instance.exports.run)();
 }
+
+export function delay(milliseconds) {
+  return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
 "#)]
 extern "C" {
     #[wasm_bindgen(catch, js_name = jspiSmoke)]
     async fn jspi_smoke(bytes: Uint8Array) -> Result<JsValue, JsValue>;
+
+    fn delay(milliseconds: u32) -> js_sys::Promise;
 }
 
 #[wasm_bindgen_test]
@@ -35,6 +46,51 @@ async fn suspends_and_resumes_a_core_wasm_call() {
         .await
         .unwrap();
     assert_eq!(result.as_f64(), Some(42.0));
+}
+
+#[wasm_bindgen_test]
+async fn awaits_an_import_and_uses_a_fresh_instance() {
+    let engine = JcoEngine::new();
+    let app = App::builder()
+        .engine(engine.clone())
+        .provide(Provided::new(DECORATION, DelayedDecoration))
+        .build()
+        .unwrap();
+    app.load(
+        Component::from_bytes(translator_component())
+            .unwrap()
+            .named("translator"),
+    )
+    .await
+    .unwrap();
+    for text in ["first", "second"] {
+        let result = app
+            .call("translator", TRANSLATOR, "translate", vec![Val::from(text)])
+            .await
+            .unwrap();
+        assert_eq!(result, [Val::from(format!("host: {text} #1"))]);
+    }
+    assert_eq!(engine.instantiations(), 2);
+}
+
+struct DelayedDecoration;
+
+impl Provider for DelayedDecoration {
+    fn call<'a>(
+        &'a self,
+        _context: &'a CallContext,
+        call: Call,
+    ) -> BoxFuture<'a, Result<Vals, CallError>> {
+        Box::pin(async move {
+            let [Val::String(text)] = call.args.as_slice() else {
+                return Err(CallError::trap("decoration expected one string"));
+            };
+            JsFuture::from(delay(10))
+                .await
+                .map_err(|error| CallError::trap(format!("timer failed: {error:?}")))?;
+            Ok(vec![Val::from(format!("host: {text}"))])
+        })
+    }
 }
 
 fn jspi_module() -> Vec<u8> {

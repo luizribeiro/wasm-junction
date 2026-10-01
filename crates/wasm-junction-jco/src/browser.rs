@@ -3,13 +3,15 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use js_sys::{Array, Uint8Array};
-use wasm_bindgen::prelude::*;
+use wasm_bindgen::{JsCast, prelude::*};
+use wasm_bindgen_futures::future_to_promise;
 use wasm_junction_core::{
     BoxFuture, CallError, CompiledComponent, Engine, EngineError, ImportDispatcher,
     InvocationContext, Vals, WasiConfig,
 };
 
 use crate::types::Signatures;
+use crate::values::{lift_args, lift_result, lower_args, lower_result};
 use crate::{TranspiledComponent, transpile_component};
 
 #[wasm_bindgen(module = "/js/adapter.js")]
@@ -19,6 +21,15 @@ extern "C" {
         source: &str,
         names: &Array,
         modules: &Array,
+    ) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(catch)]
+    async fn invoke(
+        runtime: &JsValue,
+        interface: &str,
+        function: &str,
+        args: &Array,
+        dispatch: &js_sys::Function,
     ) -> Result<JsValue, JsValue>;
 }
 
@@ -73,30 +84,99 @@ async fn compile(
     Ok(Arc::new(BrowserCompiled {
         runtime,
         signatures: plan.signatures,
-        _instantiations: instantiations,
+        instantiations,
     }))
 }
 
 struct BrowserCompiled {
     runtime: JsValue,
     signatures: Signatures,
-    _instantiations: Rc<Cell<u64>>,
+    instantiations: Rc<Cell<u64>>,
 }
 
 impl CompiledComponent for BrowserCompiled {
     fn call(
         &self,
-        _imports: Arc<dyn ImportDispatcher>,
-        _context: InvocationContext,
-        _component: Arc<str>,
-        _interface: Arc<str>,
-        _function: Arc<str>,
-        _args: Vals,
+        imports: Arc<dyn ImportDispatcher>,
+        context: InvocationContext,
+        component: Arc<str>,
+        interface: Arc<str>,
+        function: Arc<str>,
+        args: Vals,
     ) -> BoxFuture<'_, Result<Vals, CallError>> {
-        let _ = (&self.runtime, &self.signatures);
-        Box::pin(std::future::ready(Err(CallError::unavailable(
-            "jco export calls are not initialized",
-        ))))
+        let Some(signature) = self.signatures.export(&interface, &function).cloned() else {
+            return Box::pin(std::future::ready(Err(CallError::unavailable(format!(
+                "missing component export `{interface}.{function}`"
+            )))));
+        };
+        let args = lower_args(args, &signature);
+        Box::pin(async move {
+            let args = args?;
+            let bridge = Bridge {
+                imports,
+                context,
+                component,
+                signatures: self.signatures.clone(),
+            };
+            let callback = Closure::wrap(Box::new(
+                move |interface: String, function: String, args: Array| {
+                    let bridge = bridge.clone();
+                    future_to_promise(async move {
+                        bridge
+                            .dispatch(&interface, &function, &args)
+                            .await
+                            .map_err(|error| JsValue::from_str(&error.to_string()))
+                    })
+                },
+            )
+                as Box<dyn Fn(String, String, Array) -> js_sys::Promise>);
+            self.instantiations
+                .set(self.instantiations.get().saturating_add(1));
+            let result = invoke(
+                &self.runtime,
+                &interface,
+                &function,
+                &args,
+                callback.as_ref().unchecked_ref(),
+            )
+            .await
+            .map_err(|error| CallError::trap(js_error(&error)))?;
+            lift_result(result, &signature)
+        })
+    }
+}
+
+#[derive(Clone)]
+struct Bridge {
+    imports: Arc<dyn ImportDispatcher>,
+    context: InvocationContext,
+    component: Arc<str>,
+    signatures: Signatures,
+}
+
+impl Bridge {
+    async fn dispatch(
+        &self,
+        interface: &str,
+        function: &str,
+        args: &Array,
+    ) -> Result<JsValue, CallError> {
+        let (resolved_interface, signature) = self
+            .signatures
+            .import(interface, function)
+            .map_err(CallError::unavailable)?;
+        let args = lift_args(args, signature)?;
+        let result = self
+            .imports
+            .call(
+                self.context.clone(),
+                self.component.clone(),
+                Arc::from(resolved_interface),
+                Arc::from(function),
+                args,
+            )
+            .await?;
+        lower_result(&result, signature)
     }
 }
 
