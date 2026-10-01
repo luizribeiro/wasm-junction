@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use super::{
     App, Candidate, Generation, LoadedComponent, MissingImports, ReloadError, ResolutionIssue,
-    interfaces_compatible, resolution_candidates_excluding,
+    interfaces_compatible, lock_or_recover, resolution_candidates_excluding,
 };
 use crate::Component;
 use crate::component::ComponentParts;
@@ -67,7 +67,9 @@ impl App {
             .get(name)
             .ok_or_else(|| ReloadError::UnknownComponent(name.to_owned()))?;
         let links = retained_links(loaded, imports);
-        let dependents = breaking_dependents(&self.0.providers, components, name, exports);
+        let handles = lock_or_recover(&self.0.handle_counts);
+        let dependents =
+            breaking_dependents(&self.0.providers, components, &handles, name, exports);
         if !dependents.is_empty() {
             return Err(ReloadError::Breaking {
                 component: name.to_owned(),
@@ -149,6 +151,7 @@ impl App {
 fn breaking_dependents(
     providers: &HashMap<&'static str, Arc<dyn crate::Provider>>,
     components: &std::collections::BTreeMap<String, LoadedComponent>,
+    handles: &HashMap<(String, &'static str), usize>,
     name: &str,
     exports: &[String],
 ) -> Vec<String> {
@@ -178,6 +181,19 @@ fn breaking_dependents(
                     .any(|export| interfaces_compatible(interface, export))
             {
                 dependents.push(format!("{consumer} imports `{interface}`"));
+            }
+        }
+    }
+    if let Some(component) = components.get(name) {
+        for ((handle_component, interface), count) in handles {
+            if handle_component == name
+                && *count > 0
+                && component.exports_interface(interface)
+                && !exports
+                    .iter()
+                    .any(|export| interfaces_compatible(interface, export))
+            {
+                dependents.push(format!("host handle for `{name}` uses `{interface}`"));
             }
         }
     }

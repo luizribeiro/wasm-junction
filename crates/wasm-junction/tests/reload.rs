@@ -7,7 +7,11 @@ use std::sync::Arc;
 use support::{
     FakeEngine, GenerationEngine, GenerationState, block_on, component_bytes, component_bytes_from,
 };
-use wasm_junction::{App, Component, ReloadError, Val};
+use wasm_junction::{App, CallContext, Component, ReloadError, Val};
+
+mod handles {
+    wasm_junction::bindgen!({ path: "tests/fixtures/handles/wit" });
+}
 
 const TRANSLATOR: &str = "example:translate/translator@1.0.0";
 const TRANSLATOR_WIT: &str = r"
@@ -180,4 +184,36 @@ fn breaking_reload_names_component_dependents() {
             .iter()
             .any(|item| item.contains("resolved-writer"))
     );
+}
+
+#[test]
+fn derived_typed_handles_share_a_dependency_lease() {
+    let app = App::builder().engine(FakeEngine).build().unwrap();
+    let component = Component::from_bytes(component_bytes(
+        include_str!("fixtures/handles/wit/package.wit"),
+        "plugin",
+    ))
+    .unwrap();
+    block_on(app.load(component.named("journal"))).unwrap();
+    let handle = app.get::<handles::summaries::Summaries>("journal").unwrap();
+    let with_data = handle.with(42_u32);
+    let context = CallContext::for_test("writer");
+    let within_call = handle.within(&context);
+    drop(handle);
+
+    let replacement = || Component::from_bytes(component_bytes(MARKER_WIT, "service")).unwrap();
+    let error = block_on(app.reload("journal", replacement())).unwrap_err();
+    let ReloadError::Breaking { dependents, .. } = error else {
+        panic!("expected the handle to prevent a breaking reload");
+    };
+    assert!(dependents[0].contains("host handle"));
+
+    drop(with_data);
+    assert!(matches!(
+        block_on(app.reload("journal", replacement())),
+        Err(ReloadError::Breaking { .. })
+    ));
+
+    drop(within_call);
+    block_on(app.reload("journal", replacement())).unwrap();
 }
