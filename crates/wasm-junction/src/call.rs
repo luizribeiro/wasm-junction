@@ -1,7 +1,7 @@
 use std::fmt::{self, Display};
 use std::sync::Arc;
 
-use crate::{TypeError, Val, Vals};
+use crate::{Extensions, TypeError, Val, Vals};
 
 /// The origin of an invocation.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -25,7 +25,7 @@ impl Display for Caller {
 ///
 /// Middleware uses the routing fields to identify a call and [`Call::view`] when it knows the
 /// generated binding for a function. Unknown middleware can inspect or replace [`Call::args`].
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct Call {
     /// The host or component that initiated the call.
@@ -38,6 +38,7 @@ pub struct Call {
     pub function: Arc<str>,
     /// The function arguments in declaration order.
     pub args: Vals,
+    extensions: Extensions,
 }
 
 impl Call {
@@ -60,7 +61,37 @@ impl Call {
             interface: interface.into(),
             function: function.into(),
             args,
+            extensions: Extensions::default(),
         }
+    }
+
+    /// Returns the data attached to this call.
+    #[must_use]
+    pub const fn extensions(&self) -> &Extensions {
+        &self.extensions
+    }
+
+    /// Returns the data attached to this call for mutation.
+    ///
+    /// ```
+    /// use wasm_junction::{Call, CallError, Middleware, Next, Vals};
+    ///
+    /// struct SessionId(u64);
+    /// struct AttachSession;
+    ///
+    /// impl Middleware for AttachSession {
+    ///     async fn call(
+    ///         &self,
+    ///         mut call: Call,
+    ///         next: Next,
+    ///     ) -> Result<Vals, CallError> {
+    ///         call.extensions_mut().insert(SessionId(42));
+    ///         next.run(call).await
+    ///     }
+    /// }
+    /// ```
+    pub const fn extensions_mut(&mut self) -> &mut Extensions {
+        &mut self.extensions
     }
 
     /// Decodes this call as `T`, or returns `None` when it names another function.

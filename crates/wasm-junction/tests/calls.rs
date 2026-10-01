@@ -8,7 +8,12 @@ use wasm_junction::{Call, CallError, CallErrorKind, Caller, TypeError, TypedCall
 #[test]
 fn clone_preserves_call_metadata_and_arguments() {
     let call = read_call("daily");
-    assert_eq!(call.clone(), call);
+    let clone = call.clone();
+    assert_eq!(clone.caller, call.caller);
+    assert_eq!(clone.callee, call.callee);
+    assert_eq!(clone.interface, call.interface);
+    assert_eq!(clone.function, call.function);
+    assert_eq!(clone.args, call.args);
     assert_eq!(
         call.to_string(),
         "summarizer → notebook example:journal/notes@0.1.0.read"
@@ -63,12 +68,12 @@ fn typed_views_rewrite_arguments_only_for_their_function() {
     .unwrap();
     assert_eq!(call.args, vec![Val::from("weekly")]);
 
-    let unchanged = call.clone();
+    let unchanged = call.args.clone();
     assert!(
         call.set_view(Delete {
             name: String::from("daily")
         })
         .is_err()
     );
-    assert_eq!(call, unchanged);
+    assert_eq!(call.args, unchanged);
 }

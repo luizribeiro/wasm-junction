@@ -1,5 +1,6 @@
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 
 use crate::future::HostBound;
@@ -28,10 +29,19 @@ impl Extensions {
     }
 }
 
+impl fmt::Debug for Extensions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Extensions")
+            .field("len", &self.values.len())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Per-invocation data carried through an engine and its imported calls.
 #[derive(Clone, Default)]
 pub struct InvocationContext {
-    extensions: Arc<Extensions>,
+    extensions: Extensions,
     call_depth: usize,
 }
 
@@ -42,7 +52,7 @@ impl InvocationContext {
         let mut extensions = Extensions::default();
         extensions.insert(value);
         Self {
-            extensions: Arc::new(extensions),
+            extensions,
             call_depth: 0,
         }
     }
@@ -51,6 +61,16 @@ impl InvocationContext {
     #[must_use]
     pub fn extensions(&self) -> &Extensions {
         &self.extensions
+    }
+
+    /// Replaces the attached data while preserving the invocation depth.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_extensions(&self, extensions: Extensions) -> Self {
+        Self {
+            extensions,
+            call_depth: self.call_depth,
+        }
     }
 
     /// Returns a copy entered one component-to-component call deeper.
