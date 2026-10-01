@@ -165,6 +165,16 @@ mod tests {
         );
         assert_eq!(super::collisions::parameter_ident("cx").unwrap(), "cx_");
         assert_eq!(super::collisions::parameter_ident("call").unwrap(), "call");
+        assert_eq!(super::collisions::method_ident("with").unwrap(), "with_");
+        assert_eq!(
+            super::collisions::method_ident("within").unwrap(),
+            "within_"
+        );
+        assert_eq!(super::collisions::method_ident("clone").unwrap(), "clone_");
+        assert_eq!(
+            super::collisions::method_ident("from-app").unwrap(),
+            "from_app_"
+        );
     }
 
     #[test]

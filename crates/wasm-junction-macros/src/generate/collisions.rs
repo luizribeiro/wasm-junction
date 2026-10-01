@@ -12,7 +12,15 @@ pub(super) fn call_ident(interface: &str, name: &str) -> syn::Result<proc_macro2
 }
 
 pub(super) fn method_ident(name: &str) -> syn::Result<proc_macro2::Ident> {
-    generated_ident(&name.to_snake_case(), &[])
+    generated_ident(
+        &name.to_snake_case(),
+        &[
+            "clone".to_owned(),
+            "from_app".to_owned(),
+            "with".to_owned(),
+            "within".to_owned(),
+        ],
+    )
 }
 
 pub(super) fn parameter_ident(name: &str) -> syn::Result<proc_macro2::Ident> {
