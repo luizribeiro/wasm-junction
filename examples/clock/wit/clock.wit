@@ -1,0 +1,9 @@
+package example:clock@0.1.0;
+
+interface clock {
+  run: func() -> string;
+}
+
+world plugin {
+  export clock;
+}
