@@ -28,6 +28,10 @@ impl exports::test::wasi::environment::Guest for Component {
     fn monotonic_time() -> u64 {
         wasi::clocks::monotonic_clock::now()
     }
+
+    fn start_timer() {
+        drop(wasi::clocks::monotonic_clock::subscribe_duration(0));
+    }
 }
 
 export!(Component);

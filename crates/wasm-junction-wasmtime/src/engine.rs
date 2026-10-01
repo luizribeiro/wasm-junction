@@ -17,7 +17,7 @@ pub(crate) struct StoreData {
     pub(crate) imports: Arc<dyn ImportDispatcher>,
     pub(crate) context: InvocationContext,
     pub(crate) component: Arc<str>,
-    pub(crate) wasi: WasiState,
+    wasi: WasiState,
     pub(crate) gated_wasi: Arc<std::sync::Mutex<WasiState>>,
 }
 
@@ -115,7 +115,7 @@ impl CompiledComponent for Compiled {
                     error
                         .downcast_ref::<CallError>()
                         .cloned()
-                        .unwrap_or_else(|| CallError::trap(error.to_string()))
+                        .unwrap_or_else(|| CallError::trap(format!("{error:#}")))
                 })
         })
     }

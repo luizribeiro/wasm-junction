@@ -75,6 +75,12 @@ impl Middleware for EnvironmentBehavior {
             next.run(call).await?;
             return Ok(vec![Val::U64(987_654_321)]);
         }
+        if call.interface.as_ref() == MONOTONIC_CLOCK
+            && call.function.as_ref() == "subscribe-duration"
+        {
+            self.0.lock().unwrap().push(call.clone());
+            return next.run(call).await;
+        }
         if call.interface.as_ref() != WASI_ENVIRONMENT {
             return next.run(call).await;
         }
@@ -121,6 +127,7 @@ fn environment_gate_traces_refuses_and_rewrites() {
     let wall_time = block_on(app.call("wasi", ENVIRONMENT, "wall-time", Vec::new())).unwrap();
     let monotonic_time =
         block_on(app.call("wasi", ENVIRONMENT, "monotonic-time", Vec::new())).unwrap();
+    let timer = block_on(app.call("wasi", ENVIRONMENT, "start-timer", Vec::new())).unwrap();
 
     assert_eq!(
         configured,
@@ -139,8 +146,9 @@ fn environment_gate_traces_refuses_and_rewrites() {
         ])]
     );
     assert_eq!(monotonic_time, [Val::U64(987_654_321)]);
+    assert!(timer.is_empty());
     let calls = calls.lock().unwrap();
-    assert_eq!(calls.len(), 8);
+    assert_eq!(calls.len(), 9);
     assert_eq!(calls[0].caller, Caller::Component(Arc::from("wasi")));
     assert_eq!(calls[0].function.as_ref(), "get-environment");
     assert!(calls[0].args.is_empty());
@@ -148,6 +156,8 @@ fn environment_gate_traces_refuses_and_rewrites() {
     assert_eq!(calls[5].function.as_ref(), "initial-cwd");
     assert_eq!(calls[6].interface.as_ref(), WALL_CLOCK);
     assert_eq!(calls[7].interface.as_ref(), MONOTONIC_CLOCK);
+    assert_eq!(calls[8].function.as_ref(), "subscribe-duration");
+    assert_eq!(calls[8].args, [Val::U64(0)]);
 }
 
 #[test]

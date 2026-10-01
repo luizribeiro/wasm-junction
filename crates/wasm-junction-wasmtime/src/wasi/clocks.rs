@@ -130,14 +130,14 @@ impl monotonic_clock::Host for Gate<'_> {
         &mut self,
         when: monotonic_clock::Instant,
     ) -> wasmtime::Result<Resource<DynPollable>> {
-        monotonic_clock::Host::subscribe_instant(&mut self.0.clocks(), when)
+        self.subscribe("subscribe-instant", Subscription::Instant, when)
     }
 
     fn subscribe_duration(
         &mut self,
         duration: monotonic_clock::Duration,
     ) -> wasmtime::Result<Resource<DynPollable>> {
-        monotonic_clock::Host::subscribe_duration(&mut self.0.clocks(), duration)
+        self.subscribe("subscribe-duration", Subscription::Duration, duration)
     }
 }
 
@@ -158,6 +158,58 @@ impl Gate<'_> {
             _ => Err(wasmtime::Error::msg(
                 "monotonic clock returned the wrong shape",
             )),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Subscription {
+    Instant,
+    Duration,
+}
+
+struct SubscriptionTarget;
+
+impl ImportTarget for SubscriptionTarget {
+    fn call(
+        &self,
+        _context: InvocationContext,
+        args: Vals,
+    ) -> BoxFuture<'static, Result<Vals, CallError>> {
+        Box::pin(async move {
+            let [Val::U64(value)] = args.as_slice() else {
+                return Err(CallError::trap("WASI clock subscription expects one u64"));
+            };
+            Ok(vec![Val::U64(*value)])
+        })
+    }
+}
+
+impl Gate<'_> {
+    fn subscribe(
+        &mut self,
+        function: &'static str,
+        operation: Subscription,
+        value: u64,
+    ) -> wasmtime::Result<Resource<DynPollable>> {
+        let values = self.dispatch(
+            MONOTONIC_INTERFACE,
+            function,
+            vec![Val::U64(value)],
+            Arc::new(SubscriptionTarget),
+        )?;
+        let [Val::U64(value)] = values.as_slice() else {
+            return Err(wasmtime::Error::msg(
+                "clock subscription returned the wrong shape",
+            ));
+        };
+        match operation {
+            Subscription::Instant => {
+                monotonic_clock::Host::subscribe_instant(&mut self.0.clocks(), *value)
+            }
+            Subscription::Duration => {
+                monotonic_clock::Host::subscribe_duration(&mut self.0.clocks(), *value)
+            }
         }
     }
 }
