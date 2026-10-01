@@ -1,7 +1,11 @@
 package test:resources;
 
 interface host {
-  resource session;
+  resource session {
+    constructor();
+    new: func();
+    profile: func(session: string);
+  }
 
   allowed: func(value: option<borrow<session>>) -> result<session, string>;
   bad: func(values: list<borrow<session>>);

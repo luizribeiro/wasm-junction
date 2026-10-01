@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::Span;
-use wit_parser::{InterfaceId, PackageId, Resolve, Type, TypeDefKind, TypeId, TypeOwner};
+use wit_parser::{
+    Function, FunctionKind, InterfaceId, PackageId, Resolve, Type, TypeDefKind, TypeId, TypeOwner,
+};
 
 use super::{rust_ident, walk};
 
@@ -33,6 +35,55 @@ pub(super) fn method_ident(name: &str) -> syn::Result<proc_macro2::Ident> {
             "within".to_owned(),
         ],
     )
+}
+
+pub(super) fn host_method_ident(
+    function: &Function,
+    resource: Option<&str>,
+) -> syn::Result<proc_macro2::Ident> {
+    let Some(resource) = resource else {
+        return method_ident(&function.name);
+    };
+    let resource = resource.to_snake_case();
+    if let FunctionKind::Constructor(_) = function.kind {
+        rust_ident(&format!("{resource}_new"))
+    } else {
+        let member = function.name.rsplit('.').next().unwrap_or(&function.name);
+        let suffix = if member == "new" { "_" } else { "" };
+        rust_ident(&format!("{resource}_{}{suffix}", member.to_snake_case()))
+    }
+}
+
+pub(super) fn host_parameter_idents(
+    function: &Function,
+    resource: Option<&str>,
+) -> syn::Result<Vec<proc_macro2::Ident>> {
+    let method = matches!(
+        function.kind,
+        FunctionKind::Method(_) | FunctionKind::AsyncMethod(_)
+    );
+    let mut reserved = vec!["cx".to_owned()];
+    function
+        .params
+        .iter()
+        .enumerate()
+        .map(|(index, parameter)| {
+            let mut name = if method && index == 0 {
+                resource.unwrap_or(&parameter.name).to_snake_case()
+            } else {
+                parameter.name.to_snake_case()
+            };
+            while reserved.contains(&name) {
+                name.push('_');
+            }
+            reserved.push(name.clone());
+            rust_ident(&name)
+        })
+        .collect()
+}
+
+pub(super) fn resource_ident(interface: &str, name: &str) -> syn::Result<proc_macro2::Ident> {
+    generated_ident(&name.to_upper_camel_case(), &fixed_names(interface)?)
 }
 
 pub(super) fn parameter_ident(name: &str) -> syn::Result<proc_macro2::Ident> {
@@ -98,10 +149,14 @@ pub(super) fn check(
             names.insert(fixed.clone(), format!("generated `{fixed}`"));
         }
         for (name, id) in &interface.types {
-            if !types.contains(id) || matches!(resolve.types[*id].kind, TypeDefKind::Resource) {
+            if !types.contains(id) {
                 continue;
             }
-            let rust = rust_ident(&name.to_upper_camel_case())?.to_string();
+            let rust = if matches!(resolve.types[*id].kind, TypeDefKind::Resource) {
+                resource_ident(interface_name, name)?.to_string()
+            } else {
+                rust_ident(&name.to_upper_camel_case())?.to_string()
+            };
             unique(&mut names, &rust, name, "type", span)?;
         }
         for function in interface.functions.values() {
@@ -247,5 +302,45 @@ mod tests {
             .to_string();
             assert!(error.contains(&format!("WIT {kind}s `hello__world` and `hello-world`")));
         }
+    }
+
+    #[test]
+    fn resource_methods_use_flat_collision_safe_names() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/resource-nesting");
+        let mut resolve = Resolve::default();
+        let (package, _) = resolve.push_path(path).unwrap();
+        let interface = resolve.packages[package].interfaces["host"];
+        let names = resolve.interfaces[interface]
+            .functions
+            .values()
+            .filter_map(|function| {
+                let resource = function.kind.resource()?;
+                let name = resolve.types[resource].name.as_deref();
+                Some(
+                    super::host_method_ident(function, name)
+                        .unwrap()
+                        .to_string(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, ["session_new", "session_new_", "session_profile"]);
+        let profile = resolve.interfaces[interface]
+            .functions
+            .get("[method]session.profile")
+            .unwrap();
+        assert_eq!(
+            super::host_parameter_idents(profile, Some("session"))
+                .unwrap()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ["session", "session_"]
+        );
+        assert_eq!(super::resource_ident("host", "host").unwrap(), "Host_");
+        assert_eq!(
+            super::resource_ident("host", "provider").unwrap(),
+            "Provider"
+        );
     }
 }

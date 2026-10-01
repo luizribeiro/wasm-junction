@@ -3,7 +3,7 @@ use quote::quote;
 use wit_parser::Function;
 
 use super::Generator;
-use super::collisions::{method_ident, parameter_ident};
+use super::collisions::{host_method_ident, host_parameter_idents};
 
 impl Generator<'_> {
     pub(super) fn host_trait<'a>(
@@ -32,12 +32,12 @@ impl Generator<'_> {
 
     fn host_method(&self, function: &Function, forward: bool) -> syn::Result<TokenStream> {
         let wit_name = &function.name;
-        let method = method_ident(wit_name)?;
-        let parameters = function
-            .params
-            .iter()
-            .map(|param| parameter_ident(&param.name))
-            .collect::<syn::Result<Vec<_>>>()?;
+        let resource = function
+            .kind
+            .resource()
+            .and_then(|id| self.resolve.types[id].name.as_deref());
+        let method = host_method_ident(function, resource)?;
+        let parameters = host_parameter_idents(function, resource)?;
         let parameter_types = function
             .params
             .iter()
