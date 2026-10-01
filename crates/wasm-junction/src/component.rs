@@ -1,12 +1,18 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{self, Display};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use wasmparser::component_types::{ComponentAnyTypeId, ComponentEntityType};
-use wasmparser::{ComponentExternalKind, ComponentTypeRef, Encoding, Parser, Payload, Validator};
+use wasmparser::component_types::{
+    ComponentAnyTypeId, ComponentEntityType, ComponentItem, ResourceId,
+};
+use wasmparser::types::Types;
+use wasmparser::{
+    ComponentAlias, ComponentAliasSectionReader, ComponentExternalKind, ComponentOuterAliasKind,
+    ComponentTypeRef, Encoding, Parser, Payload, Validator,
+};
 
 /// Component bytes and engine-independent interface metadata.
 #[derive(Clone, Debug)]
@@ -135,6 +141,10 @@ fn inspect(bytes: &[u8]) -> Result<Metadata, ComponentError> {
     };
     let mut depth = 0_u32;
     let mut saw_header = false;
+    let mut imported_resources = HashSet::new();
+    let mut imported_instances = HashSet::new();
+    let mut type_index = 0_u32;
+    let mut instance_index = 0_u32;
     for payload in Parser::new(0).parse_all(bytes) {
         match payload.map_err(ComponentError::Parse)? {
             Payload::Version { encoding, .. } if !saw_header => {
@@ -145,15 +155,23 @@ fn inspect(bytes: &[u8]) -> Result<Metadata, ComponentError> {
             }
             Payload::Version { .. } => depth += 1,
             Payload::End(_) if depth > 0 => depth -= 1,
+            Payload::ComponentTypeSection(reader) if depth == 0 => type_index += reader.count(),
             Payload::ComponentImportSection(reader) if depth == 0 => {
                 for import in reader {
                     let import = import.map_err(ComponentError::Parse)?;
+                    if matches!(import.ty, ComponentTypeRef::Type(_)) {
+                        type_index += 1;
+                    }
                     if let ComponentTypeRef::Instance(index) = import.ty {
+                        imported_instances.insert(instance_index);
+                        instance_index += 1;
                         let ComponentAnyTypeId::Instance(id) =
                             types.as_ref().component_any_type_at(index)
                         else {
                             continue;
                         };
+                        imported_resources
+                            .extend(types[id].exports.values().filter_map(resource_id));
                         let routable = types[id]
                             .exports
                             .values()
@@ -167,6 +185,19 @@ fn inspect(bytes: &[u8]) -> Result<Metadata, ComponentError> {
                     }
                 }
             }
+            Payload::ComponentInstanceSection(reader) if depth == 0 => {
+                instance_index += reader.count();
+            }
+            Payload::ComponentAliasSection(reader) if depth == 0 => {
+                record_resource_aliases(
+                    reader,
+                    &types,
+                    &imported_instances,
+                    &mut imported_resources,
+                    &mut type_index,
+                    &mut instance_index,
+                )?;
+            }
             Payload::ComponentExportSection(reader) if depth == 0 => {
                 for export in reader {
                     let export = export.map_err(ComponentError::Parse)?;
@@ -174,13 +205,8 @@ fn inspect(bytes: &[u8]) -> Result<Metadata, ComponentError> {
                         metadata.exports.push(export.name.name.to_owned());
                         let id = types.as_ref().component_instance_at(export.index);
                         if types[id].exports.values().any(|item| {
-                            matches!(
-                                item.ty,
-                                ComponentEntityType::Type {
-                                    referenced: ComponentAnyTypeId::Resource(_),
-                                    ..
-                                }
-                            )
+                            resource_id(item)
+                                .is_some_and(|resource| !imported_resources.contains(&resource))
                         }) {
                             metadata.resource_exports.push(export.name.name.to_owned());
                         }
@@ -202,6 +228,53 @@ fn inspect(bytes: &[u8]) -> Result<Metadata, ComponentError> {
         }
     }
     Ok(metadata)
+}
+
+fn resource_id(item: &ComponentItem) -> Option<ResourceId> {
+    match item.ty {
+        ComponentEntityType::Type {
+            referenced: ComponentAnyTypeId::Resource(resource),
+            ..
+        } => Some(resource.resource()),
+        _ => None,
+    }
+}
+
+fn record_resource_aliases(
+    reader: ComponentAliasSectionReader<'_>,
+    types: &Types,
+    imported_instances: &HashSet<u32>,
+    imported_resources: &mut HashSet<ResourceId>,
+    type_index: &mut u32,
+    instance_index: &mut u32,
+) -> Result<(), ComponentError> {
+    for alias in reader {
+        match alias.map_err(ComponentError::Parse)? {
+            ComponentAlias::InstanceExport {
+                kind: ComponentExternalKind::Type,
+                instance_index,
+                ..
+            } => {
+                if imported_instances.contains(&instance_index)
+                    && let ComponentAnyTypeId::Resource(resource) =
+                        types.as_ref().component_any_type_at(*type_index)
+                {
+                    imported_resources.insert(resource.resource());
+                }
+                *type_index += 1;
+            }
+            ComponentAlias::InstanceExport {
+                kind: ComponentExternalKind::Instance,
+                ..
+            } => *instance_index += 1,
+            ComponentAlias::Outer {
+                kind: ComponentOuterAliasKind::Type,
+                ..
+            } => *type_index += 1,
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// A failure to inspect a [`Component`].

@@ -78,6 +78,21 @@ const RESOURCE_EXPORT_WIT: &str = r"
     interface files { resource file; create: func() -> file; }
     world plugin { export sessions; export files; }
 ";
+const RESOURCE_ALIAS_WIT: &str = r"
+    package example:hosted@1.0.0;
+    interface host { resource session; }
+    interface client {
+        use host.{session};
+        round-trip: func(value: session) -> session;
+    }
+    world plugin { import host; export client; }
+";
+const RESOURCE_COLLISION_WIT: &str = r"
+    package example:hosted@1.0.0;
+    interface host { resource session; }
+    interface client { resource session; round-trip: func(value: session) -> session; }
+    world plugin { import host; export client; }
+";
 
 fn component(name: &str) -> Component {
     Component::from_bytes(component_bytes(PLUGIN_WIT, "plugin"))
@@ -271,6 +286,31 @@ fn load_refuses_interfaces_that_export_resources() {
             "example:resources/files@1.0.0".to_owned(),
             "example:resources/sessions@1.0.0".to_owned(),
         ])
+    );
+}
+
+#[test]
+fn load_accepts_exports_that_only_reuse_a_host_resource() {
+    let app = App::builder()
+        .engine(FakeEngine)
+        .provide(Provided::new("example:hosted/host@1.0.0", UnusedProvider))
+        .build()
+        .unwrap();
+    let component = wit_component(RESOURCE_ALIAS_WIT, "plugin", "resource-client");
+    block_on(app.load(component)).unwrap();
+}
+
+#[test]
+fn load_refuses_a_local_resource_with_an_imported_resource_name() {
+    let app = App::builder()
+        .engine(FakeEngine)
+        .provide(Provided::new("example:hosted/host@1.0.0", UnusedProvider))
+        .build()
+        .unwrap();
+    let component = wit_component(RESOURCE_COLLISION_WIT, "plugin", "resource-client");
+    assert_eq!(
+        block_on(app.load(component)).unwrap_err(),
+        LoadError::ResourceExports(vec!["example:hosted/client@1.0.0".to_owned()])
     );
 }
 
