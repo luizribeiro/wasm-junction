@@ -26,3 +26,7 @@ wasm-junction-guest-build = { path = "../wasm-junction-guest-build", version = "
 [[bench]]
 name = "dispatch"
 harness = false
+
+[[bench]]
+name = "wasi"
+harness = false
