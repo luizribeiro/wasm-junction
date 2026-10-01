@@ -12,7 +12,8 @@ use wasm_junction::{
     WasiConfig,
 };
 use wasm_junction_conformance::{
-    Fixture, FixtureHost, SUMMARIZER, component, run, run_routed, sample_note,
+    Fixture, FixtureHost, RoutedFixture, RoutedHost, SUMMARIZER, WRITER, component, run,
+    run_routed, sample_note, translator_component, writer_component,
 };
 use wasm_junction_wasmtime::WasmtimeEngine;
 
@@ -54,6 +55,21 @@ fn successful_scenario_matches_the_engine_neutral_trace() {
 #[test]
 fn routed_scenario_matches_the_engine_neutral_trace() {
     block_on(run_routed(WasmtimeEngine::new().unwrap())).unwrap();
+}
+
+#[test]
+fn routed_calls_use_fresh_callee_instances() {
+    let engine = WasmtimeEngine::new().unwrap();
+    let fixture = block_on(RoutedFixture::new(engine.clone())).unwrap();
+    assert_eq!(
+        block_on(fixture.write("write", "one")).unwrap(),
+        "host: one #1"
+    );
+    assert_eq!(
+        block_on(fixture.write("write", "two")).unwrap(),
+        "host: two #1"
+    );
+    assert_eq!(engine.instantiations(), 4);
 }
 
 #[test]
@@ -220,6 +236,52 @@ impl Middleware for AwaitTokioTimer {
         }
         next.run(call).await
     }
+}
+
+struct AwaitRoutedCall;
+
+impl Middleware for AwaitRoutedCall {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.callee.as_ref() == "translator" {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        next.run(call).await
+    }
+}
+
+#[test]
+fn nested_routed_call_can_await_on_a_current_thread_tokio_runtime() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    let app = App::builder()
+        .engine(WasmtimeEngine::new().unwrap())
+        .provide(RoutedHost::default().provided())
+        .middleware(AwaitRoutedCall)
+        .build()
+        .unwrap();
+    let translator = Component::from_bytes(translator_component())
+        .unwrap()
+        .named("translator");
+    let writer = Component::from_bytes(writer_component())
+        .unwrap()
+        .named("writer");
+    runtime
+        .block_on(app.load_all([translator, writer]))
+        .unwrap();
+
+    let (sender, receiver) = mpsc::channel();
+    let _worker = std::thread::spawn(move || {
+        let result =
+            runtime.block_on(app.call("writer", WRITER, "write-async", vec![Val::from("async")]));
+        sender.send(result).unwrap();
+    });
+
+    let result = receiver
+        .recv_timeout(Duration::from_secs(30))
+        .expect("nested routed call deadlocked the current-thread Tokio runtime");
+    assert_eq!(result.unwrap(), [Val::from("host: async #1")]);
 }
 
 #[test]
