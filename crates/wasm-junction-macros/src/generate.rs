@@ -1,7 +1,7 @@
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
-use syn::LitStr;
+use syn::{LitStr, Path};
 use wit_parser::{InterfaceId, PackageId, Resolve};
 
 mod collisions;
@@ -22,16 +22,24 @@ pub(crate) fn generate(
     resolve: &Resolve,
     package_id: PackageId,
     requested: Option<&[LitStr]>,
+    with: &[(LitStr, Path)],
     span: Span,
 ) -> syn::Result<TokenStream> {
     let roots = select_interfaces(resolve, package_id, requested)?;
+    let with = resolve_with(resolve, with)?;
     validate::interfaces(resolve, &roots, span)?;
     collisions::check(resolve, &roots, span)?;
-    let selected = reachability::find(resolve, &roots)?;
+    let mut selected = reachability::find(resolve, &roots)?;
+    selected.retain(|id, _| {
+        resolve.interfaces[*id]
+            .package
+            .is_none_or(|package| !with.contains_key(&package))
+    });
     let generator = Generator {
         resolve,
         errors: errors::find(resolve, &roots)?,
         selected,
+        with,
     };
     let modules = resolve
         .interfaces
@@ -45,6 +53,40 @@ pub(crate) fn generate(
         })
         .collect::<syn::Result<Vec<_>>>()?;
     Ok(quote!(#(#modules)*))
+}
+
+fn resolve_with(
+    resolve: &Resolve,
+    mappings: &[(LitStr, Path)],
+) -> syn::Result<std::collections::HashMap<PackageId, Path>> {
+    let available = resolve
+        .packages
+        .iter()
+        .map(|(id, package)| (package.name.to_string(), id))
+        .collect::<Vec<_>>();
+    let mut result = std::collections::HashMap::new();
+    for (name, path) in mappings {
+        let value = name.value();
+        if value.contains('/') {
+            return Err(syn::Error::new(
+                name.span(),
+                "`with` keys must name WIT packages; interface keys are not supported",
+            ));
+        }
+        let package = available
+            .iter()
+            .find(|(candidate, _)| {
+                candidate == &value || candidate.split('@').next() == Some(&value)
+            })
+            .map(|(_, id)| *id)
+            .ok_or_else(|| {
+                syn::Error::new(name.span(), format!("unknown WIT package `{value}`"))
+            })?;
+        if result.insert(package, path.clone()).is_some() {
+            return Err(syn::Error::new(name.span(), "duplicate `with` package"));
+        }
+    }
+    Ok(result)
 }
 
 fn select_interfaces(
@@ -89,6 +131,7 @@ struct Generator<'a> {
     resolve: &'a Resolve,
     errors: std::collections::HashSet<wit_parser::TypeId>,
     selected: std::collections::HashMap<InterfaceId, std::collections::HashSet<wit_parser::TypeId>>,
+    with: std::collections::HashMap<PackageId, Path>,
 }
 
 impl Generator<'_> {
@@ -227,7 +270,7 @@ mod tests {
             .join("../wasm-junction/tests/fixtures/dependencies/wit");
         let mut resolve = Resolve::default();
         let (package, _) = resolve.push_path(path).unwrap();
-        let tokens = super::generate(&resolve, package, None, Span::call_site())
+        let tokens = super::generate(&resolve, package, None, &[], Span::call_site())
             .unwrap()
             .to_string();
         assert!(

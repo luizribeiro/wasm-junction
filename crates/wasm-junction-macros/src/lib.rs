@@ -9,7 +9,7 @@ use proc_macro::TokenStream;
 use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
-use syn::{LitStr, Token, braced, bracketed};
+use syn::{LitStr, Path, Token, braced, bracketed};
 use wit_parser::Resolve;
 
 mod generate;
@@ -17,6 +17,7 @@ mod generate;
 struct Config {
     path: LitStr,
     interfaces: Option<Vec<LitStr>>,
+    with: Vec<(LitStr, Path)>,
 }
 
 impl Parse for Config {
@@ -25,6 +26,7 @@ impl Parse for Config {
         braced!(content in input);
         let mut path = None;
         let mut interfaces = None;
+        let mut with = None;
         while !content.is_empty() {
             let key: Ident = content.parse()?;
             content.parse::<Token![:]>()?;
@@ -40,7 +42,22 @@ impl Parse for Config {
                             .collect(),
                     );
                 }
-                "path" | "interfaces" => {
+                "with" if with.is_none() => {
+                    let mappings;
+                    braced!(mappings in content);
+                    let mut values = Vec::new();
+                    while !mappings.is_empty() {
+                        values.push((mappings.parse()?, {
+                            mappings.parse::<Token![:]>()?;
+                            mappings.parse()?
+                        }));
+                        if !mappings.is_empty() {
+                            mappings.parse::<Token![,]>()?;
+                        }
+                    }
+                    with = Some(values);
+                }
+                "path" | "interfaces" | "with" => {
                     return Err(syn::Error::new(key.span(), "duplicate bindgen option"));
                 }
                 _ => return Err(syn::Error::new(key.span(), "unexpected bindgen option")),
@@ -50,11 +67,21 @@ impl Parse for Config {
             }
         }
         let path = path.ok_or_else(|| content.error("missing `path` option"))?;
-        Ok(Self { path, interfaces })
+        Ok(Self {
+            path,
+            interfaces,
+            with: with.unwrap_or_default(),
+        })
     }
 }
 
-/// Generates bindings for every interface in a local WIT package.
+/// Generates bindings for interfaces in a local WIT package.
+///
+/// The `interfaces` option narrows generation to fully qualified interface
+/// names, with package versions optional. The `with` option maps a WIT package
+/// to an existing bindings path, preserving one Rust type identity for the
+/// entire reused package. Single-interface `with` keys are not supported
+/// because they could split one package's type universe across invocations.
 ///
 /// Generated WIT errors display enum and payload-free variant cases by their
 /// kebab-case names. Variant payloads follow the case name and use `Display`
@@ -86,6 +113,7 @@ fn expand(config: &Config) -> syn::Result<TokenStream2> {
         &resolve,
         package_id,
         config.interfaces.as_deref(),
+        &config.with,
         config.path.span(),
     )?;
     Ok(quote!(#(#tracked)* #bindings))
@@ -111,6 +139,7 @@ mod tests {
         let config = Config {
             path: LitStr::new("tests/fixtures/does-not-exist", Span::call_site()),
             interfaces: None,
+            with: Vec::new(),
         };
         let error = expand(&config).unwrap_err().to_string();
         assert!(error.contains("does-not-exist"));
@@ -122,6 +151,7 @@ mod tests {
         let config = Config {
             path: LitStr::new("tests/fixtures/malformed", Span::call_site()),
             interfaces: None,
+            with: Vec::new(),
         };
         let error = expand(&config).unwrap_err().to_string();
         assert!(error.contains("malformed"), "{error}");
@@ -136,6 +166,7 @@ mod tests {
                 Span::call_site(),
             ),
             interfaces: Some(vec![LitStr::new("test:names/search", Span::call_site())]),
+            with: Vec::new(),
         };
         let tokens = expand(&config).unwrap().to_string();
         assert!(tokens.contains("mod search"), "{tokens}");
@@ -150,6 +181,7 @@ mod tests {
                 Span::call_site(),
             ),
             interfaces: Some(vec![LitStr::new("test:names/missing", Span::call_site())]),
+            with: Vec::new(),
         };
         let error = expand(&config).unwrap_err().to_string();
         assert!(error.contains("unknown interface `test:names/missing`"));
@@ -165,10 +197,41 @@ mod tests {
                 Span::call_site(),
             ),
             interfaces: Some(vec![LitStr::new("test:notes/notes", Span::call_site())]),
+            with: Vec::new(),
         };
         let tokens = expand(&config).unwrap().to_string();
         assert!(tokens.contains("mod notes"), "{tokens}");
         assert!(tokens.contains("mod types"), "{tokens}");
         assert!(!tokens.contains("mod unused"), "{tokens}");
+    }
+
+    #[test]
+    fn with_reuses_a_package_path() {
+        let config = syn::parse_str::<Config>(
+            r#"{
+                path: "../wasm-junction/tests/fixtures/dependencies/wit",
+                with: { "test:common": crate::shared }
+            }"#,
+        )
+        .unwrap();
+        let tokens = expand(&config).unwrap().to_string();
+        assert!(
+            tokens.contains("crate :: shared :: types :: Author"),
+            "{tokens}"
+        );
+        assert!(!tokens.contains("mod types"), "{tokens}");
+    }
+
+    #[test]
+    fn with_rejects_interface_keys() {
+        let config = syn::parse_str::<Config>(
+            r#"{
+                path: "../wasm-junction/tests/fixtures/dependencies/wit",
+                with: { "test:common/types": crate::shared }
+            }"#,
+        )
+        .unwrap();
+        let error = expand(&config).unwrap_err().to_string();
+        assert!(error.contains("keys must name WIT packages"));
     }
 }

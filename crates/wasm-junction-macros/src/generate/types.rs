@@ -75,7 +75,14 @@ impl Generator<'_> {
             .as_deref()
             .ok_or_else(|| Self::unsupported(name, "inline interface type"))?;
         let module = rust_ident(&interface.to_snake_case())?;
-        Ok(quote!(super::#module::#ident))
+        let package = self.resolve.interfaces[owner]
+            .package
+            .ok_or_else(|| Self::unsupported(name, "package-less interface type"))?;
+        if let Some(path) = self.with.get(&package) {
+            Ok(quote!(#path::#module::#ident))
+        } else {
+            Ok(quote!(super::#module::#ident))
+        }
     }
 
     fn optional_type(&self, ty: Option<Type>, item: &str) -> syn::Result<TokenStream> {
