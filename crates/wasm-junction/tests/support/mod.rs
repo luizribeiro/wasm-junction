@@ -207,6 +207,48 @@ impl Engine for RoutingGenerationEngine {
     }
 }
 
+/// Shared gate for an engine whose replacement compilation suspends.
+#[derive(Default)]
+pub struct CompileState {
+    compilations: AtomicUsize,
+    gate: Gate,
+}
+
+impl CompileState {
+    /// Waits until replacement compilation has started.
+    pub fn wait_until_compiling(&self) {
+        self.gate.wait_until_entered();
+    }
+
+    /// Lets replacement compilation finish.
+    pub fn release(&self) {
+        self.gate.release();
+    }
+}
+
+/// An engine that gates its second compilation while the old component stays callable.
+pub struct GatedCompileEngine(pub Arc<CompileState>);
+
+impl Engine for GatedCompileEngine {
+    fn compile(
+        &self,
+        _bytes: Arc<[u8]>,
+        _wasi: WasiConfig,
+    ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
+        let replacement = self.0.compilations.fetch_add(1, Ordering::SeqCst) > 0;
+        let gate = self.0.gate.clone();
+        Box::pin(async move {
+            if replacement {
+                gate.enter();
+            }
+            Ok(Arc::new(GenerationComponent {
+                value: if replacement { "new" } else { "old" },
+                gate: None,
+            }) as Arc<dyn CompiledComponent>)
+        })
+    }
+}
+
 struct WriterComponent;
 
 impl CompiledComponent for WriterComponent {

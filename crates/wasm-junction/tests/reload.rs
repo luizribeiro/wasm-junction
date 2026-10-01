@@ -3,10 +3,11 @@
 mod support;
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use support::{
-    FailingEngine, FakeEngine, GenerationEngine, GenerationState, RoutingGenerationEngine,
-    block_on, component_bytes, component_bytes_from,
+    CompileState, FailingEngine, FakeEngine, GatedCompileEngine, GenerationEngine, GenerationState,
+    RoutingGenerationEngine, block_on, component_bytes, component_bytes_from,
 };
 use wasm_junction::{
     App, Call, CallContext, CallError, CallErrorKind, Component, Event, InterfaceHandle,
@@ -556,4 +557,35 @@ fn middleware_observes_load_reload_and_unload_exports() {
             && old_exports[0].as_ref() == TRANSLATOR
             && new_exports[0].as_ref() == "example:marker/marker@1.0.0"
     ));
+}
+
+#[test]
+fn pending_compilation_does_not_lock_out_old_generation_calls() {
+    let state = Arc::new(CompileState::default());
+    let app = App::builder()
+        .engine(GatedCompileEngine(state.clone()))
+        .build()
+        .unwrap();
+    block_on(app.load(component().named("service"))).unwrap();
+
+    let reloader = app.clone();
+    let reload = std::thread::spawn(move || block_on(reloader.reload("service", component())));
+    state.wait_until_compiling();
+    let caller = app.clone();
+    let (sent, received) = std::sync::mpsc::channel();
+    let call = std::thread::spawn(move || {
+        sent.send(block_on(caller.call(
+            "service",
+            TRANSLATOR,
+            "translate",
+            Vec::new(),
+        )))
+        .unwrap();
+    });
+    let while_compiling = received.recv_timeout(Duration::from_secs(2));
+    state.release();
+    reload.join().unwrap().unwrap();
+    call.join().unwrap();
+
+    assert_eq!(while_compiling.unwrap().unwrap(), [Val::from("old")]);
 }
