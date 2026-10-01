@@ -1,0 +1,7 @@
+package test:local;
+
+interface shared-types { record local { value: string } }
+interface consumer {
+  use test:dependency/shared-types.{remote};
+  consume: func(value: remote);
+}

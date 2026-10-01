@@ -1,0 +1,6 @@
+package test:colliding-types;
+
+interface values {
+  record http2 { value: string }
+  record http-2 { value: string }
+}

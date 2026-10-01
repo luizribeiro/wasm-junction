@@ -3,6 +3,7 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use wit_parser::{InterfaceId, PackageId, Resolve};
 
+mod collisions;
 mod definitions;
 mod errors;
 mod reachability;
@@ -17,6 +18,7 @@ pub(crate) fn generate(
     span: Span,
 ) -> syn::Result<TokenStream> {
     validate::package(resolve, package_id, span)?;
+    collisions::check(resolve, package_id, span)?;
     let selected = reachability::find(resolve, package_id)?;
     let generator = Generator {
         resolve,

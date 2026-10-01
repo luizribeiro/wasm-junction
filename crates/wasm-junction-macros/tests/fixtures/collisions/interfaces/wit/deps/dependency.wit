@@ -1,0 +1,3 @@
+package test:dependency;
+
+interface shared-types { record remote { value: string } }
