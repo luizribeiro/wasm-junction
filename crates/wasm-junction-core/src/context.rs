@@ -38,8 +38,9 @@ pub struct InvocationContext {
 }
 
 impl InvocationContext {
-    #[allow(dead_code, reason = "data attachment is not public yet")]
-    pub(crate) fn with<T: Any + HostBound>(value: T) -> Self {
+    /// Creates context with one attached value for cross-crate dispatcher tests.
+    #[doc(hidden)]
+    pub fn with<T: Any + HostBound>(value: T) -> Self {
         let mut extensions = Extensions::default();
         extensions.insert(value);
         Self {
@@ -90,5 +91,16 @@ mod tests {
         let marker = context.extensions().get::<Marker>();
 
         assert_eq!(marker.map(|marker| marker.0), Some(42));
+    }
+
+    #[test]
+    fn descending_preserves_attached_data() {
+        let context = InvocationContext::with(Marker(42)).descend();
+
+        assert_eq!(context.call_depth(), 1);
+        assert_eq!(
+            context.extensions().get::<Marker>().map(|marker| marker.0),
+            Some(42)
+        );
     }
 }

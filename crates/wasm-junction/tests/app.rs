@@ -6,12 +6,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use support::{
-    FakeEngine, NOTES, Read, UnusedProvider, block_on, component_bytes, component_bytes_from,
+    CONTEXT_TARGET, ContextMarker, FakeEngine, NOTES, Read, UnusedProvider, block_on,
+    component_bytes, component_bytes_from,
 };
 use wasm_junction::{
     App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Caller, Candidate,
-    CompiledComponent, Component, Engine, EngineError, GetError, InterfaceHandle, IssueKind,
-    LoadError, Middleware, Next, Provided, Provider, TypedCall, Vals, WasiConfig,
+    CompiledComponent, Component, Engine, EngineError, GetError, ImportDispatcher, InterfaceHandle,
+    InvocationContext, IssueKind, LoadError, Middleware, Next, Provided, Provider, TypedCall, Val,
+    Vals, WasiConfig,
 };
 
 const CLOCK: &str = "example:journal/clock@0.1.0";
@@ -64,6 +66,11 @@ const CYCLE_WIT: &str = r"
         import first-api;
         export second-api;
     }
+";
+const CONTEXT_WIT: &str = r"
+    package example:context@1.0.0;
+    interface target { read: func() -> u32; }
+    world target-component { export target; }
 ";
 
 fn component(name: &str) -> Component {
@@ -244,6 +251,25 @@ fn component_imports_route_through_middleware() {
     let calls = trace.lock().unwrap();
     assert_eq!(calls[1].caller, Caller::Component(Arc::from("writer")));
     assert_eq!(calls[1].callee.as_ref(), "translator");
+}
+
+#[test]
+fn invocation_data_crosses_a_component_hop() {
+    let app = App::builder().engine(FakeEngine).build().unwrap();
+    for name in ["caller", "callee"] {
+        block_on(app.load(wit_component(CONTEXT_WIT, "target-component", name))).unwrap();
+    }
+
+    let values = block_on(ImportDispatcher::call(
+        &app,
+        InvocationContext::with(ContextMarker(42)),
+        Arc::from("caller"),
+        Arc::from(CONTEXT_TARGET),
+        Arc::from("read"),
+        Vec::new(),
+    ))
+    .unwrap();
+    assert_eq!(values, [Val::U32(42)]);
 }
 
 #[test]
