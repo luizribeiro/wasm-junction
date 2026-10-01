@@ -3,6 +3,10 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod host;
+
+pub use host::{FixtureHost, sample_note, sample_summary};
+
 /// The fixture's types-only interface.
 pub const TYPES: &str = "example:notes/types@0.1.0";
 /// The fixture's imported host interface.
