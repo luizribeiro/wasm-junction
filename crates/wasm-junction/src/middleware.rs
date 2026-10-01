@@ -7,6 +7,27 @@ use crate::{BoxFuture, Call, CallError, ChannelDirection, HostBound, MaybeSend, 
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
+    /// A component was loaded under an application name.
+    Load {
+        /// The application component name.
+        component: Arc<str>,
+        /// The versioned interfaces exported by the component.
+        exports: Vec<Arc<str>>,
+    },
+    /// A loaded component was removed.
+    Unload {
+        /// The application component name.
+        component: Arc<str>,
+    },
+    /// A loaded component's generation was replaced.
+    Reload {
+        /// The application component name.
+        component: Arc<str>,
+        /// The interfaces exported by the previous generation.
+        old_exports: Vec<Arc<str>>,
+        /// The interfaces exported by the new generation.
+        new_exports: Vec<Arc<str>>,
+    },
     /// An invocation of the named component is beginning.
     InvocationStart {
         /// The application name of the invoked component.

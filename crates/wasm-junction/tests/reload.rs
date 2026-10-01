@@ -2,16 +2,31 @@
 
 mod support;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use support::{
     FailingEngine, FakeEngine, GenerationEngine, GenerationState, block_on, component_bytes,
     component_bytes_from,
 };
-use wasm_junction::{App, CallContext, CallErrorKind, Component, ReloadError, UnloadError, Val};
+use wasm_junction::{
+    App, Call, CallContext, CallError, CallErrorKind, Component, Event, Middleware, Next,
+    ReloadError, UnloadError, Val, Vals,
+};
 
 mod handles {
     wasm_junction::bindgen!({ path: "tests/fixtures/handles/wit" });
+}
+
+struct EventLog(Arc<Mutex<Vec<Event>>>);
+
+impl Middleware for EventLog {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        next.run(call).await
+    }
+
+    fn event(&self, event: &Event) {
+        self.0.lock().unwrap().push(event.clone());
+    }
 }
 
 const TRANSLATOR: &str = "example:translate/translator@1.0.0";
@@ -382,4 +397,36 @@ fn reload_all_changes_nothing_when_a_later_compile_fails() {
         assert!(app.has::<BatchExport<false>>(name));
         assert!(!app.has::<BatchExport<true>>(name));
     }
+}
+
+#[test]
+fn middleware_observes_load_reload_and_unload_exports() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let app = App::builder()
+        .engine(FakeEngine)
+        .middleware(EventLog(events.clone()))
+        .build()
+        .unwrap();
+    block_on(app.load(component().named("service"))).unwrap();
+    block_on(app.reload(
+        "service",
+        Component::from_bytes(component_bytes(MARKER_WIT, "service")).unwrap(),
+    ))
+    .unwrap();
+    block_on(app.unload("service")).unwrap();
+
+    let events = events.lock().unwrap();
+    assert!(matches!(
+        events.as_slice(),
+        [
+            Event::Load { component, exports },
+            Event::Reload { component: reloaded, old_exports, new_exports },
+            Event::Unload { component: unloaded },
+        ] if component.as_ref() == "service"
+            && reloaded.as_ref() == "service"
+            && unloaded.as_ref() == "service"
+            && exports[0].as_ref() == TRANSLATOR
+            && old_exports[0].as_ref() == TRANSLATOR
+            && new_exports[0].as_ref() == "example:marker/marker@1.0.0"
+    ));
 }

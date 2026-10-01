@@ -101,6 +101,10 @@ impl App {
         let mut components = self.lock_components();
         self.validate_load(&name, &imports, &exports, &components)?;
         lock_or_recover(&self.0.unloaded).remove(&name);
+        let event = Event::Load {
+            component: Arc::from(name.clone()),
+            exports: exports.iter().cloned().map(Arc::from).collect(),
+        };
         components.insert(
             name.clone(),
             LoadedComponent {
@@ -113,6 +117,8 @@ impl App {
                 links: HashMap::new(),
             },
         );
+        drop(components);
+        self.emit(&event);
         Ok(())
     }
 
@@ -157,8 +163,13 @@ impl App {
         }
         let mut loaded = self.lock_components();
         self.validate_batch(&pending, &loaded)?;
+        let mut events = Vec::with_capacity(pending.len());
         for (component, compiled) in pending.into_iter().zip(compiled) {
             lock_or_recover(&self.0.unloaded).remove(&component.name);
+            events.push(Event::Load {
+                component: Arc::from(component.name.clone()),
+                exports: component.exports.iter().cloned().map(Arc::from).collect(),
+            });
             loaded.insert(
                 component.name.clone(),
                 LoadedComponent {
@@ -171,6 +182,10 @@ impl App {
                     links: HashMap::new(),
                 },
             );
+        }
+        drop(loaded);
+        for event in events {
+            self.emit(&event);
         }
         Ok(())
     }

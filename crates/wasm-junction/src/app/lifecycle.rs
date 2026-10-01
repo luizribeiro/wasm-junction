@@ -59,6 +59,10 @@ impl App {
             .ok_or_else(|| UnloadError::UnknownComponent(name.to_owned()))?;
         lock_or_recover(&self.0.unloaded)
             .insert(name.to_owned(), removed.generation.exports.clone());
+        drop(components);
+        self.emit(&crate::Event::Unload {
+            component: Arc::from(name),
+        });
         Ok(())
     }
 
@@ -143,16 +147,33 @@ impl App {
         }
         let mut components = self.lock_components();
         self.validate_reloads(&pending, force, &components)?;
+        let mut events = Vec::with_capacity(pending.len());
         for (replacement, compiled) in pending.into_iter().zip(compiled) {
             let loaded = components
                 .get_mut(&replacement.name)
                 .ok_or_else(|| ReloadError::UnknownComponent(replacement.name.clone()))?;
             loaded.links = retained_links(loaded, &replacement.imports);
+            let old_exports = loaded.generation.exports.clone();
+            let new_exports = replacement
+                .exports
+                .iter()
+                .cloned()
+                .map(Arc::from)
+                .collect::<Vec<_>>();
             loaded.generation = Arc::new(Generation {
                 imports: replacement.imports.into_iter().map(Arc::from).collect(),
-                exports: replacement.exports.into_iter().map(Arc::from).collect(),
+                exports: new_exports.clone(),
                 compiled,
             });
+            events.push(crate::Event::Reload {
+                component: loaded.name.clone(),
+                old_exports,
+                new_exports,
+            });
+        }
+        drop(components);
+        for event in events {
+            self.emit(&event);
         }
         Ok(())
     }
