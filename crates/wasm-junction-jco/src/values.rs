@@ -92,8 +92,8 @@ fn lower(value: Val, expected: &ValueType) -> Result<JsValue, CallError> {
             JsValue::from_str(&case)
         }
         (Val::Flags(names), ValueType::Flags(flags)) => lower_flags(names, flags, expected)?,
+        (Val::Option(value), ValueType::Option(payload)) => lower_option(value, payload, expected)?,
         (_, ValueType::Unsupported(name)) => return Err(unsupported(name)),
-        (_, ValueType::Option(_)) => return Err(unsupported("option")),
         (_, ValueType::Result { .. }) => return Err(unsupported("result")),
         (value, expected) => {
             return Err(wrong_val_type(expected, &value));
@@ -159,7 +159,7 @@ fn lift(value: JsValue, expected: &ValueType) -> Result<Val, CallError> {
             .map(Val::Enum)
             .ok_or_else(|| mismatch(expected, &value, "unknown enum case")),
         ValueType::Flags(flags) => lift_flags(value, flags, expected),
-        ValueType::Option(_) => Err(unsupported("option")),
+        ValueType::Option(payload) => lift_option(value, payload, expected),
         ValueType::Result { .. } => Err(unsupported("result")),
         ValueType::Unsupported(name) => Err(unsupported(name)),
     }
@@ -255,9 +255,9 @@ fn lift_record(
         .iter()
         .map(|field| {
             let key = JsValue::from_str(&field.js_name);
-            if !Reflect::has(&object, &key)
-                .map_err(|error| mismatch(expected, &error, "could not inspect record field"))?
-            {
+            let present = Reflect::has(&object, &key)
+                .map_err(|error| mismatch(expected, &error, "could not inspect record field"))?;
+            if !present && !matches!(field.ty, ValueType::Option(_)) {
                 return Err(mismatch(
                     expected,
                     &value,
@@ -387,6 +387,67 @@ fn lift_flags(value: JsValue, flags: &[String], expected: &ValueType) -> Result<
         }
     }
     Ok(Val::Flags(names))
+}
+
+fn lower_option(
+    value: Option<Box<Val>>,
+    payload: &ValueType,
+    expected: &ValueType,
+) -> Result<JsValue, CallError> {
+    match (value, maybe_null(payload)) {
+        (None, false) => Ok(JsValue::UNDEFINED),
+        (Some(value), false) => lower(*value, payload),
+        (None, true) => tagged("none", None, expected),
+        (Some(value), true) => tagged("some", Some(lower(*value, payload)?), expected),
+    }
+}
+
+fn lift_option(
+    value: JsValue,
+    payload: &ValueType,
+    expected: &ValueType,
+) -> Result<Val, CallError> {
+    if !maybe_null(payload) {
+        return if value.is_null() || value.is_undefined() {
+            Ok(Val::Option(None))
+        } else {
+            lift(value, payload).map(|value| Val::Option(Some(Box::new(value))))
+        };
+    }
+    let (tag, value) = tagged_parts(&value, expected)?;
+    match tag.as_str() {
+        "none" => Ok(Val::Option(None)),
+        "some" => lift(value, payload).map(|value| Val::Option(Some(Box::new(value)))),
+        _ => Err(mismatch(expected, &value, "unknown option case")),
+    }
+}
+
+fn maybe_null(ty: &ValueType) -> bool {
+    matches!(ty, ValueType::Option(payload) if !maybe_null(payload))
+}
+
+fn tagged(tag: &str, value: Option<JsValue>, expected: &ValueType) -> Result<JsValue, CallError> {
+    let object = Object::new();
+    Reflect::set(&object, &"tag".into(), &JsValue::from_str(tag))
+        .map_err(|error| mismatch(expected, &error, "could not set tag"))?;
+    if let Some(value) = value {
+        Reflect::set(&object, &"val".into(), &value)
+            .map_err(|error| mismatch(expected, &error, "could not set payload"))?;
+    }
+    Ok(object.into())
+}
+
+fn tagged_parts(value: &JsValue, expected: &ValueType) -> Result<(String, JsValue), CallError> {
+    if !value.is_object() || Array::is_array(value) {
+        return Err(wrong_js_type(expected, value));
+    }
+    let tag = Reflect::get(value, &"tag".into())
+        .ok()
+        .and_then(|tag| tag.as_string())
+        .ok_or_else(|| mismatch(expected, value, "missing string tag"))?;
+    let payload = Reflect::get(value, &"val".into())
+        .map_err(|error| mismatch(expected, &error, "could not read payload"))?;
+    Ok((tag, payload))
 }
 
 fn one_char(value: String) -> Option<char> {
@@ -645,6 +706,31 @@ mod tests {
         assert!(error.contains("WIT `flags`"), "{error}");
         assert!(error.contains("missing"), "{error}");
         assert!(error.contains("unknown flag"), "{error}");
+    }
+
+    #[wasm_bindgen_test]
+    fn round_trips_options_including_nested_options() {
+        let values = vec![
+            Val::Option(None),
+            Val::Option(Some(Box::new(Val::from("subtitle")))),
+            Val::Option(Some(Box::new(Val::Option(None)))),
+            Val::Option(Some(Box::new(Val::Option(Some(Box::new(Val::U32(7))))))),
+        ];
+        let string = ValueType::Option(Box::new(ValueType::String));
+        let nested = ValueType::Option(Box::new(ValueType::Option(Box::new(ValueType::U32))));
+        let signature = FunctionType {
+            params: vec![string.clone(), string, nested.clone(), nested],
+            result: None,
+        };
+        let lowered = lower_args(values.clone(), &signature).unwrap();
+        assert!(lowered.get(0).is_undefined());
+        assert_eq!(
+            Reflect::get(&lowered.get(2), &"tag".into())
+                .unwrap()
+                .as_string(),
+            Some("some".to_owned())
+        );
+        assert_eq!(lift_args(&lowered, &signature).unwrap(), values);
     }
 
     #[wasm_bindgen_test]
