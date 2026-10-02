@@ -127,10 +127,11 @@ fn define_concurrent(
     instance.func_new_concurrent(&function.clone(), move |accessor, ty, params, results| {
         let interface = interface.clone();
         let function = function.clone();
+        let parameter_types = ty.params().map(|(_, ty)| ty).collect::<Vec<_>>();
         let result_types = ty.results().collect::<Vec<_>>();
         Box::pin(async move {
-            let args = convert_params(params, &mut |value| {
-                from_wasmtime(value, &mut |value| match value {
+            let args = convert_params(params, &parameter_types, &mut |value, expected| {
+                from_wasmtime(value, expected, &mut |value| match value {
                     LiftValue::Resource(resource) => accessor
                         .with(|store| lift_resource(resource, store))
                         .map(Val::Resource),
@@ -172,10 +173,11 @@ fn define_plain(
     instance.func_new_async(&function.clone(), move |mut store, ty, params, results| {
         let interface = interface.clone();
         let function = function.clone();
+        let parameter_types = ty.params().map(|(_, ty)| ty).collect::<Vec<_>>();
         let result_types = ty.results().collect::<Vec<_>>();
         Box::new(async move {
-            let args = convert_params(params, &mut |value| {
-                from_wasmtime(value, &mut |value| match value {
+            let args = convert_params(params, &parameter_types, &mut |value, expected| {
+                from_wasmtime(value, expected, &mut |value| match value {
                     LiftValue::Resource(resource) => {
                         lift_resource(resource, store.as_context_mut()).map(Val::Resource)
                     }
@@ -211,9 +213,15 @@ fn define_plain(
 
 fn convert_params(
     params: &[WasmtimeVal],
-    convert: &mut impl FnMut(WasmtimeVal) -> Result<Val, wasmtime::Error>,
+    parameter_types: &[Type],
+    convert: &mut impl FnMut(WasmtimeVal, Option<&Type>) -> Result<Val, wasmtime::Error>,
 ) -> Result<Vals, wasmtime::Error> {
-    params.iter().cloned().map(convert).collect()
+    params
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(index, value)| convert(value, parameter_types.get(index)))
+        .collect()
 }
 
 async fn call(

@@ -19,6 +19,7 @@ pub(crate) enum LowerValue {
 
 pub(crate) fn from_wasmtime(
     value: WasmtimeVal,
+    expected: Option<&Type>,
     store: &mut impl FnMut(LiftValue) -> Result<Val, wasmtime::Error>,
 ) -> Result<Val, wasmtime::Error> {
     match value {
@@ -35,40 +36,72 @@ pub(crate) fn from_wasmtime(
         WasmtimeVal::Float64(value) => Ok(Val::F64(value)),
         WasmtimeVal::Char(value) => Ok(Val::Char(value)),
         WasmtimeVal::String(value) => Ok(Val::String(value)),
-        WasmtimeVal::List(values) => values
+        WasmtimeVal::List(values) if is_byte_list(expected) => values
             .into_iter()
-            .map(|value| from_wasmtime(value, store))
+            .map(|value| match value {
+                WasmtimeVal::U8(value) => Ok(value),
+                other => Err(wasmtime::Error::msg(format!(
+                    "expected u8 in list<u8>, got {other:?}"
+                ))),
+            })
             .collect::<Result<_, _>>()
-            .map(Val::List),
+            .map(Val::Bytes),
+        WasmtimeVal::List(values) => {
+            let ty = list_element_type(expected);
+            values
+                .into_iter()
+                .map(|value| from_wasmtime(value, ty.as_ref(), store))
+                .collect::<Result<_, _>>()
+                .map(Val::List)
+        }
         WasmtimeVal::Tuple(values) => values
             .into_iter()
-            .map(|value| from_wasmtime(value, store))
+            .enumerate()
+            .map(|(index, value)| {
+                let ty = tuple_element_type(expected, index);
+                from_wasmtime(value, ty.as_ref(), store)
+            })
             .collect::<Result<_, _>>()
             .map(Val::Tuple),
         WasmtimeVal::Record(fields) => fields
             .into_iter()
-            .map(|(name, value)| Ok((name, from_wasmtime(value, store)?)))
+            .map(|(name, value)| {
+                let ty = record_field_type(expected, &name);
+                Ok((name, from_wasmtime(value, ty.as_ref(), store)?))
+            })
             .collect::<Result<_, _>>()
             .map(Val::Record),
-        WasmtimeVal::Variant(case, value) => Ok(Val::Variant {
-            case,
-            value: value
-                .map(|value| from_wasmtime(*value, store).map(Box::new))
-                .transpose()?,
-        }),
+        WasmtimeVal::Variant(case, value) => {
+            let ty = variant_case_type(expected, &case);
+            Ok(Val::Variant {
+                case,
+                value: value
+                    .map(|value| from_wasmtime(*value, ty.as_ref(), store).map(Box::new))
+                    .transpose()?,
+            })
+        }
         WasmtimeVal::Enum(case) => Ok(Val::Enum(case)),
         WasmtimeVal::Flags(names) => Ok(Val::Flags(names)),
         WasmtimeVal::Option(value) => Ok(Val::Option(
             value
-                .map(|value| from_wasmtime(*value, store).map(Box::new))
+                .map(|value| {
+                    let ty = option_type(expected);
+                    from_wasmtime(*value, ty.as_ref(), store).map(Box::new)
+                })
                 .transpose()?,
         )),
         WasmtimeVal::Result(result) => Ok(Val::Result(match result {
             Ok(value) => Ok(value
-                .map(|value| from_wasmtime(*value, store).map(Box::new))
+                .map(|value| {
+                    let ty = result_type(expected, true);
+                    from_wasmtime(*value, ty.as_ref(), store).map(Box::new)
+                })
                 .transpose()?),
             Err(value) => Err(value
-                .map(|value| from_wasmtime(*value, store).map(Box::new))
+                .map(|value| {
+                    let ty = result_type(expected, false);
+                    from_wasmtime(*value, ty.as_ref(), store).map(Box::new)
+                })
                 .transpose()?),
         })),
         WasmtimeVal::Resource(value) => store(LiftValue::Resource(value)),
@@ -98,6 +131,7 @@ pub(crate) fn to_wasmtime(
         Val::F64(value) => Ok(WasmtimeVal::Float64(value)),
         Val::Char(value) => Ok(WasmtimeVal::Char(value)),
         Val::String(value) => Ok(WasmtimeVal::String(value)),
+        Val::Bytes(values) => lower_bytes(values, expected),
         Val::List(values) => {
             let ty = list_element_type(expected);
             convert_values(values, ty.as_ref(), store).map(WasmtimeVal::List)
@@ -184,6 +218,58 @@ pub(crate) fn to_wasmtime(
     }
 }
 
+fn lower_bytes(values: Vec<u8>, expected: Option<&Type>) -> Result<WasmtimeVal, wasmtime::Error> {
+    is_byte_list(expected)
+        .then(|| WasmtimeVal::List(values.into_iter().map(WasmtimeVal::U8).collect()))
+        .ok_or_else(|| wasmtime::Error::msg("expected list<u8> value type"))
+}
+
+fn is_byte_list(expected: Option<&Type>) -> bool {
+    matches!(list_element_type(expected), Some(Type::U8))
+}
+
+fn tuple_element_type(expected: Option<&Type>, index: usize) -> Option<Type> {
+    match expected {
+        Some(Type::Tuple(ty)) => ty.types().nth(index),
+        _ => None,
+    }
+}
+
+fn record_field_type(expected: Option<&Type>, name: &str) -> Option<Type> {
+    match expected {
+        Some(Type::Record(ty)) => ty
+            .fields()
+            .find(|field| field.name == name)
+            .map(|field| field.ty),
+        _ => None,
+    }
+}
+
+fn variant_case_type(expected: Option<&Type>, name: &str) -> Option<Type> {
+    match expected {
+        Some(Type::Variant(ty)) => ty
+            .cases()
+            .find(|case| case.name == name)
+            .and_then(|case| case.ty),
+        _ => None,
+    }
+}
+
+fn option_type(expected: Option<&Type>) -> Option<Type> {
+    match expected {
+        Some(Type::Option(ty)) => Some(ty.ty()),
+        _ => None,
+    }
+}
+
+fn result_type(expected: Option<&Type>, ok: bool) -> Option<Type> {
+    match expected {
+        Some(Type::Result(ty)) if ok => ty.ok(),
+        Some(Type::Result(ty)) => ty.err(),
+        _ => None,
+    }
+}
+
 fn list_element_type(expected: Option<&Type>) -> Option<Type> {
     match expected {
         Some(Type::List(ty)) => Some(ty.ty()),
@@ -225,7 +311,7 @@ mod tests {
 
     fn round_trip(value: Val) -> Val {
         let value = to_wasmtime(value, None, &mut |_| unreachable!()).unwrap();
-        from_wasmtime(value, &mut |_| unreachable!()).unwrap()
+        from_wasmtime(value, None, &mut |_| unreachable!()).unwrap()
     }
 
     #[test]

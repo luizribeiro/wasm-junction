@@ -287,7 +287,8 @@ impl Compiled {
                 .ok_or_else(|| wasmtime::Error::msg("export is not a function"))?;
             let function_type = function.ty(&store);
             let parameter_types = function_type.params().map(|(_, ty)| ty).collect::<Vec<_>>();
-            let result_count = function_type.results().len();
+            let result_types = function_type.results().collect::<Vec<_>>();
+            let result_count = result_types.len();
             let values = store
                 .run_concurrent(async |accessor| {
                     let params = args
@@ -316,8 +317,9 @@ impl Compiled {
                         .await?;
                     results
                         .into_iter()
-                        .map(|value| {
-                            from_wasmtime(value, &mut |value| match value {
+                        .enumerate()
+                        .map(|(index, value)| {
+                            from_wasmtime(value, result_types.get(index), &mut |value| match value {
                                 LiftValue::Resource(resource) => accessor
                                     .with(|store| lift_resource(resource, store))
                                     .map(Val::Resource),
