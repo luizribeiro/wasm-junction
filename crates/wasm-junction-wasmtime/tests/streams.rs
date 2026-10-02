@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use wasm_junction::{App, CallErrorKind, Component, InputStream, OutputStream, Val};
 use wasm_junction_conformance::{
-    RetainHost, STREAM_PROBE, StreamHost, run_streams, stream_component,
+    PoisonHost, RetainHost, STREAM_PROBE, StreamHost, run_streams, stream_component,
 };
 use wasm_junction_wasmtime::WasmtimeEngine;
 
@@ -138,6 +138,46 @@ fn open_guest_stream_is_aborted_when_its_store_ends() {
                 error.to_string(),
                 "stream was aborted when its invocation ended"
             );
+        });
+}
+
+#[test]
+fn poisoned_invocation_blocks_further_stream_effects() {
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let host = PoisonHost::default();
+            let app = App::builder()
+                .engine(WasmtimeEngine::new().unwrap())
+                .provide(host.clone().provided())
+                .build()
+                .unwrap();
+            app.load(
+                Component::from_bytes(stream_component())
+                    .unwrap()
+                    .named("streams"),
+            )
+            .await
+            .unwrap();
+            let error = app
+                .call("streams", STREAM_PROBE, "poison-streams", Vec::new())
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind(), CallErrorKind::Refused);
+            assert_eq!(error.to_string(), "stream refused");
+
+            let mut guest = host.take_guest().unwrap();
+            let source = host.take_source().unwrap();
+            assert_eq!(
+                guest.read().await.unwrap_err().to_string(),
+                "stream was aborted when its invocation ended"
+            );
+            assert_eq!(
+                source.write(b"late").await.unwrap_err().to_string(),
+                "stream reader is closed"
+            );
+            assert_eq!(host.advances(), 0);
         });
 }
 
