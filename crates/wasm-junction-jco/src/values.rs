@@ -1,4 +1,4 @@
-use js_sys::{Array, BigInt};
+use js_sys::{Array, BigInt, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_junction_core::{CallError, Val, Vals};
 
@@ -58,9 +58,33 @@ fn lower(value: Val, expected: &ValueType) -> Result<JsValue, CallError> {
         (Val::F64(value), ValueType::F64) => JsValue::from_f64(value),
         (Val::Char(value), ValueType::Char) => JsValue::from_str(&value.to_string()),
         (Val::String(value), ValueType::String) => JsValue::from_str(&value),
+        (Val::List(values), ValueType::List(element)) if **element == ValueType::U8 => {
+            let bytes = values
+                .into_iter()
+                .map(|value| match value {
+                    Val::U8(value) => Ok(value),
+                    value => Err(wrong_val_type(element, &value)),
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Uint8Array::from(bytes.as_slice()).into()
+        }
+        (Val::List(values), ValueType::List(element)) => lower_sequence(values, element)?,
+        (Val::Tuple(values), ValueType::Tuple(elements)) => {
+            if values.len() != elements.len() {
+                return Err(mismatch(
+                    expected,
+                    &Val::Tuple(values),
+                    "wrong element count",
+                ));
+            }
+            values
+                .into_iter()
+                .zip(elements)
+                .map(|(value, element)| lower(value, element))
+                .collect::<Result<Array, _>>()?
+                .into()
+        }
         (_, ValueType::Unsupported(name)) => return Err(unsupported(name)),
-        (_, ValueType::List(_)) => return Err(unsupported("list")),
-        (_, ValueType::Tuple(_)) => return Err(unsupported("tuple")),
         (_, ValueType::Record(_)) => return Err(unsupported("record")),
         (_, ValueType::Variant(_)) => return Err(unsupported("variant")),
         (_, ValueType::Enum(_)) => return Err(unsupported("enum")),
@@ -106,8 +130,23 @@ fn lift(value: JsValue, expected: &ValueType) -> Result<Val, CallError> {
             .as_string()
             .map(Val::String)
             .ok_or_else(|| wrong_js_type(expected, &value)),
-        ValueType::List(_) => Err(unsupported("list")),
-        ValueType::Tuple(_) => Err(unsupported("tuple")),
+        ValueType::List(element) if **element == ValueType::U8 => value
+            .dyn_into::<Uint8Array>()
+            .map(|values| Val::List(values.to_vec().into_iter().map(Val::U8).collect()))
+            .map_err(|value| wrong_js_type(expected, &value)),
+        ValueType::List(element) => lift_sequence(value, element).map(Val::List),
+        ValueType::Tuple(elements) => {
+            let values = js_array(value, expected)?;
+            if values.length() as usize != elements.len() {
+                return Err(mismatch(expected, &values, "wrong element count"));
+            }
+            elements
+                .iter()
+                .enumerate()
+                .map(|(index, element)| lift(values.get(index as u32), element))
+                .collect::<Result<Vec<_>, _>>()
+                .map(Val::Tuple)
+        }
         ValueType::Record(_) => Err(unsupported("record")),
         ValueType::Variant(_) => Err(unsupported("variant")),
         ValueType::Enum(_) => Err(unsupported("enum")),
@@ -115,6 +154,29 @@ fn lift(value: JsValue, expected: &ValueType) -> Result<Val, CallError> {
         ValueType::Option(_) => Err(unsupported("option")),
         ValueType::Result { .. } => Err(unsupported("result")),
         ValueType::Unsupported(name) => Err(unsupported(name)),
+    }
+}
+
+fn lower_sequence(values: Vec<Val>, element: &ValueType) -> Result<JsValue, CallError> {
+    values
+        .into_iter()
+        .map(|value| lower(value, element))
+        .collect::<Result<Array, _>>()
+        .map(Into::into)
+}
+
+fn lift_sequence(value: JsValue, element: &ValueType) -> Result<Vec<Val>, CallError> {
+    js_array(value, &ValueType::List(Box::new(element.clone())))?
+        .iter()
+        .map(|value| lift(value, element))
+        .collect()
+}
+
+fn js_array(value: JsValue, expected: &ValueType) -> Result<Array, CallError> {
+    if Array::is_array(&value) {
+        Ok(Array::from(&value))
+    } else {
+        Err(wrong_js_type(expected, &value))
     }
 }
 
@@ -220,6 +282,26 @@ mod tests {
             error.to_string(),
             "jco does not yet support WIT `record` values"
         );
+    }
+
+    #[wasm_bindgen_test]
+    fn round_trips_lists_byte_lists_and_tuples() {
+        let values = vec![
+            Val::List(vec![Val::from("rust"), Val::from("wasm")]),
+            Val::List(vec![Val::U8(1), Val::U8(2)]),
+            Val::Tuple(vec![Val::S32(-71), Val::S32(42)]),
+        ];
+        let signature = FunctionType {
+            params: vec![
+                ValueType::List(Box::new(ValueType::String)),
+                ValueType::List(Box::new(ValueType::U8)),
+                ValueType::Tuple(vec![ValueType::S32, ValueType::S32]),
+            ],
+            result: None,
+        };
+        let lowered = lower_args(values.clone(), &signature).unwrap();
+        assert!(lowered.get(1).is_instance_of::<Uint8Array>());
+        assert_eq!(lift_args(&lowered, &signature).unwrap(), values);
     }
 
     #[wasm_bindgen_test]
