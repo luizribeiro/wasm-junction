@@ -37,6 +37,11 @@ fn contains_wasmtime(tree: &str) -> bool {
         .any(|line| line.split_whitespace().next() == Some("wasm-junction-wasmtime"))
 }
 
+fn contains_jco(tree: &str) -> bool {
+    tree.lines()
+        .any(|line| line.split_whitespace().next() == Some("wasm-junction-jco"))
+}
+
 #[test]
 fn disabled_defaults_select_no_engine_on_any_target() {
     for target in [env!("WASM_JUNCTION_TARGET")]
@@ -44,16 +49,19 @@ fn disabled_defaults_select_no_engine_on_any_target() {
         .chain(WASM_TARGETS)
     {
         assert!(!contains_wasmtime(&tree(target, true)), "{target}");
+        assert!(!contains_jco(&tree(target, true)), "{target}");
     }
 }
 
 #[test]
-fn defaults_select_wasmtime_only_on_native_targets() {
+fn defaults_select_each_engine_only_on_its_target() {
     assert!(contains_wasmtime(&tree(
         env!("WASM_JUNCTION_TARGET"),
         false
     )));
-    for target in WASM_TARGETS {
-        assert!(!contains_wasmtime(&tree(target, false)), "{target}");
-    }
+    assert!(!contains_jco(&tree(env!("WASM_JUNCTION_TARGET"), false)));
+    assert!(contains_jco(&tree("wasm32-unknown-unknown", false)));
+    assert!(!contains_wasmtime(&tree("wasm32-unknown-unknown", false)));
+    assert!(!contains_jco(&tree("wasm32-wasip2", false)));
+    assert!(!contains_wasmtime(&tree("wasm32-wasip2", false)));
 }

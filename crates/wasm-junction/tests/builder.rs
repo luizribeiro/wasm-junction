@@ -81,13 +81,22 @@ fn wasi_configuration_reaches_the_engine_contract() {
     assert_eq!(WasiConfig::default().environment().count(), 0);
 }
 
-#[cfg(not(all(feature = "wasmtime", not(target_family = "wasm"))))]
+#[cfg(not(any(
+    all(feature = "wasmtime", not(target_family = "wasm")),
+    all(feature = "jco", target_family = "wasm", target_os = "unknown")
+)))]
 #[test]
 fn build_reports_when_the_target_has_no_default_engine() {
     let error = App::builder().build().err().unwrap();
     let message = error.to_string();
     assert!(message.contains(env!("WASM_JUNCTION_TARGET")));
     assert!(message.contains("call `.engine(…)`"));
+}
+
+#[cfg(all(feature = "jco", target_family = "wasm", target_os = "unknown"))]
+#[test]
+fn build_uses_the_browser_default_engine() {
+    App::builder().build().unwrap();
 }
 
 #[cfg(all(feature = "wasmtime", not(target_family = "wasm")))]

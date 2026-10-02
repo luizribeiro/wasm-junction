@@ -1550,7 +1550,15 @@ fn default_engine() -> Result<Arc<dyn Engine>, BuildError> {
         .map_err(|error| BuildError::DefaultEngine(EngineError::new(error.to_string())))
 }
 
-#[cfg(not(all(feature = "wasmtime", not(target_family = "wasm"))))]
+#[cfg(all(feature = "jco", target_family = "wasm", target_os = "unknown"))]
+fn default_engine() -> Result<Arc<dyn Engine>, BuildError> {
+    Ok(Arc::new(wasm_junction_jco::JcoEngine::new()))
+}
+
+#[cfg(not(any(
+    all(feature = "wasmtime", not(target_family = "wasm")),
+    all(feature = "jco", target_family = "wasm", target_os = "unknown")
+)))]
 fn default_engine() -> Result<Arc<dyn Engine>, BuildError> {
     Err(BuildError::MissingEngine)
 }

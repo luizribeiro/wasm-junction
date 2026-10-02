@@ -1625,6 +1625,7 @@ version = "0.0.0"
 dependencies = [
  "semver",
  "wasm-junction-core",
+ "wasm-junction-jco",
  "wasm-junction-macros",
  "wasm-junction-wasmtime",
  "wasmparser 0.259.0",
