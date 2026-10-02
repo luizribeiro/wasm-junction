@@ -554,7 +554,7 @@ impl App {
                     interface,
                     compiled,
                 }) => {
-                    let context = context.descend();
+                    let context = context.descend().with_settings(self.settings_for(&name));
                     self.check_call_depth(&context)?;
                     (
                         name.clone(),
