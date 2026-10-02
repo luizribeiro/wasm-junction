@@ -72,6 +72,36 @@ pub enum ChannelDirection {
     GuestToHost,
 }
 
+/// An engine lifecycle event forwarded to application middleware.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EngineEvent {
+    /// An engine-provided resource is about to be dropped.
+    ResourceDrop {
+        /// The invocation that owns the resource.
+        invocation: InvocationId,
+        /// The resource being dropped.
+        resource: Resource,
+    },
+    /// A byte stream began crossing an engine boundary.
+    ChannelOpen {
+        /// The invocation whose call opened the channel.
+        invocation: InvocationId,
+        /// The opaque stream identifier.
+        stream: u64,
+        /// The direction bytes travel.
+        direction: ChannelDirection,
+    },
+    /// A byte stream stopped crossing an engine boundary.
+    ChannelClose {
+        /// The invocation whose call opened the channel.
+        invocation: InvocationId,
+        /// The opaque stream identifier.
+        stream: u64,
+        /// The direction bytes traveled.
+        direction: ChannelDirection,
+    },
+}
+
 /// The engine-provided implementation at the end of an imported call's middleware chain.
 pub trait ImportTarget: HostBound {
     /// Invokes the implementation with middleware's final arguments.
@@ -135,6 +165,9 @@ pub trait ImportDispatcher: HostBound {
     /// Reports that an engine finished bridging a stream across its boundary.
     fn channel_close(&self, _invocation: InvocationId, _stream: u64, _direction: ChannelDirection) {
     }
+
+    /// Reports an engine lifecycle event to the application.
+    fn emit(&self, _event: EngineEvent) {}
 }
 
 /// Compiles WebAssembly components for an application dispatcher.

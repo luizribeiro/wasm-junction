@@ -13,9 +13,9 @@ use crate::middleware::{CallTarget, ErasedMiddleware};
 use crate::provider::ProvidedKind;
 use crate::{
     BoxFuture, Call, CallContext, CallError, Caller, CompiledComponent, Component, Engine,
-    EngineError, Event, Extensions, HostBound, ImportDispatcher, ImportTarget, InvocationContext,
-    InvocationId, Middleware, Provided, Provider, Resource, Val, Vals, WASI_PROVIDER_NAME,
-    WasiSettings,
+    EngineError, EngineEvent, Event, Extensions, HostBound, ImportDispatcher, ImportTarget,
+    InvocationContext, InvocationId, Middleware, Provided, Provider, Resource, Val, Vals,
+    WASI_PROVIDER_NAME, WasiSettings,
 };
 
 mod lifecycle;
@@ -664,15 +664,21 @@ impl App {
                     resource.interface()
                 ))
             })?;
-        self.emit(&Event::ResourceDrop {
-            invocation: cx
-                .invocation_id()
+        self.emit_resource_drop(
+            cx.invocation_id()
                 .ok_or_else(|| CallError::trap("resource drop has no invocation id"))?,
+            &resource,
+        );
+        provider.drop_resource(cx, resource)
+    }
+
+    fn emit_resource_drop(&self, invocation: InvocationId, resource: &Resource) {
+        self.emit(&Event::ResourceDrop {
+            invocation,
             interface: Arc::from(resource.interface()),
             resource: Arc::from(resource.name()),
             id: resource.id(),
         });
-        provider.drop_resource(cx, resource)
     }
 
     async fn dispatch(
@@ -906,11 +912,14 @@ impl ImportDispatcher for App {
         stream: u64,
         direction: crate::ChannelDirection,
     ) {
-        self.emit(&Event::ChannelOpen {
-            invocation,
-            stream,
-            direction,
-        });
+        App::emit(
+            self,
+            &Event::ChannelOpen {
+                invocation,
+                stream,
+                direction,
+            },
+        );
     }
 
     fn channel_close(
@@ -919,11 +928,47 @@ impl ImportDispatcher for App {
         stream: u64,
         direction: crate::ChannelDirection,
     ) {
-        self.emit(&Event::ChannelClose {
-            invocation,
-            stream,
-            direction,
-        });
+        App::emit(
+            self,
+            &Event::ChannelClose {
+                invocation,
+                stream,
+                direction,
+            },
+        );
+    }
+
+    fn emit(&self, event: EngineEvent) {
+        match event {
+            EngineEvent::ResourceDrop {
+                invocation,
+                resource,
+            } => self.emit_resource_drop(invocation, &resource),
+            EngineEvent::ChannelOpen {
+                invocation,
+                stream,
+                direction,
+            } => App::emit(
+                self,
+                &Event::ChannelOpen {
+                    invocation,
+                    stream,
+                    direction,
+                },
+            ),
+            EngineEvent::ChannelClose {
+                invocation,
+                stream,
+                direction,
+            } => App::emit(
+                self,
+                &Event::ChannelClose {
+                    invocation,
+                    stream,
+                    direction,
+                },
+            ),
+        }
     }
 }
 
@@ -2097,8 +2142,22 @@ mod tests {
             .unwrap();
 
         let invocation = InvocationId::__from_counter(9);
-        ImportDispatcher::channel_open(&app, invocation, 7, crate::ChannelDirection::HostToGuest);
-        ImportDispatcher::channel_close(&app, invocation, 7, crate::ChannelDirection::HostToGuest);
+        ImportDispatcher::emit(
+            &app,
+            EngineEvent::ChannelOpen {
+                invocation,
+                stream: 7,
+                direction: crate::ChannelDirection::HostToGuest,
+            },
+        );
+        ImportDispatcher::emit(
+            &app,
+            EngineEvent::ChannelClose {
+                invocation,
+                stream: 7,
+                direction: crate::ChannelDirection::HostToGuest,
+            },
+        );
 
         assert_eq!(
             *events.lock().unwrap(),
