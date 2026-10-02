@@ -8,7 +8,7 @@ use std::task::{Context, Poll, Waker};
 
 use wasm_junction_core::{
     BoxFuture, CallError, CompiledComponent, Engine, EngineError, ImportDispatcher,
-    InvocationContext, Resource, ResourceOwnership, StreamHandle, Val, Vals, WasiConfig,
+    InvocationContext, Resource, StreamHandle, Val, Vals, WasiConfig, validate_resource_lowering,
 };
 use wasmtime::component::{
     Component, InstancePre, Linker, ResourceAny, ResourceDynamic, ResourceType, Val as WasmtimeVal,
@@ -385,45 +385,43 @@ pub(crate) fn lower_resource(
             resource.id()
         )))
     })?;
-    if resource.ownership() != expected.ownership {
-        return Err(wasmtime::Error::new(CallError::refused(format!(
-            "resource `{}/{}#{}` has {:?} ownership but the call requires {:?} for {:?}",
-            resource.interface(),
-            resource.name(),
-            resource.id(),
-            resource.ownership(),
-            expected.ownership,
-            expected.ty
-        ))));
-    }
-    let definition = store
-        .as_context()
-        .data()
-        .resources
-        .iter()
-        .find(|definition| {
-            definition.interface.as_ref() == resource.interface()
-                && definition.name.as_ref() == resource.name()
-        })
-        .ok_or_else(|| {
-            wasmtime::Error::new(CallError::refused(format!(
-                "component does not import resource `{}/{}`",
-                resource.interface(),
-                resource.name()
-            )))
-        })?;
-    if expected.ty != ResourceType::host_dynamic(definition.runtime_type) {
-        return Err(wasmtime::Error::new(CallError::refused(format!(
-            "resource `{}/{}` does not match the resource type declared by the call",
-            resource.interface(),
-            resource.name()
-        ))));
-    }
+    let (runtime_type, expected_interface, expected_name) = {
+        let resources = &store.as_context().data().resources;
+        let definition = resources
+            .iter()
+            .find(|definition| {
+                definition.interface.as_ref() == resource.interface()
+                    && definition.name.as_ref() == resource.name()
+            })
+            .ok_or_else(|| {
+                wasmtime::Error::new(CallError::refused(format!(
+                    "component does not import resource `{}/{}`",
+                    resource.interface(),
+                    resource.name()
+                )))
+            })?;
+        let expected_definition = resources
+            .iter()
+            .find(|definition| expected.ty == ResourceType::host_dynamic(definition.runtime_type))
+            .ok_or_else(|| wasmtime::Error::msg("unknown expected host resource type"))?;
+        (
+            definition.runtime_type,
+            expected_definition.interface.clone(),
+            expected_definition.name.clone(),
+        )
+    };
+    let retain = validate_resource_lowering(
+        resource,
+        &expected_interface,
+        &expected_name,
+        expected.ownership,
+    )
+    .map_err(wasmtime::Error::new)?;
     // Constructing a Wasmtime borrow is valid here, but registering it in the host table requires
     // a canonical call scope that does not exist until Wasmtime lowers the declared borrow.
-    let dynamic = ResourceDynamic::new_own(resource.id(), definition.runtime_type);
+    let dynamic = ResourceDynamic::new_own(resource.id(), runtime_type);
     let dynamic = dynamic.try_into_resource_any(store.as_context_mut())?;
-    if expected.ownership == ResourceOwnership::Own {
+    if retain {
         store
             .as_context_mut()
             .data_mut()

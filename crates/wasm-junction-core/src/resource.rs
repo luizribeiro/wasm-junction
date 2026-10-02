@@ -78,6 +78,37 @@ pub enum ResourceOwnership {
     Borrow,
 }
 
+/// Validates a resource before an engine lowers it into a component call.
+///
+/// The returned value tells the engine whether it must retain the resource until ownership is
+/// returned or the invocation ends.
+#[doc(hidden)]
+pub fn validate_resource_lowering(
+    resource: &Resource,
+    expected_interface: &str,
+    expected_name: &str,
+    expected_ownership: ResourceOwnership,
+) -> Result<bool, CallError> {
+    if resource.ownership() != expected_ownership {
+        return Err(CallError::refused(format!(
+            "resource `{}/{}#{}` has {:?} ownership but the call requires {:?}",
+            resource.interface(),
+            resource.name(),
+            resource.id(),
+            resource.ownership(),
+            expected_ownership
+        )));
+    }
+    if resource.interface() != expected_interface || resource.name() != expected_name {
+        return Err(CallError::refused(format!(
+            "resource `{}/{}` does not match the resource type `{expected_interface}/{expected_name}` declared by the call",
+            resource.interface(),
+            resource.name()
+        )));
+    }
+    Ok(expected_ownership == ResourceOwnership::Own)
+}
+
 /// A provider-owned table that keeps host resource values alive across calls.
 pub struct ResourceTable<T: HostBound> {
     interface: Arc<str>,
@@ -269,7 +300,7 @@ impl<T> TableState<T> {
 mod tests {
     use std::sync::Arc;
 
-    use super::TableState;
+    use super::{TableState, validate_resource_lowering};
     use crate::{Resource, ResourceOwnership, ResourceTable, Val};
 
     #[test]
@@ -280,6 +311,28 @@ mod tests {
         assert_eq!(resource.id(), 7);
         assert_eq!(resource.ownership(), ResourceOwnership::Borrow);
         assert_eq!(Val::Resource(resource.clone()), Val::Resource(resource));
+    }
+
+    #[test]
+    fn lowering_validation_reports_whether_ownership_needs_tracking() {
+        let owned = Resource::owned("example:notes/store@1.0.0", "note", 7);
+        assert!(
+            validate_resource_lowering(
+                &owned,
+                "example:notes/store@1.0.0",
+                "note",
+                ResourceOwnership::Own,
+            )
+            .unwrap()
+        );
+        let error = validate_resource_lowering(
+            &owned,
+            "example:notes/store@1.0.0",
+            "folder",
+            ResourceOwnership::Own,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("resource type"));
     }
 
     #[test]

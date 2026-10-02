@@ -4,7 +4,9 @@ use std::rc::Rc;
 
 use js_sys::{Array, BigInt, Object, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue};
-use wasm_junction_core::{CallError, Resource, ResourceOwnership, Val, Vals};
+use wasm_junction_core::{
+    CallError, Resource, ResourceOwnership, Val, Vals, validate_resource_lowering,
+};
 
 use crate::types::{FunctionType, ResourceType, ValueType};
 
@@ -14,6 +16,10 @@ const RESOURCE_MARKER: &str = "$wasm-junction-resource";
 pub(crate) struct ResourceTracker(Rc<RefCell<HashSet<Resource>>>);
 
 impl ResourceTracker {
+    fn retain(&self, resource: Resource) {
+        self.0.borrow_mut().insert(resource);
+    }
+
     pub(crate) fn take(&self, interface: &str, name: &str, id: u32) -> Result<Resource, CallError> {
         let resource = Resource::owned(interface, name, id);
         self.0.borrow_mut().take(&resource).ok_or_else(|| {
@@ -26,6 +32,12 @@ impl ResourceTracker {
     pub(crate) fn drain(&self) -> Vec<Resource> {
         self.0.borrow_mut().drain().collect()
     }
+}
+
+#[derive(Clone, Copy)]
+enum ResourceRetention<'a> {
+    Track(&'a ResourceTracker),
+    Ignore,
 }
 
 pub(crate) enum JsResult {
@@ -50,7 +62,7 @@ pub(crate) fn lower_args_tracked(
     values
         .into_iter()
         .zip(&signature.params)
-        .map(|(value, expected)| lower(value, expected, resources))
+        .map(|(value, expected)| lower(value, expected, ResourceRetention::Track(resources)))
         .collect()
 }
 
@@ -87,10 +99,10 @@ pub(crate) fn default_result(signature: &FunctionType) -> Result<JsResult, CallE
     };
     let result = match result {
         ValueType::Result { ok, .. } => match ok.as_deref() {
-            Some(ok) => lower(default_value(ok)?, ok, &ResourceTracker::default())?,
+            Some(ok) => lower(default_value(ok)?, ok, ResourceRetention::Ignore)?,
             None => JsValue::UNDEFINED,
         },
-        result => lower(default_value(result)?, result, &ResourceTracker::default())?,
+        result => lower(default_value(result)?, result, ResourceRetention::Ignore)?,
     };
     Ok(JsResult::Poison(result))
 }
@@ -178,7 +190,9 @@ pub(crate) fn lower_result_tracked(
                 JsResult::Return(payload)
             })
         }
-        ([value], Some(ty)) => lower(value.clone(), ty, resources).map(JsResult::Return),
+        ([value], Some(ty)) => {
+            lower(value.clone(), ty, ResourceRetention::Track(resources)).map(JsResult::Return)
+        }
         _ => Err(CallError::trap("imported result count mismatch")),
     }
 }
@@ -237,7 +251,7 @@ fn lower_optional_payload(
     resources: &ResourceTracker,
 ) -> Result<JsValue, CallError> {
     match (value, ty) {
-        (Some(value), Some(ty)) => lower(value.clone(), ty, resources),
+        (Some(value), Some(ty)) => lower(value.clone(), ty, ResourceRetention::Track(resources)),
         (None, None) => Ok(JsValue::UNDEFINED),
         _ => Err(CallError::trap("wrong payload for top-level WIT result")),
     }
@@ -255,7 +269,7 @@ fn lift_optional_payload(
 fn lower(
     value: Val,
     expected: &ValueType,
-    resources: &ResourceTracker,
+    resources: ResourceRetention<'_>,
 ) -> Result<JsValue, CallError> {
     let value = match (value, expected) {
         (Val::Bool(value), ValueType::Bool) => JsValue::from_bool(value),
@@ -399,7 +413,7 @@ fn lift(
 fn lower_sequence(
     values: Vec<Val>,
     element: &ValueType,
-    resources: &ResourceTracker,
+    resources: ResourceRetention<'_>,
 ) -> Result<JsValue, CallError> {
     values
         .into_iter()
@@ -431,7 +445,7 @@ fn lower_record(
     mut values: Vec<(String, Val)>,
     fields: &[crate::types::FieldType],
     expected: &ValueType,
-    resources: &ResourceTracker,
+    resources: ResourceRetention<'_>,
 ) -> Result<JsValue, CallError> {
     for field in fields {
         if !values.iter().any(|(name, _)| name == &field.name) {
@@ -519,7 +533,7 @@ fn lower_variant(
     value: Option<Box<Val>>,
     cases: &[crate::types::CaseType],
     expected: &ValueType,
-    resources: &ResourceTracker,
+    resources: ResourceRetention<'_>,
 ) -> Result<JsValue, CallError> {
     let actual = Val::Variant {
         case: case.clone(),
@@ -636,7 +650,7 @@ fn lower_option(
     value: Option<Box<Val>>,
     payload: &ValueType,
     expected: &ValueType,
-    resources: &ResourceTracker,
+    resources: ResourceRetention<'_>,
 ) -> Result<JsValue, CallError> {
     match (value, maybe_null(payload)) {
         (None, false) => Ok(JsValue::UNDEFINED),
@@ -700,7 +714,7 @@ fn lower_nested_result(
     ok: Option<&ValueType>,
     err: Option<&ValueType>,
     expected: &ValueType,
-    resources: &ResourceTracker,
+    resources: ResourceRetention<'_>,
 ) -> Result<JsValue, CallError> {
     let (tag, value, ty) = match value {
         Ok(value) => ("ok", value, ok),
@@ -738,29 +752,16 @@ fn lift_nested_result(
 fn lower_resource(
     resource: Resource,
     expected: &ResourceType,
-    resources: &ResourceTracker,
+    resources: ResourceRetention<'_>,
 ) -> Result<JsValue, CallError> {
-    if resource.ownership() != expected.ownership {
-        return Err(CallError::refused(format!(
-            "resource `{}/{}#{}` has {:?} ownership but the call requires {:?}",
-            resource.interface(),
-            resource.name(),
-            resource.id(),
-            resource.ownership(),
-            expected.ownership
-        )));
-    }
-    if resource.interface() != expected.interface || resource.name() != expected.name {
-        return Err(CallError::refused(format!(
-            "resource `{}/{}` does not match the resource type `{}/{}` declared by the call",
-            resource.interface(),
-            resource.name(),
-            expected.interface,
-            expected.name
-        )));
-    }
-    if expected.ownership == ResourceOwnership::Own {
-        resources.0.borrow_mut().insert(resource.clone());
+    let retain = validate_resource_lowering(
+        &resource,
+        &expected.interface,
+        &expected.name,
+        expected.ownership,
+    )?;
+    if retain && let ResourceRetention::Track(resources) = resources {
+        resources.retain(resource.clone());
     }
     let descriptor = Array::of3(
         &JsValue::from_str(resource.interface()),
