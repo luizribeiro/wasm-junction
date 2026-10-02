@@ -7,7 +7,7 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use wasm_junction::{App, Component as JunctionComponent, Val, WasiConfig};
+use wasm_junction::{App, Component as JunctionComponent, Val, WasiSettings};
 use wasm_junction_wasmtime::WasmtimeEngine;
 use wasmtime::component::{Component, InstancePre, Linker, ResourceTable, Val as WasmtimeVal};
 use wasmtime::{Config, Engine, Store};
@@ -96,8 +96,9 @@ fn main() {
         let app = App::builder()
             .engine(WasmtimeEngine::new().unwrap())
             .provide(wasm_junction::wasi::provider())
-            .wasi(WasiConfig::new().env("GREETING", "hello"))
             .build()
+            .unwrap();
+        app.configure("wasi", WasiSettings::new().env("GREETING", "hello"))
             .unwrap();
         app.load(
             JunctionComponent::from_bytes(Arc::<[u8]>::from(COMPONENT))

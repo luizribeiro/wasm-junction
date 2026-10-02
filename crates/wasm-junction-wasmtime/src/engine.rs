@@ -10,7 +10,8 @@ use std::task::{Context, Poll, Waker};
 use wasm_junction_core::WASI_PROVIDER_NAME;
 use wasm_junction_core::{
     BoxFuture, CallError, CompiledComponent, Engine, EngineError, ImportDispatcher,
-    InvocationContext, Resource, StreamHandle, Val, Vals, WasiConfig, validate_resource_lowering,
+    InvocationContext, Resource, StreamHandle, Val, Vals, WasiConfig, WasiSettings,
+    validate_resource_lowering,
 };
 use wasmtime::component::{
     Component, InstancePre, Linker, ResourceAny, ResourceDynamic, ResourceType, Val as WasmtimeVal,
@@ -108,13 +109,13 @@ impl Engine for WasmtimeEngine {
     fn compile(
         &self,
         bytes: Arc<[u8]>,
-        wasi: WasiConfig,
+        _wasi: WasiConfig,
     ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
         let engine = self.engine.clone();
         let linker = self.linker.clone();
         let instantiations = self.instantiations.clone();
         Box::pin(spawn_compile(move || {
-            compile_component(&engine, linker, instantiations, bytes, wasi)
+            compile_component(&engine, linker, instantiations, bytes)
         }))
     }
 }
@@ -207,10 +208,7 @@ fn compile_component(
     mut linker: Linker<StoreData>,
     instantiations: Arc<AtomicU64>,
     bytes: Arc<[u8]>,
-    wasi: WasiConfig,
 ) -> CompileResult {
-    #[cfg(not(feature = "wasi"))]
-    drop(wasi);
     let component =
         Component::new(engine, bytes).map_err(|error| EngineError::new(error.to_string()))?;
     let resources = define_imports(&mut linker, &component)
@@ -221,8 +219,6 @@ fn compile_component(
     Ok(Arc::new(Compiled {
         pre,
         instantiations,
-        #[cfg(feature = "wasi")]
-        wasi,
         resources: resources.into(),
     }))
 }
@@ -230,8 +226,6 @@ fn compile_component(
 struct Compiled {
     pre: InstancePre<StoreData>,
     instantiations: Arc<AtomicU64>,
-    #[cfg(feature = "wasi")]
-    wasi: WasiConfig,
     resources: Arc<[ResourceDefinition]>,
 }
 
@@ -268,6 +262,8 @@ impl Compiled {
         function: &str,
         args: Vals,
     ) -> Result<Vals, wasmtime::Error> {
+        #[cfg(feature = "wasi")]
+        let wasi = wasi_settings(&context);
         let mut store = Store::new(
             self.pre.engine(),
             StoreData {
@@ -275,9 +271,9 @@ impl Compiled {
                 context,
                 component,
                 #[cfg(feature = "wasi")]
-                wasi: wasi_context(&self.wasi),
+                wasi: wasi_context(&wasi),
                 #[cfg(feature = "wasi")]
-                gated_wasi: Arc::new(std::sync::Mutex::new(wasi_context(&self.wasi))),
+                gated_wasi: Arc::new(std::sync::Mutex::new(wasi_context(&wasi))),
                 resources: self.resources.clone(),
                 owned_resources: HashSet::new(),
                 active_streams: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -495,10 +491,22 @@ async fn cleanup_resources(store: &mut Store<StoreData>) -> Result<(), wasmtime:
 }
 
 #[cfg(feature = "wasi")]
-fn wasi_context(configuration: &WasiConfig) -> WasiState {
+fn wasi_settings(context: &InvocationContext) -> WasiSettings {
+    context
+        .settings()
+        .get::<WasiSettings>()
+        .cloned()
+        .unwrap_or_default()
+}
+
+#[cfg(feature = "wasi")]
+fn wasi_context(settings: &WasiSettings) -> WasiState {
     let mut builder = WasiCtxBuilder::new();
-    for (name, value) in configuration.environment() {
+    for (name, value) in settings.environment() {
         builder.env(name, value);
+    }
+    for argument in settings.arguments() {
+        builder.arg(argument);
     }
     WasiState::new(builder.build())
 }

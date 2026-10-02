@@ -10,7 +10,7 @@ use std::time::Duration;
 use wasm_junction::{
     App, BoxFuture, Call, CallContext, CallError, CallErrorKind, CompiledComponent, Component,
     Engine, EngineError, ImportDispatcher, InvocationContext, Middleware, Next, Provided, Provider,
-    Resource, Val, Vals, WasiConfig,
+    Resource, Val, Vals, WasiConfig, WasiSettings,
 };
 #[cfg(feature = "wasi")]
 use wasm_junction::{Caller, LoadError};
@@ -508,15 +508,57 @@ fn wasi_imports_are_missing_without_the_provider() {
 
 #[test]
 #[cfg(feature = "wasi")]
+fn wasi_settings_are_isolated_empty_by_default_and_live() {
+    let app = App::builder()
+        .engine(WasmtimeEngine::new().unwrap())
+        .provide(wasm_junction::wasi::provider())
+        .build()
+        .unwrap();
+    app.configure(
+        "first",
+        WasiSettings::new().env("GREETING", "one").arg("alpha"),
+    )
+    .unwrap();
+    for name in ["first", "second"] {
+        block_on(app.load(Component::from_bytes(WASI_COMPONENT).unwrap().named(name))).unwrap();
+    }
+
+    let read =
+        |name| block_on(app.call(name, ENVIRONMENT, "read", vec![Val::from("GREETING")])).unwrap();
+    assert_eq!(
+        read("first"),
+        [Val::Option(Some(Box::new(Val::from("one"))))]
+    );
+    assert_eq!(read("second"), [Val::Option(None)]);
+    assert_eq!(
+        block_on(app.call("first", ENVIRONMENT, "arguments", Vec::new())).unwrap(),
+        [Val::List(vec![Val::from("alpha")])]
+    );
+
+    app.configure("first", WasiSettings::new().env("GREETING", "two"))
+        .unwrap();
+    assert_eq!(
+        read("first"),
+        [Val::Option(Some(Box::new(Val::from("two"))))]
+    );
+    assert_eq!(read("second"), [Val::Option(None)]);
+}
+
+#[test]
+#[cfg(feature = "wasi")]
 fn environment_gate_traces_refuses_and_rewrites() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let app = App::builder()
         .engine(WasmtimeEngine::new().unwrap())
         .provide(wasm_junction::wasi::provider())
-        .wasi(WasiConfig::new().env("GREETING", "hello from WASI"))
         .middleware(EnvironmentBehavior(calls.clone()))
         .build()
         .unwrap();
+    app.configure(
+        "wasi",
+        WasiSettings::new().env("GREETING", "hello from WASI"),
+    )
+    .unwrap();
     block_on(app.load(Component::from_bytes(WASI_COMPONENT).unwrap().named("wasi"))).unwrap();
 
     let configured =
