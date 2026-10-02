@@ -853,7 +853,7 @@ impl CallTarget for ComponentTarget {
                     "only plain values can cross between components",
                 ));
             }
-            let result = compiled
+            let mut result = compiled
                 .call(
                     imports,
                     context,
@@ -868,9 +868,39 @@ impl CallTarget for ComponentTarget {
                     "only plain values can cross between components",
                 ));
             }
+            pin_streams(&mut result, &compiled)?;
             Ok(result)
         })
     }
+}
+
+fn pin_streams(values: &mut [Val], compiled: &Arc<dyn CompiledComponent>) -> Result<(), CallError> {
+    for value in values {
+        match value {
+            Val::Stream(stream) => stream.pin_generation(compiled.clone())?,
+            Val::List(values) | Val::Tuple(values) => pin_streams(values, compiled)?,
+            Val::Record(fields) => {
+                for (_, value) in fields {
+                    pin_streams(std::slice::from_mut(value), compiled)?;
+                }
+            }
+            Val::Variant { value, .. } | Val::Option(value) => {
+                if let Some(value) = value {
+                    pin_streams(std::slice::from_mut(value), compiled)?;
+                }
+            }
+            Val::Result(result) => {
+                if let Some(value) = result
+                    .as_mut()
+                    .map_or_else(|error| error.as_deref_mut(), |ok| ok.as_deref_mut())
+                {
+                    pin_streams(std::slice::from_mut(value), compiled)?;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn values_are_plain(values: &[Val]) -> bool {
@@ -1715,6 +1745,22 @@ mod tests {
 
     struct ExplicitEngine;
 
+    struct StreamGeneration;
+
+    impl CompiledComponent for StreamGeneration {
+        fn call(
+            &self,
+            _imports: Arc<dyn ImportDispatcher>,
+            _context: InvocationContext,
+            _component: Arc<str>,
+            _interface: Arc<str>,
+            _function: Arc<str>,
+            _args: Vals,
+        ) -> BoxFuture<'_, Result<Vals, CallError>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+    }
+
     struct EchoTarget;
 
     impl ImportTarget for EchoTarget {
@@ -1833,6 +1879,64 @@ mod tests {
                     direction: crate::ChannelDirection::HostToGuest,
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn returned_stream_pins_its_component_generation() {
+        let generation: Arc<dyn CompiledComponent> = Arc::new(StreamGeneration);
+        let weak = Arc::downgrade(&generation);
+        let mut values = vec![crate::Val::Option(Some(Box::new(crate::Val::from(
+            crate::OutputStream::from_bytes(b"generation"),
+        ))))];
+        pin_streams(&mut values, &generation).unwrap();
+        drop(generation);
+        assert!(weak.upgrade().is_some());
+
+        drop(values);
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn a_different_generation_cannot_repin_a_stream() {
+        let first: Arc<dyn CompiledComponent> = Arc::new(StreamGeneration);
+        let second: Arc<dyn CompiledComponent> = Arc::new(StreamGeneration);
+        let mut values = vec![crate::Val::from(crate::OutputStream::from_bytes(
+            b"generation",
+        ))];
+        pin_streams(&mut values, &first).unwrap();
+
+        let error = pin_streams(&mut values, &second).unwrap_err();
+        assert_eq!(error.kind(), crate::CallErrorKind::Refused);
+        assert_eq!(
+            error.to_string(),
+            "stream belongs to another component generation"
+        );
+    }
+
+    #[test]
+    fn routed_streams_are_refused_before_the_engine_call() {
+        let app = App::builder().engine(ExplicitEngine).build().unwrap();
+        let target = ComponentTarget {
+            compiled: Arc::new(StreamGeneration),
+            imports: Arc::new(app),
+            context: InvocationContext::default(),
+            component: Arc::from("destination"),
+            component_boundary: true,
+        };
+        let call = Call::new(
+            Caller::Component(Arc::from("source")),
+            "destination",
+            "example:streams/probe@0.1.0",
+            "accept",
+            vec![crate::Val::from(crate::OutputStream::from_bytes(b"routed"))],
+        );
+
+        let error = ready(target.call(call)).unwrap_err();
+        assert_eq!(error.kind(), crate::CallErrorKind::Refused);
+        assert_eq!(
+            error.to_string(),
+            "only plain values can cross between components"
         );
     }
 

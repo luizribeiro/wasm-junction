@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Poll, Waker};
 
-use crate::{TypeError, Val};
+use crate::{CallError, CompiledComponent, TypeError, Val};
 
 static NEXT_STREAM_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -32,6 +32,7 @@ enum StreamEnd {
 pub struct StreamHandle {
     id: u64,
     state: Arc<Mutex<StreamState>>,
+    generation: Option<Arc<dyn CompiledComponent>>,
 }
 
 impl StreamHandle {
@@ -45,6 +46,7 @@ impl StreamHandle {
                 reader_waker: None,
                 writers,
             })),
+            generation: None,
         }
     }
 
@@ -52,6 +54,28 @@ impl StreamHandle {
     #[must_use]
     pub const fn id(&self) -> u64 {
         self.id
+    }
+
+    /// Keeps the component generation that returned this stream alive while the handle exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if another component generation already owns the stream.
+    #[doc(hidden)]
+    pub fn pin_generation(
+        &mut self,
+        generation: Arc<dyn CompiledComponent>,
+    ) -> Result<(), CallError> {
+        match &self.generation {
+            None => {
+                self.generation = Some(generation);
+                Ok(())
+            }
+            Some(current) if Arc::ptr_eq(current, &generation) => Ok(()),
+            Some(_) => Err(CallError::refused(
+                "stream belongs to another component generation",
+            )),
+        }
     }
 
     fn state(&self) -> MutexGuard<'_, StreamState> {
