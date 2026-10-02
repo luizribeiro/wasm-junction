@@ -9,9 +9,19 @@ version.workspace = true
 publish = false
 build = "build.rs"
 
+[[bin]]
+name = "wasm-junction-example-greeter"
+path = "src/main.rs"
+test = false
+
 [lints]
 workspace = true
 
 [dependencies]
-tokio = { version = "1", features = ["macros", "rt"] }
 wasm-junction = { path = "../../crates/wasm-junction", version = "=0.0.0" }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
+
+[target.'cfg(target_family = "wasm")'.dev-dependencies]
+wasm-bindgen-test = "=0.3.77"

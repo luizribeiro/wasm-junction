@@ -10,6 +10,17 @@ Run it from the repository root:
 nix develop -c cargo run -p wasm-junction-example-greeter
 ```
 
+## In the browser
+
+Run the dedicated-Worker browser test in Chromium, Firefox, and WebKit:
+
+```sh
+nix develop -c scripts/browser-test all -- -p wasm-junction-example-greeter --lib
+```
+
+The native entry point and the browser test call the same `run` function. In a browser, loading
+the embedded component also transpiles it to JavaScript on the Worker's thread.
+
 The files are intentionally self-contained:
 
 - `wit/greeter.wit` defines the imported `users` interface, exported `greeter` interface, and
