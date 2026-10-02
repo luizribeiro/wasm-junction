@@ -36,21 +36,12 @@ pub const WASI_INTERFACES: &[&str] = &[
     "wasi:cli/terminal-stdout@0.2.12",
     "wasi:clocks/monotonic-clock@0.2.12",
     "wasi:clocks/wall-clock@0.2.12",
-    "wasi:filesystem/preopens@0.2.12",
-    "wasi:filesystem/types@0.2.12",
     "wasi:io/error@0.2.12",
     "wasi:io/poll@0.2.12",
     "wasi:io/streams@0.2.12",
     "wasi:random/insecure-seed@0.2.12",
     "wasi:random/insecure@0.2.12",
     "wasi:random/random@0.2.12",
-    "wasi:sockets/instance-network@0.2.12",
-    "wasi:sockets/ip-name-lookup@0.2.12",
-    "wasi:sockets/network@0.2.12",
-    "wasi:sockets/tcp-create-socket@0.2.12",
-    "wasi:sockets/tcp@0.2.12",
-    "wasi:sockets/udp-create-socket@0.2.12",
-    "wasi:sockets/udp@0.2.12",
 ];
 
 /// WASI Preview 2 interfaces intercepted by the application middleware chain.

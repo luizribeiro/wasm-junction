@@ -2,7 +2,7 @@
 
 #![cfg(feature = "wasi")]
 
-use wasm_junction_wasmtime::GATED_WASI_INTERFACES;
+use wasm_junction_wasmtime::{GATED_WASI_INTERFACES, WASI_INTERFACES};
 
 #[test]
 fn gated_wasi_set_changes_only_deliberately() {
@@ -13,5 +13,15 @@ fn gated_wasi_set_changes_only_deliberately() {
             "wasi:clocks/monotonic-clock@0.2.12",
             "wasi:clocks/wall-clock@0.2.12",
         ]
+    );
+}
+
+#[test]
+fn advertised_wasi_set_excludes_ungated_filesystem_and_sockets() {
+    assert!(
+        WASI_INTERFACES
+            .iter()
+            .all(|interface| !interface.starts_with("wasi:filesystem/")
+                && !interface.starts_with("wasi:sockets/"))
     );
 }

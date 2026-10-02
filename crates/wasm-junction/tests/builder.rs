@@ -146,6 +146,45 @@ fn wasi_preview_three_import_is_missing_with_the_provider() {
     assert_eq!(missing.interfaces(), ["wasi:http/client@0.3.0"]);
 }
 
+#[cfg(all(feature = "wasi", feature = "wasmtime", not(target_family = "wasm")))]
+#[test]
+fn ungated_wasi_families_are_missing_with_the_provider() {
+    let bytes = component_bytes_from(
+        &[
+            (
+                "filesystem.wit",
+                "package wasi:filesystem@0.2.12; interface types { probe: func(); }",
+            ),
+            (
+                "sockets.wit",
+                "package wasi:sockets@0.2.12; interface network { probe: func(); }",
+            ),
+            (
+                "fixture.wit",
+                "package test:client@1.0.0; world plugin { import wasi:filesystem/types@0.2.12; import wasi:sockets/network@0.2.12; }",
+            ),
+        ],
+        "test:client/plugin@1.0.0",
+    );
+    let app = App::builder()
+        .provide(wasm_junction::wasi::provider())
+        .build()
+        .unwrap();
+
+    let error = block_on(app.load(Component::from_bytes(bytes).unwrap().named("client")))
+        .expect_err("ungated WASI imports unexpectedly resolved");
+    let LoadError::MissingImports(missing) = error else {
+        panic!("expected missing imports")
+    };
+    assert_eq!(
+        missing.interfaces(),
+        [
+            "wasi:filesystem/types@0.2.12",
+            "wasi:sockets/network@0.2.12"
+        ]
+    );
+}
+
 fn _engine_contract_is_object_safe(
     engine: &dyn Engine,
     compiled: &dyn CompiledComponent,
