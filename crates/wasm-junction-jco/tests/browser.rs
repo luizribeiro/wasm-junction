@@ -20,9 +20,9 @@ use wasm_junction::{
     OutputStream, Provided, Provider, Resource, Val, Vals, WasiConfig,
 };
 use wasm_junction_conformance::{
-    CYCLE_A, DECORATION, Fixture, FixtureHost, PoisonHost, RESOURCE_CLIENT, ReloadGreeter,
-    ReloadHost, ResourceHost, RetainHost, RoutedFixture, RoutedHost, STREAM_PROBE, SUMMARIZER,
-    StreamHost, TRANSLATOR, WRITER, component, cycle_a_component, cycle_b_component,
+    CYCLE_A, DECORATION, Fixture, FixtureHost, PoisonHost, RELOAD_GATE, RESOURCE_CLIENT,
+    ReloadGreeter, ReloadHost, ResourceHost, RetainHost, RoutedFixture, RoutedHost, STREAM_PROBE,
+    SUMMARIZER, StreamHost, TRANSLATOR, WRITER, component, cycle_a_component, cycle_b_component,
     reload_v1_component, reload_v2_component, resource_component, run_default, run_reload,
     run_resource_refusal, run_resources, run_routed, run_streams, sample_note, sample_summary,
     stream_component, translator_component, writer_component,
@@ -86,6 +86,26 @@ extern "C" {
     async fn jspi_smoke(bytes: Uint8Array) -> Result<JsValue, JsValue>;
 
     fn delay(milliseconds: u32) -> js_sys::Promise;
+}
+
+#[wasm_bindgen(inline_js = r#"
+// @ts-check
+/** @returns {number} */
+export function wasmJunctionBenchmarkNow() {
+  return performance.now();
+}
+
+/** @param {string} message */
+export function wasmJunctionBenchmarkReport(message) {
+  console.log(message);
+}
+"#)]
+extern "C" {
+    #[wasm_bindgen(js_name = wasmJunctionBenchmarkNow)]
+    fn benchmark_now() -> f64;
+
+    #[wasm_bindgen(js_name = wasmJunctionBenchmarkReport)]
+    fn benchmark_report(message: &str);
 }
 
 #[wasm_bindgen_test]
@@ -238,6 +258,126 @@ async fn bidirectional_streams_match_the_engine_neutral_trace() {
 #[wasm_bindgen_test]
 async fn reload_scenario_matches_the_engine_neutral_trace() {
     run_reload(JcoEngine::new()).await.unwrap();
+}
+
+#[wasm_bindgen_test]
+#[ignore = "run through scripts/browser-bench"]
+async fn browser_reload_benchmark() {
+    const SAMPLES: usize = 5;
+
+    let host = TimedReloadHost::default();
+    let app = App::builder()
+        .engine(JcoEngine::new())
+        .provide(host.clone().provided())
+        .build()
+        .unwrap();
+    app.load(benchmark_component(reload_v1_component()))
+        .await
+        .unwrap();
+    let greeter = app.get::<ReloadGreeter>("greeter").unwrap();
+    benchmark_timed_call(&greeter, &host).await;
+
+    let mut baseline = Vec::with_capacity(SAMPLES);
+    let mut reloads = Vec::with_capacity(SAMPLES);
+    let mut during = Vec::with_capacity(SAMPLES);
+    for sample in 0..SAMPLES {
+        let start = benchmark_now();
+        benchmark_timed_call(&greeter, &host).await;
+        baseline.push((benchmark_now() - start) * 1_000.0);
+
+        host.0.reset().unwrap();
+        let call_start = benchmark_now();
+        let mut overlapping = Box::pin(greeter.greet_slow("Ada"));
+        poll_fn(|context| {
+            let _ = overlapping.as_mut().poll(context);
+            Poll::Ready(())
+        })
+        .await;
+        host.0.wait_until_entered().await;
+        let bytes = if sample % 2 == 0 {
+            reload_v2_component()
+        } else {
+            reload_v1_component()
+        };
+        let start = benchmark_now();
+        app.reload("greeter", benchmark_component(bytes))
+            .await
+            .unwrap();
+        reloads.push(benchmark_now() - start);
+        assert!(overlapping.await.unwrap().ends_with("hello, Ada"));
+        during.push((benchmark_now() - call_start) * 1_000.0);
+    }
+    let baseline_median = median(&baseline);
+    let overlapping_median = median(&during);
+    let pause = (overlapping_median - baseline_median).max(0.0);
+
+    benchmark_report(&format!(
+        "jco reload: {:.1} ms; samples {reloads:.1?}",
+        median(&reloads)
+    ));
+    benchmark_report(&format!(
+        "call without reload: {:.1} us; samples {baseline:.1?}",
+        baseline_median
+    ));
+    benchmark_report(&format!(
+        "call overlapping reload: {:.1} us; samples {during:.1?}",
+        overlapping_median
+    ));
+    benchmark_report(&format!("call pause from reload: {pause:.1} us"));
+}
+
+#[derive(Clone, Default)]
+struct TimedReloadHost(ReloadHost);
+
+impl TimedReloadHost {
+    fn provided(self) -> Provided {
+        Provided::new(RELOAD_GATE, self)
+    }
+}
+
+impl Provider for TimedReloadHost {
+    fn call<'a>(
+        &'a self,
+        context: &'a CallContext,
+        call: Call,
+    ) -> BoxFuture<'a, Result<Vals, CallError>> {
+        Box::pin(async move {
+            let mut waiting = self.0.call(context, call);
+            poll_fn(|context| match waiting.as_mut().poll(context) {
+                Poll::Pending => Poll::Ready(Ok(())),
+                Poll::Ready(_) => Poll::Ready(Err(CallError::trap(
+                    "benchmark gate completed before its timer",
+                ))),
+            })
+            .await?;
+            JsFuture::from(delay(1))
+                .await
+                .map_err(|_| CallError::trap("benchmark timer failed"))?;
+            self.0.release();
+            waiting.await
+        })
+    }
+}
+
+async fn benchmark_timed_call(greeter: &ReloadGreeter, host: &TimedReloadHost) {
+    host.0.reset().unwrap();
+    assert!(
+        greeter
+            .greet_slow("Ada")
+            .await
+            .unwrap()
+            .ends_with("hello, Ada")
+    );
+}
+
+fn benchmark_component(bytes: &'static [u8]) -> Component {
+    Component::from_bytes(bytes).unwrap().named("greeter")
+}
+
+fn median(samples: &[f64]) -> f64 {
+    let mut samples = samples.to_vec();
+    samples.sort_by(f64::total_cmp);
+    samples[samples.len() / 2]
 }
 
 #[wasm_bindgen_test]
