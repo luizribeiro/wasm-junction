@@ -1,4 +1,4 @@
-use js_sys::{Array, BigInt, Uint8Array};
+use js_sys::{Array, BigInt, Object, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_junction_core::{CallError, Val, Vals};
 
@@ -84,8 +84,8 @@ fn lower(value: Val, expected: &ValueType) -> Result<JsValue, CallError> {
                 .collect::<Result<Array, _>>()?
                 .into()
         }
+        (Val::Record(values), ValueType::Record(fields)) => lower_record(values, fields, expected)?,
         (_, ValueType::Unsupported(name)) => return Err(unsupported(name)),
-        (_, ValueType::Record(_)) => return Err(unsupported("record")),
         (_, ValueType::Variant(_)) => return Err(unsupported("variant")),
         (_, ValueType::Enum(_)) => return Err(unsupported("enum")),
         (_, ValueType::Flags(_)) => return Err(unsupported("flags")),
@@ -147,7 +147,7 @@ fn lift(value: JsValue, expected: &ValueType) -> Result<Val, CallError> {
                 .collect::<Result<Vec<_>, _>>()
                 .map(Val::Tuple)
         }
-        ValueType::Record(_) => Err(unsupported("record")),
+        ValueType::Record(fields) => lift_record(value, fields, expected),
         ValueType::Variant(_) => Err(unsupported("variant")),
         ValueType::Enum(_) => Err(unsupported("enum")),
         ValueType::Flags(_) => Err(unsupported("flags")),
@@ -178,6 +178,91 @@ fn js_array(value: JsValue, expected: &ValueType) -> Result<Array, CallError> {
     } else {
         Err(wrong_js_type(expected, &value))
     }
+}
+
+fn lower_record(
+    mut values: Vec<(String, Val)>,
+    fields: &[crate::types::FieldType],
+    expected: &ValueType,
+) -> Result<JsValue, CallError> {
+    for field in fields {
+        if !values.iter().any(|(name, _)| name == &field.name) {
+            return Err(mismatch(
+                expected,
+                &Val::Record(values),
+                &format!("missing field `{}`", field.name),
+            ));
+        }
+    }
+    if values.len() != fields.len()
+        || values
+            .iter()
+            .any(|(name, _)| !fields.iter().any(|field| &field.name == name))
+    {
+        return Err(mismatch(
+            expected,
+            &Val::Record(values),
+            "unknown or duplicate field",
+        ));
+    }
+    let object = Object::new();
+    for field in fields {
+        let index = values
+            .iter()
+            .position(|(name, _)| name == &field.name)
+            .ok_or_else(|| mismatch(expected, &values, "record changed during conversion"))?;
+        let (_, value) = values.remove(index);
+        Reflect::set(
+            &object,
+            &JsValue::from_str(&field.js_name),
+            &lower(value, &field.ty)?,
+        )
+        .map_err(|error| mismatch(expected, &error, "could not set record field"))?;
+    }
+    Ok(object.into())
+}
+
+fn lift_record(
+    value: JsValue,
+    fields: &[crate::types::FieldType],
+    expected: &ValueType,
+) -> Result<Val, CallError> {
+    if !value.is_object() || Array::is_array(&value) {
+        return Err(wrong_js_type(expected, &value));
+    }
+    let object = Object::from(value.clone());
+    for key in Object::keys(&object)
+        .iter()
+        .filter_map(|key| key.as_string())
+    {
+        if !fields.iter().any(|field| field.js_name == key) {
+            return Err(mismatch(
+                expected,
+                &value,
+                &format!("unknown field `{key}`"),
+            ));
+        }
+    }
+    let values = fields
+        .iter()
+        .map(|field| {
+            let key = JsValue::from_str(&field.js_name);
+            if !Reflect::has(&object, &key)
+                .map_err(|error| mismatch(expected, &error, "could not inspect record field"))?
+            {
+                return Err(mismatch(
+                    expected,
+                    &value,
+                    &format!("missing field `{}`", field.name),
+                ));
+            }
+            Reflect::get(&object, &key)
+                .map_err(|error| mismatch(expected, &error, "could not read record field"))
+                .and_then(|value| lift(value, &field.ty))
+                .map(|value| (field.name.clone(), value))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Val::Record(values))
 }
 
 fn one_char(value: String) -> Option<char> {
@@ -302,6 +387,52 @@ mod tests {
         let lowered = lower_args(values.clone(), &signature).unwrap();
         assert!(lowered.get(1).is_instance_of::<Uint8Array>());
         assert_eq!(lift_args(&lowered, &signature).unwrap(), values);
+    }
+
+    #[wasm_bindgen_test]
+    fn round_trips_records_with_jco_field_names() {
+        let ty = ValueType::Record(vec![
+            crate::types::FieldType {
+                name: "signed-8".to_owned(),
+                js_name: "signed8".to_owned(),
+                ty: ValueType::S8,
+            },
+            crate::types::FieldType {
+                name: "tags".to_owned(),
+                js_name: "tags".to_owned(),
+                ty: ValueType::List(Box::new(ValueType::String)),
+            },
+        ]);
+        let values = vec![Val::Record(vec![
+            ("signed-8".to_owned(), Val::S8(-8)),
+            ("tags".to_owned(), Val::List(vec![Val::from("wasm")])),
+        ])];
+        let signature = FunctionType {
+            params: vec![ty],
+            result: None,
+        };
+        let lowered = lower_args(values.clone(), &signature).unwrap();
+        assert_eq!(
+            Reflect::get(&lowered.get(0), &"signed8".into())
+                .unwrap()
+                .as_f64(),
+            Some(-8.0)
+        );
+        assert_eq!(lift_args(&lowered, &signature).unwrap(), values);
+    }
+
+    #[wasm_bindgen_test]
+    fn refuses_a_missing_record_field() {
+        let error = lift_error(
+            Object::new().into(),
+            ValueType::Record(vec![crate::types::FieldType {
+                name: "title".to_owned(),
+                js_name: "title".to_owned(),
+                ty: ValueType::String,
+            }]),
+        );
+        assert!(error.contains("WIT `record`"), "{error}");
+        assert!(error.contains("missing field `title`"), "{error}");
     }
 
     #[wasm_bindgen_test]
