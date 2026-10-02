@@ -4,19 +4,26 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll, Wake, Waker};
 
 use wasm_junction::{
-    App, AppBuilder, Call, CallContext, CallError, Component, Middleware, Next, Vals,
+    App, AppBuilder, BoxFuture, Call, CallContext, CallError, Component, Middleware, Next,
+    Provided, Provider, Val, Vals,
 };
+use wasm_junction_conformance::{DISPATCH_PINGER, DISPATCH_RUNNER, dispatch_component};
 use wasm_junction_wasmtime::WasmtimeEngine;
-
-const COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dispatch-benchmark.wasm"));
-
-wasm_junction::bindgen!({ path: "benchmark/wit" });
 
 struct Ping;
 
-impl pinger::Host for Ping {
-    fn ping(&self, _cx: &CallContext, value: u32) -> Result<u32, CallError> {
-        Ok(value + 1)
+impl Provider for Ping {
+    fn call<'a>(
+        &'a self,
+        _context: &'a CallContext,
+        call: Call,
+    ) -> BoxFuture<'a, Result<Vals, CallError>> {
+        Box::pin(async move {
+            let [Val::U32(value)] = call.args.as_slice() else {
+                return Err(CallError::trap("ping expected one u32"));
+            };
+            Ok(vec![Val::U32(value + 1)])
+        })
     }
 }
 
@@ -39,11 +46,15 @@ impl Middleware for Counting {
 pub(crate) async fn loaded(middleware: Option<Counting>) -> App {
     let builder = App::builder()
         .engine(WasmtimeEngine::new().unwrap())
-        .provide(pinger::provider(Ping));
+        .provide(Provided::new(DISPATCH_PINGER, Ping));
     let app = add_middleware(builder, middleware).build().unwrap();
-    app.load(Component::from_bytes(COMPONENT).unwrap().named("dispatch"))
-        .await
-        .unwrap();
+    app.load(
+        Component::from_bytes(dispatch_component())
+            .unwrap()
+            .named("dispatch"),
+    )
+    .await
+    .unwrap();
     app
 }
 
@@ -55,13 +66,24 @@ fn add_middleware(builder: AppBuilder, middleware: Option<Counting>) -> AppBuild
 }
 
 pub(crate) async fn imports(app: &App, iterations: u32) {
-    let runner = app.get::<runner::Runner>("dispatch").unwrap();
-    assert_eq!(runner.imports(iterations).await.unwrap(), iterations);
+    let values = app
+        .call(
+            "dispatch",
+            DISPATCH_RUNNER,
+            "imports",
+            vec![Val::U32(iterations)],
+        )
+        .await
+        .unwrap();
+    assert_eq!(values, [Val::U32(iterations)]);
 }
 
 pub(crate) async fn noop(app: &App) {
-    let runner = app.get::<runner::Runner>("dispatch").unwrap();
-    assert_eq!(runner.noop().await.unwrap(), 0);
+    let values = app
+        .call("dispatch", DISPATCH_RUNNER, "noop", Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(values, [Val::U32(0)]);
 }
 
 struct ThreadWake(std::thread::Thread);
