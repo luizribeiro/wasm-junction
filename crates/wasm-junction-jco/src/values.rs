@@ -22,6 +22,10 @@ impl ResourceTracker {
             ))
         })
     }
+
+    pub(crate) fn drain(&self) -> Vec<Resource> {
+        self.0.borrow_mut().drain().collect()
+    }
 }
 
 pub(crate) enum JsResult {

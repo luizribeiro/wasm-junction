@@ -17,9 +17,10 @@ use wasm_junction::{
     Next, Provided, Provider, Val, Vals, WasiConfig,
 };
 use wasm_junction_conformance::{
-    CYCLE_A, DECORATION, Fixture, FixtureHost, RoutedFixture, RoutedHost, SUMMARIZER, TRANSLATOR,
-    WRITER, component, cycle_a_component, cycle_b_component, run_default, run_routed, sample_note,
-    sample_summary, translator_component, writer_component,
+    CYCLE_A, DECORATION, Fixture, FixtureHost, RESOURCE_CLIENT, ResourceHost, RoutedFixture,
+    RoutedHost, SUMMARIZER, TRANSLATOR, WRITER, component, cycle_a_component, cycle_b_component,
+    resource_component, run_default, run_resources, run_routed, sample_note, sample_summary,
+    translator_component, writer_component,
 };
 use wasm_junction_jco::JcoEngine;
 
@@ -143,6 +144,34 @@ async fn default_engine_matches_the_engine_neutral_trace() {
 #[wasm_bindgen_test]
 async fn routed_scenario_matches_the_engine_neutral_trace() {
     run_routed(JcoEngine::new()).await.unwrap();
+}
+
+#[wasm_bindgen_test]
+async fn host_resource_calls_cross_middleware_and_the_engine() {
+    run_resources(JcoEngine::new()).await.unwrap();
+}
+
+#[wasm_bindgen_test]
+async fn completed_invocation_cleans_up_retained_host_resources() {
+    let host = ResourceHost::default();
+    let app = App::builder()
+        .engine(JcoEngine::new())
+        .provide(host.clone().provided())
+        .build()
+        .unwrap();
+    app.load(
+        Component::from_bytes(resource_component())
+            .unwrap()
+            .named("resource-client"),
+    )
+    .await
+    .unwrap();
+    let result = app
+        .call("resource-client", RESOURCE_CLIENT, "retain", Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(result, [Val::from("profile:Grace")]);
+    assert_eq!(host.active_resources(), 0);
 }
 
 #[wasm_bindgen_test]

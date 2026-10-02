@@ -129,6 +129,7 @@ impl CompiledComponent for BrowserCompiled {
                 resources: resources.clone(),
             };
             let drop_bridge = bridge.clone();
+            let cleanup_bridge = bridge.clone();
             let callback = Closure::wrap(Box::new(
                 move |interface: String, function: String, args: Array| {
                     let bridge = bridge.clone();
@@ -166,26 +167,34 @@ impl CompiledComponent for BrowserCompiled {
                 drop_callback.as_ref().unchecked_ref(),
             )
             .await;
-            match result {
+            let result = match result {
                 Ok(result) => {
                     if let Some(error) = import_error.borrow_mut().take() {
-                        return Err(error);
+                        Err(error)
+                    } else {
+                        lift_result_tracked(result, &signature, &resources)
                     }
-                    lift_result_tracked(result, &signature, &resources)
                 }
                 Err(error) => {
                     if let Some(error) = import_error.borrow_mut().take() {
-                        return Err(error);
-                    }
-                    if let Some(result) = lift_result_error_tracked(&error, &signature, &resources)?
+                        Err(error)
+                    } else if let Some(result) =
+                        lift_result_error_tracked(&error, &signature, &resources)?
                     {
-                        return Ok(result);
+                        Ok(result)
+                    } else {
+                        Err(CallError::trap(format!(
+                            "component export `{interface}#{function}` trapped: {}",
+                            js_error(&error)
+                        )))
                     }
-                    Err(CallError::trap(format!(
-                        "component export `{interface}#{function}` trapped: {}",
-                        js_error(&error)
-                    )))
                 }
+            };
+            match (result, cleanup_bridge.cleanup_resources().await) {
+                (Ok(values), Ok(())) => Ok(values),
+                (Err(error), Ok(())) => Err(error),
+                (Ok(_), Err(cleanup)) => Err(cleanup),
+                (Err(error), Err(cleanup)) => Err(CallError::trap(format!("{error}; {cleanup}"))),
             }
         })
     }
@@ -240,17 +249,49 @@ impl Bridge {
     }
 
     async fn drop_resource(&self, interface: String, name: String, id: u32) -> Result<(), JsValue> {
+        let resource = self
+            .resources
+            .take(&interface, &name, id)
+            .map_err(|error| {
+                self.remember(error.clone());
+                js_sys::Error::new(&error.to_string())
+            })?;
         self.imports
-            .drop_resource(
-                self.context.clone(),
-                self.component.clone(),
-                wasm_junction_core::Resource::owned(interface, name, id),
-            )
+            .drop_resource(self.context.clone(), self.component.clone(), resource)
             .await
             .map_err(|error| {
                 self.remember(error.clone());
                 js_sys::Error::new(&error.to_string()).into()
             })
+    }
+
+    async fn cleanup_resources(&self) -> Result<(), CallError> {
+        let mut resources = self.resources.drain();
+        resources.sort_by(|left, right| {
+            (left.interface(), left.name(), left.id()).cmp(&(
+                right.interface(),
+                right.name(),
+                right.id(),
+            ))
+        });
+        let mut failures = Vec::new();
+        for resource in resources {
+            if let Err(error) = self
+                .imports
+                .drop_resource(self.context.clone(), self.component.clone(), resource)
+                .await
+            {
+                failures.push(error.to_string());
+            }
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(CallError::trap(format!(
+                "resource cleanup failed: {}",
+                failures.join("; ")
+            )))
+        }
     }
 }
 
