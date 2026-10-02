@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 
 use wasm_junction_core::ResourceOwnership;
 use wit_component::{DecodedWasm, decode};
-use wit_parser::{Function, Handle, Resolve, Type, TypeDefKind, TypeOwner, WorldItem};
+use wit_parser::{
+    Function, FunctionKind, Handle, Resolve, Type, TypeDefKind, TypeOwner, WorldItem,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ValueType {
@@ -39,6 +41,22 @@ pub(crate) struct ResourceType {
     pub(crate) interface: String,
     pub(crate) name: String,
     pub(crate) ownership: ResourceOwnership,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ResourceDefinition {
+    pub(crate) interface: String,
+    pub(crate) name: String,
+    pub(crate) js_name: String,
+    pub(crate) constructor: Option<String>,
+    pub(crate) methods: Vec<ResourceFunction>,
+    pub(crate) statics: Vec<ResourceFunction>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ResourceFunction {
+    pub(crate) wit_name: String,
+    pub(crate) js_name: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -100,6 +118,8 @@ pub(crate) struct Signatures {
     #[cfg(any(test, target_family = "wasm"))]
     import_aliases: BTreeMap<String, Option<String>>,
     exports: BTreeMap<(String, String), FunctionType>,
+    #[cfg(any(test, target_family = "wasm"))]
+    resources: Vec<ResourceDefinition>,
 }
 
 impl Signatures {
@@ -117,6 +137,8 @@ impl Signatures {
             #[cfg(any(test, target_family = "wasm"))]
             imports,
             exports: collect(&resolve, resolve.worlds[world].exports.iter()),
+            #[cfg(any(test, target_family = "wasm"))]
+            resources: collect_resources(&resolve, resolve.worlds[world].imports.iter()),
         })
     }
 
@@ -148,6 +170,61 @@ impl Signatures {
         self.exports
             .get(&(interface.to_owned(), function.to_owned()))
     }
+
+    #[cfg(target_family = "wasm")]
+    pub(crate) fn resources(&self) -> &[ResourceDefinition] {
+        &self.resources
+    }
+}
+
+#[cfg(any(test, target_family = "wasm"))]
+fn collect_resources<'a>(
+    resolve: &Resolve,
+    items: impl Iterator<Item = (&'a wit_parser::WorldKey, &'a WorldItem)>,
+) -> Vec<ResourceDefinition> {
+    let mut definitions = Vec::new();
+    for (key, item) in items {
+        let WorldItem::Interface { id, .. } = item else {
+            continue;
+        };
+        let interface = resolve.name_world_key(key);
+        for (name, resource) in &resolve.interfaces[*id].types {
+            if !matches!(resolve.types[*resource].kind, TypeDefKind::Resource) {
+                continue;
+            }
+            let mut definition = ResourceDefinition {
+                interface: interface.clone(),
+                name: name.clone(),
+                js_name: upper_camel(name),
+                constructor: None,
+                methods: Vec::new(),
+                statics: Vec::new(),
+            };
+            for function in resolve.interfaces[*id].functions.values() {
+                if function.kind.resource() != Some(*resource) {
+                    continue;
+                }
+                let descriptor = ResourceFunction {
+                    wit_name: function.name.clone(),
+                    js_name: js_name(function.item_name()),
+                };
+                match function.kind {
+                    FunctionKind::Constructor(_) => {
+                        definition.constructor = Some(function.name.clone());
+                    }
+                    FunctionKind::Method(_) | FunctionKind::AsyncMethod(_) => {
+                        definition.methods.push(descriptor);
+                    }
+                    FunctionKind::Static(_) | FunctionKind::AsyncStatic(_) => {
+                        definition.statics.push(descriptor);
+                    }
+                    FunctionKind::Freestanding | FunctionKind::AsyncFreestanding => {}
+                }
+            }
+            definitions.push(definition);
+        }
+    }
+    definitions
 }
 
 #[cfg(any(test, target_family = "wasm"))]
@@ -285,6 +362,23 @@ fn resource_type(resolve: &Resolve, handle: Handle) -> ValueType {
     }
 }
 
+fn upper_camel(name: &str) -> String {
+    let mut uppercase = true;
+    name.chars()
+        .filter_map(|character| {
+            if character == '-' {
+                uppercase = true;
+                None
+            } else if uppercase {
+                uppercase = false;
+                Some(character.to_ascii_uppercase())
+            } else {
+                Some(character)
+            }
+        })
+        .collect()
+}
+
 pub(crate) fn js_name(name: &str) -> String {
     let mut uppercase = false;
     name.chars()
@@ -352,6 +446,7 @@ mod tests {
             import_aliases: import_aliases(&imports),
             imports,
             exports: BTreeMap::new(),
+            resources: Vec::new(),
         };
 
         let error = signatures.import("example:notes/api", "read").unwrap_err();
@@ -377,5 +472,10 @@ mod tests {
         assert_eq!(resource.interface, "example:resources/host@1.0.0");
         assert_eq!(resource.name, "session");
         assert_eq!(resource.ownership, ResourceOwnership::Own);
+        let session = &signatures.resources[0];
+        assert_eq!(session.js_name, "Session");
+        assert_eq!(session.constructor.as_deref(), Some("[constructor]session"));
+        assert_eq!(session.methods[0].js_name, "profile");
+        assert_eq!(session.methods[0].wit_name, "[method]session.profile");
     }
 }
