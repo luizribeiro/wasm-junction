@@ -33,5 +33,6 @@ The files are intentionally self-contained:
 - `build.rs` builds both guests for `wasm32-unknown-unknown` and componentizes them without WASI.
 - `src/gate.rs` implements the host-controlled suspension point.
 - `src/trace.rs` contains the example's tracing middleware.
-- `src/main.rs` loads, calls, reloads, and releases the two generations.
+- `src/lib.rs` loads, calls, reloads, and releases the two generations.
+- `src/bin/` uses Tokio to run that target-neutral workflow and print its output.
 - `tests/` runs the executable and checks its complete output.
