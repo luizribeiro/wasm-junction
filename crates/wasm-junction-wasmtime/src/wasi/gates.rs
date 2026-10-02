@@ -46,6 +46,21 @@ impl<T: FromVal> FromVal for Vec<T> {
     }
 }
 
+impl<T: ToVal> ToVal for Option<T> {
+    fn to_val(self) -> Val {
+        Val::Option(self.map(|value| Box::new(value.to_val())))
+    }
+}
+
+impl<T: FromVal> FromVal for Option<T> {
+    fn from_val(value: Val) -> Result<Self, CallError> {
+        match value {
+            Val::Option(value) => value.map(|value| T::from_val(*value)).transpose(),
+            _ => Err(shape("option")),
+        }
+    }
+}
+
 impl<A: ToVal, B: ToVal> ToVal for (A, B) {
     fn to_val(self) -> Val {
         Val::Tuple(vec![self.0.to_val(), self.1.to_val()])
@@ -96,6 +111,12 @@ pub(super) fn add_environment(linker: &mut Linker<StoreData>) -> wasmtime::Resul
     gate!(linker, "wasi:cli/environment@0.2.12", "get-environment", cli,
         wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment,
         () -> Vec<(String, String)>);
+    gate!(linker, "wasi:cli/environment@0.2.12", "get-arguments", cli,
+        wasmtime_wasi::p2::bindings::cli::environment::Host::get_arguments,
+        () -> Vec<String>);
+    gate!(linker, "wasi:cli/environment@0.2.12", "initial-cwd", cli,
+        wasmtime_wasi::p2::bindings::cli::environment::Host::initial_cwd,
+        () -> Option<String>);
     Ok(())
 }
 

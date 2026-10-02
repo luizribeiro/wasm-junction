@@ -671,7 +671,10 @@ struct AwaitTokioTimer;
 #[cfg(feature = "wasi")]
 impl Middleware for AwaitTokioTimer {
     async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
-        if call.interface.as_ref() == WALL_CLOCK && call.function.as_ref() == "now" {
+        if (call.interface.as_ref() == WALL_CLOCK && call.function.as_ref() == "now")
+            || (call.interface.as_ref() == WASI_ENVIRONMENT
+                && call.function.as_ref() == "initial-cwd")
+        {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         next.run(call).await
@@ -819,7 +822,11 @@ fn wasi_gate_can_await_on_a_current_thread_tokio_runtime() {
 
     let (sender, receiver) = mpsc::channel();
     let _worker = std::thread::spawn(move || {
-        let result = runtime.block_on(app.call("wasi", ENVIRONMENT, "wall-time", Vec::new()));
+        let result = runtime.block_on(async {
+            app.call("wasi", ENVIRONMENT, "current-directory", Vec::new())
+                .await?;
+            app.call("wasi", ENVIRONMENT, "wall-time", Vec::new()).await
+        });
         sender.send(result).unwrap();
     });
 
