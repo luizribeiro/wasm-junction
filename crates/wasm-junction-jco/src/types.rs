@@ -14,8 +14,35 @@ pub(crate) enum ValueType {
     U32,
     S64,
     U64,
+    F32,
+    F64,
+    Char,
     String,
+    List(Box<ValueType>),
+    Tuple(Vec<ValueType>),
+    Record(Vec<FieldType>),
+    Variant(Vec<CaseType>),
+    Enum(Vec<String>),
+    Flags(Vec<String>),
+    Option(Box<ValueType>),
+    Result {
+        ok: Option<Box<ValueType>>,
+        err: Option<Box<ValueType>>,
+    },
     Unsupported(&'static str),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FieldType {
+    pub(crate) name: String,
+    pub(crate) js_name: String,
+    pub(crate) ty: ValueType,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CaseType {
+    pub(crate) name: String,
+    pub(crate) ty: Option<ValueType>,
 }
 
 impl ValueType {
@@ -30,7 +57,18 @@ impl ValueType {
             Self::U32 => "u32",
             Self::S64 => "s64",
             Self::U64 => "u64",
+            Self::F32 => "f32",
+            Self::F64 => "f64",
+            Self::Char => "char",
             Self::String => "string",
+            Self::List(_) => "list",
+            Self::Tuple(_) => "tuple",
+            Self::Record(_) => "record",
+            Self::Variant(_) => "variant",
+            Self::Enum(_) => "enum",
+            Self::Flags(_) => "flags",
+            Self::Option(_) => "option",
+            Self::Result { .. } => "result",
             Self::Unsupported(name) => name,
         }
     }
@@ -163,20 +201,101 @@ fn value_type(resolve: &Resolve, ty: Type) -> ValueType {
         Type::S64 => ValueType::S64,
         Type::U64 => ValueType::U64,
         Type::String => ValueType::String,
-        Type::Id(id) => match resolve.types[id].kind {
-            TypeDefKind::Type(ty) => value_type(resolve, ty),
-            ref kind => ValueType::Unsupported(kind.as_str()),
+        Type::Id(id) => match &resolve.types[id].kind {
+            TypeDefKind::Type(ty) => value_type(resolve, *ty),
+            TypeDefKind::List(ty) => ValueType::List(Box::new(value_type(resolve, *ty))),
+            TypeDefKind::Tuple(tuple) => ValueType::Tuple(
+                tuple
+                    .types
+                    .iter()
+                    .map(|ty| value_type(resolve, *ty))
+                    .collect(),
+            ),
+            TypeDefKind::Record(record) => ValueType::Record(
+                record
+                    .fields
+                    .iter()
+                    .map(|field| FieldType {
+                        name: field.name.clone(),
+                        js_name: js_name(&field.name),
+                        ty: value_type(resolve, field.ty),
+                    })
+                    .collect(),
+            ),
+            TypeDefKind::Variant(variant) => ValueType::Variant(
+                variant
+                    .cases
+                    .iter()
+                    .map(|case| CaseType {
+                        name: case.name.clone(),
+                        ty: case.ty.map(|ty| value_type(resolve, ty)),
+                    })
+                    .collect(),
+            ),
+            TypeDefKind::Enum(value) => {
+                ValueType::Enum(value.cases.iter().map(|case| case.name.clone()).collect())
+            }
+            TypeDefKind::Flags(value) => {
+                ValueType::Flags(value.flags.iter().map(|flag| flag.name.clone()).collect())
+            }
+            TypeDefKind::Option(ty) => ValueType::Option(Box::new(value_type(resolve, *ty))),
+            TypeDefKind::Result(result) => ValueType::Result {
+                ok: result.ok.map(|ty| Box::new(value_type(resolve, ty))),
+                err: result.err.map(|ty| Box::new(value_type(resolve, ty))),
+            },
+            kind => ValueType::Unsupported(kind.as_str()),
         },
-        Type::F32 => ValueType::Unsupported("f32"),
-        Type::F64 => ValueType::Unsupported("f64"),
-        Type::Char => ValueType::Unsupported("char"),
+        Type::F32 => ValueType::F32,
+        Type::F64 => ValueType::F64,
+        Type::Char => ValueType::Char,
         Type::ErrorContext => ValueType::Unsupported("error-context"),
     }
+}
+
+fn js_name(name: &str) -> String {
+    let mut uppercase = false;
+    name.chars()
+        .filter_map(|character| {
+            if character == '-' {
+                uppercase = true;
+                None
+            } else if uppercase {
+                uppercase = false;
+                Some(character.to_ascii_uppercase())
+            } else {
+                Some(character)
+            }
+        })
+        .collect()
 }
 
 #[cfg(all(test, not(target_family = "wasm")))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collects_every_plain_fixture_type() {
+        let signatures =
+            Signatures::from_component(wasm_junction_conformance::component()).unwrap();
+        let echo = signatures
+            .export(wasm_junction_conformance::SUMMARIZER, "echo")
+            .unwrap();
+        let ValueType::Record(fields) = &echo.params[0] else {
+            panic!("echo did not accept the note record")
+        };
+        assert_eq!(fields[2].js_name, "signed8");
+        assert!(matches!(fields[10].ty, ValueType::F32));
+        assert!(matches!(fields[11].ty, ValueType::F64));
+        assert!(matches!(fields[12].ty, ValueType::Char));
+        assert!(matches!(fields[13].ty, ValueType::List(_)));
+        assert!(matches!(fields[14].ty, ValueType::Tuple(_)));
+        assert!(matches!(fields[15].ty, ValueType::Variant(_)));
+        assert!(matches!(fields[16].ty, ValueType::Enum(_)));
+        assert!(matches!(fields[17].ty, ValueType::Flags(_)));
+        assert!(matches!(fields[18].ty, ValueType::Option(_)));
+        assert!(matches!(fields[19].ty, ValueType::Result { .. }));
+        assert_eq!(echo.result.as_ref(), echo.params.first());
+    }
 
     #[test]
     fn refuses_an_ambiguous_unversioned_import_alias() {
