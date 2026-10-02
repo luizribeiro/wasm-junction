@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use crate::future::HostBound;
+use crate::{InvocationId, future::HostBound};
 
 #[cfg(not(target_arch = "wasm32"))]
 type ExtensionValue = dyn Any + Send + Sync;
@@ -41,6 +41,7 @@ impl fmt::Debug for Extensions {
 /// Per-invocation data carried through an engine and its imported calls.
 #[derive(Clone, Default)]
 pub struct InvocationContext {
+    id: Option<InvocationId>,
     extensions: Extensions,
     settings: Extensions,
     call_depth: usize,
@@ -53,10 +54,27 @@ impl InvocationContext {
         let mut extensions = Extensions::default();
         extensions.insert(value);
         Self {
+            id: None,
             extensions,
             settings: Extensions::default(),
             call_depth: 0,
         }
+    }
+
+    /// Returns this invocation's application-local identifier, when assigned by a dispatcher.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn invocation_id(&self) -> Option<InvocationId> {
+        self.id
+    }
+
+    /// Replaces the invocation identifier while preserving all propagated context.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_invocation_id(&self, id: InvocationId) -> Self {
+        let mut context = self.clone();
+        context.id = Some(id);
+        context
     }
 
     /// Returns data attached to this invocation.
@@ -77,6 +95,7 @@ impl InvocationContext {
     #[must_use]
     pub fn with_extensions(&self, extensions: Extensions) -> Self {
         Self {
+            id: self.id,
             extensions,
             settings: self.settings.clone(),
             call_depth: self.call_depth,
@@ -88,6 +107,7 @@ impl InvocationContext {
     #[must_use]
     pub fn with_settings(&self, settings: Extensions) -> Self {
         Self {
+            id: self.id,
             extensions: self.extensions.clone(),
             settings,
             call_depth: self.call_depth,
@@ -102,6 +122,7 @@ impl InvocationContext {
     #[must_use]
     pub fn descend(&self) -> Self {
         Self {
+            id: self.id,
             extensions: self.extensions.clone(),
             settings: self.settings.clone(),
             call_depth: self.call_depth.saturating_add(1),
@@ -124,6 +145,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::{Extensions, InvocationContext};
+    use crate::InvocationId;
 
     struct Marker(u32);
 
@@ -137,9 +159,13 @@ mod tests {
 
     #[test]
     fn descending_preserves_attached_data() {
-        let context = InvocationContext::with(Marker(42)).descend();
+        let id = InvocationId::__from_counter(7);
+        let context = InvocationContext::with(Marker(42))
+            .with_invocation_id(id)
+            .descend();
 
         assert_eq!(context.call_depth(), 1);
+        assert_eq!(context.invocation_id(), Some(id));
         assert_eq!(
             context.extensions().get::<Marker>().map(|marker| marker.0),
             Some(42)
