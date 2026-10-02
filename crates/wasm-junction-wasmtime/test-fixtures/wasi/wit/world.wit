@@ -9,6 +9,7 @@ interface environment {
   start-timer: func();
   sleep: func();
   coverage: func();
+  differential: func() -> string;
 }
 
 world fixture {
