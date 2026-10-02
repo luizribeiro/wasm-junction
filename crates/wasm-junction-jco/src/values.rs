@@ -54,13 +54,21 @@ fn lower(value: Val, expected: &ValueType) -> Result<JsValue, CallError> {
         (Val::U32(value), ValueType::U32) => JsValue::from_f64(f64::from(value)),
         (Val::S64(value), ValueType::S64) => BigInt::from(value).into(),
         (Val::U64(value), ValueType::U64) => BigInt::from(value).into(),
+        (Val::F32(value), ValueType::F32) => JsValue::from_f64(f64::from(value)),
+        (Val::F64(value), ValueType::F64) => JsValue::from_f64(value),
+        (Val::Char(value), ValueType::Char) => JsValue::from_str(&value.to_string()),
         (Val::String(value), ValueType::String) => JsValue::from_str(&value),
         (_, ValueType::Unsupported(name)) => return Err(unsupported(name)),
+        (_, ValueType::List(_)) => return Err(unsupported("list")),
+        (_, ValueType::Tuple(_)) => return Err(unsupported("tuple")),
+        (_, ValueType::Record(_)) => return Err(unsupported("record")),
+        (_, ValueType::Variant(_)) => return Err(unsupported("variant")),
+        (_, ValueType::Enum(_)) => return Err(unsupported("enum")),
+        (_, ValueType::Flags(_)) => return Err(unsupported("flags")),
+        (_, ValueType::Option(_)) => return Err(unsupported("option")),
+        (_, ValueType::Result { .. }) => return Err(unsupported("result")),
         (value, expected) => {
-            return Err(CallError::trap(format!(
-                "expected {}, got {value:?}",
-                expected.name(),
-            )));
+            return Err(wrong_val_type(expected, &value));
         }
     };
     Ok(value)
@@ -70,7 +78,7 @@ fn lift(value: JsValue, expected: &ValueType) -> Result<Val, CallError> {
     macro_rules! number {
         ($ty:ty, $variant:ident) => {
             number(&value, expected)
-                .and_then(integer::<$ty>)
+                .and_then(|value| integer::<$ty>(value, expected))
                 .map(Val::$variant)
         };
     }
@@ -78,7 +86,7 @@ fn lift(value: JsValue, expected: &ValueType) -> Result<Val, CallError> {
         ValueType::Bool => value
             .as_bool()
             .map(Val::Bool)
-            .ok_or_else(|| wrong_js_type(expected)),
+            .ok_or_else(|| wrong_js_type(expected, &value)),
         ValueType::S8 => number!(i8, S8),
         ValueType::U8 => number!(u8, U8),
         ValueType::S16 => number!(i16, S16),
@@ -87,27 +95,48 @@ fn lift(value: JsValue, expected: &ValueType) -> Result<Val, CallError> {
         ValueType::U32 => number!(u32, U32),
         ValueType::S64 => bigint::<i64>(value, expected).map(Val::S64),
         ValueType::U64 => bigint::<u64>(value, expected).map(Val::U64),
+        ValueType::F32 => number(&value, expected).map(|value| Val::F32(value as f32)),
+        ValueType::F64 => number(&value, expected).map(Val::F64),
+        ValueType::Char => value
+            .as_string()
+            .and_then(one_char)
+            .map(Val::Char)
+            .ok_or_else(|| mismatch(expected, &value, "expected one Unicode scalar value")),
         ValueType::String => value
             .as_string()
             .map(Val::String)
-            .ok_or_else(|| wrong_js_type(expected)),
+            .ok_or_else(|| wrong_js_type(expected, &value)),
+        ValueType::List(_) => Err(unsupported("list")),
+        ValueType::Tuple(_) => Err(unsupported("tuple")),
+        ValueType::Record(_) => Err(unsupported("record")),
+        ValueType::Variant(_) => Err(unsupported("variant")),
+        ValueType::Enum(_) => Err(unsupported("enum")),
+        ValueType::Flags(_) => Err(unsupported("flags")),
+        ValueType::Option(_) => Err(unsupported("option")),
+        ValueType::Result { .. } => Err(unsupported("result")),
         ValueType::Unsupported(name) => Err(unsupported(name)),
     }
 }
 
+fn one_char(value: String) -> Option<char> {
+    let mut characters = value.chars();
+    let character = characters.next()?;
+    characters.next().is_none().then_some(character)
+}
+
 fn number(value: &JsValue, expected: &ValueType) -> Result<f64, CallError> {
-    value.as_f64().ok_or_else(|| wrong_js_type(expected))
+    value.as_f64().ok_or_else(|| wrong_js_type(expected, value))
 }
 
 #[allow(clippy::cast_possible_truncation)]
-fn integer<T>(value: f64) -> Result<T, CallError>
+fn integer<T>(value: f64, expected: &ValueType) -> Result<T, CallError>
 where
     T: TryFrom<i64>,
 {
     if !value.is_finite() || value.fract() != 0.0 {
-        return Err(CallError::trap("expected an integer from JavaScript"));
+        return Err(mismatch(expected, &value, "expected an integer"));
     }
-    T::try_from(value as i64).map_err(|_| CallError::trap("JavaScript integer is out of range"))
+    T::try_from(value as i64).map_err(|_| mismatch(expected, &value, "integer is out of range"))
 }
 
 fn bigint<T>(value: JsValue, expected: &ValueType) -> Result<T, CallError>
@@ -116,16 +145,26 @@ where
 {
     value
         .dyn_into::<BigInt>()
-        .map_err(|_| wrong_js_type(expected))
+        .map_err(|value| wrong_js_type(expected, &value))
         .and_then(|value| {
-            T::try_from(value).map_err(|_| {
-                CallError::trap(format!("JavaScript {} is out of range", expected.name()))
-            })
+            T::try_from(value.clone())
+                .map_err(|_| mismatch(expected, &value, "integer is out of range"))
         })
 }
 
-fn wrong_js_type(expected: &ValueType) -> CallError {
-    CallError::trap(format!("expected JavaScript {}", expected.name()))
+fn wrong_val_type(expected: &ValueType, value: &Val) -> CallError {
+    mismatch(expected, value, "wrong framework value kind")
+}
+
+fn wrong_js_type(expected: &ValueType, value: &JsValue) -> CallError {
+    mismatch(expected, value, "wrong JavaScript value kind")
+}
+
+fn mismatch(expected: &ValueType, value: &impl std::fmt::Debug, reason: &str) -> CallError {
+    CallError::trap(format!(
+        "invalid WIT `{}` value {value:?}: {reason}",
+        expected.name()
+    ))
 }
 
 fn unsupported(name: &str) -> CallError {
@@ -141,7 +180,7 @@ mod tests {
     wasm_bindgen_test_configure!(run_in_dedicated_worker);
 
     #[wasm_bindgen_test]
-    fn round_trips_integers_booleans_and_strings() {
+    fn round_trips_primitive_values() {
         let (values, params): (Vals, Vec<ValueType>) = [
             (Val::Bool(true), ValueType::Bool),
             (Val::S8(-8), ValueType::S8),
@@ -152,6 +191,9 @@ mod tests {
             (Val::U32(32), ValueType::U32),
             (Val::S64(-64), ValueType::S64),
             (Val::U64(64), ValueType::U64),
+            (Val::F32(3.5), ValueType::F32),
+            (Val::F64(7.25), ValueType::F64),
+            (Val::Char('§'), ValueType::Char),
             (Val::String("value".to_owned()), ValueType::String),
         ]
         .into_iter()
@@ -182,38 +224,36 @@ mod tests {
 
     #[wasm_bindgen_test]
     fn refuses_an_out_of_range_u8() {
-        assert_eq!(
-            lift_error(JsValue::from_f64(300.0), ValueType::U8),
-            "JavaScript integer is out of range"
-        );
+        let error = lift_error(JsValue::from_f64(300.0), ValueType::U8);
+        assert!(error.contains("WIT `u8`"), "{error}");
+        assert!(error.contains("300"), "{error}");
+        assert!(error.contains("out of range"), "{error}");
     }
 
     #[wasm_bindgen_test]
     fn refuses_a_fractional_s32() {
-        assert_eq!(
-            lift_error(JsValue::from_f64(3.5), ValueType::S32),
-            "expected an integer from JavaScript"
-        );
+        let error = lift_error(JsValue::from_f64(3.5), ValueType::S32);
+        assert!(error.contains("WIT `s32`"), "{error}");
+        assert!(error.contains("3.5"), "{error}");
+        assert!(error.contains("expected an integer"), "{error}");
     }
 
     #[wasm_bindgen_test]
     fn refuses_out_of_range_bigints() {
-        assert_eq!(
-            lift_error(BigInt::from(u128::MAX).into(), ValueType::U64),
-            "JavaScript u64 is out of range"
-        );
-        assert_eq!(
-            lift_error(BigInt::from(u64::MAX).into(), ValueType::S64),
-            "JavaScript s64 is out of range"
-        );
+        for (value, ty) in [
+            (BigInt::from(u128::MAX).into(), ValueType::U64),
+            (BigInt::from(u64::MAX).into(), ValueType::S64),
+        ] {
+            let error = lift_error(value, ty);
+            assert!(error.contains("out of range"), "{error}");
+        }
     }
 
     #[wasm_bindgen_test]
     fn refuses_a_string_where_a_number_is_expected() {
-        assert_eq!(
-            lift_error(JsValue::from_str("three"), ValueType::U32),
-            "expected JavaScript u32"
-        );
+        let error = lift_error(JsValue::from_str("three"), ValueType::U32);
+        assert!(error.contains("WIT `u32`"), "{error}");
+        assert!(error.contains("three"), "{error}");
     }
 
     fn lift_error(value: JsValue, expected: ValueType) -> String {
