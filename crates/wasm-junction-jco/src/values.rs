@@ -222,6 +222,7 @@ fn lift(value: JsValue, expected: &ValueType) -> Result<Val, CallError> {
         ValueType::Result { ok, err } => {
             lift_nested_result(value, ok.as_deref(), err.as_deref(), expected)
         }
+        ValueType::Resource(_) => Err(unsupported("resource")),
         ValueType::Unsupported(name) => Err(unsupported(name)),
     }
 }

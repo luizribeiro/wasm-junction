@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 
+use wasm_junction_core::ResourceOwnership;
 use wit_component::{DecodedWasm, decode};
-use wit_parser::{Function, Resolve, Type, TypeDefKind, WorldItem};
+use wit_parser::{Function, Handle, Resolve, Type, TypeDefKind, TypeOwner, WorldItem};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ValueType {
@@ -29,7 +30,15 @@ pub(crate) enum ValueType {
         ok: Option<Box<ValueType>>,
         err: Option<Box<ValueType>>,
     },
+    Resource(ResourceType),
     Unsupported(&'static str),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ResourceType {
+    pub(crate) interface: String,
+    pub(crate) name: String,
+    pub(crate) ownership: ResourceOwnership,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,6 +78,10 @@ impl ValueType {
             Self::Flags(_) => "flags",
             Self::Option(_) => "option",
             Self::Result { .. } => "result",
+            Self::Resource(resource) => match resource.ownership {
+                ResourceOwnership::Own => "own",
+                ResourceOwnership::Borrow => "borrow",
+            },
             Self::Unsupported(name) => name,
         }
     }
@@ -243,12 +256,32 @@ fn value_type(resolve: &Resolve, ty: Type) -> ValueType {
                 ok: result.ok.map(|ty| Box::new(value_type(resolve, ty))),
                 err: result.err.map(|ty| Box::new(value_type(resolve, ty))),
             },
+            TypeDefKind::Handle(handle) => resource_type(resolve, *handle),
             kind => ValueType::Unsupported(kind.as_str()),
         },
         Type::F32 => ValueType::F32,
         Type::F64 => ValueType::F64,
         Type::Char => ValueType::Char,
         Type::ErrorContext => ValueType::Unsupported("error-context"),
+    }
+}
+
+fn resource_type(resolve: &Resolve, handle: Handle) -> ValueType {
+    let (resource, ownership) = match handle {
+        Handle::Own(resource) => (resource, ResourceOwnership::Own),
+        Handle::Borrow(resource) => (resource, ResourceOwnership::Borrow),
+    };
+    let definition = &resolve.types[resource];
+    let TypeOwner::Interface(owner) = definition.owner else {
+        return ValueType::Unsupported("resource");
+    };
+    match (resolve.id_of(owner), definition.name.clone()) {
+        (Some(interface), Some(name)) => ValueType::Resource(ResourceType {
+            interface,
+            name,
+            ownership,
+        }),
+        _ => ValueType::Unsupported("resource"),
     }
 }
 
@@ -328,5 +361,21 @@ mod tests {
         );
         assert!(signatures.import("example:notes/api@1.0.0", "read").is_ok());
         assert!(signatures.import("example:notes/api@2.0.0", "read").is_ok());
+    }
+
+    #[test]
+    fn collects_resource_ownership() {
+        let signatures =
+            Signatures::from_component(wasm_junction_conformance::resource_component()).unwrap();
+        let constructor = signatures
+            .import("example:resources/host@1.0.0", "[constructor]session")
+            .unwrap()
+            .1;
+        let Some(ValueType::Resource(resource)) = &constructor.result else {
+            panic!("constructor did not return a resource")
+        };
+        assert_eq!(resource.interface, "example:resources/host@1.0.0");
+        assert_eq!(resource.name, "session");
+        assert_eq!(resource.ownership, ResourceOwnership::Own);
     }
 }
