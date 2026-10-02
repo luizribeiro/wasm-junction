@@ -8,6 +8,7 @@ interface environment {
   monotonic-time: func() -> u64;
   start-timer: func();
   sleep: func();
+  coverage: func();
 }
 
 world fixture {

@@ -36,6 +36,18 @@ impl exports::test::wasi::environment::Guest for Component {
     fn sleep() {
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
+
+    fn coverage() {
+        let _ = wasi::cli::environment::get_environment();
+        let _ = wasi::cli::environment::get_arguments();
+        let _ = wasi::cli::environment::initial_cwd();
+        let _ = wasi::clocks::wall_clock::now();
+        let _ = wasi::clocks::wall_clock::resolution();
+        let _ = wasi::clocks::monotonic_clock::now();
+        let _ = wasi::clocks::monotonic_clock::resolution();
+        drop(wasi::clocks::monotonic_clock::subscribe_instant(0));
+        drop(wasi::clocks::monotonic_clock::subscribe_duration(0));
+    }
 }
 
 export!(Component);

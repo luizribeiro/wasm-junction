@@ -1725,6 +1725,7 @@ dependencies = [
 name = "wasm-junction-wasmtime"
 version = "0.0.0"
 dependencies = [
+ "serde_json",
  "tokio",
  "wasm-junction",
  "wasm-junction-conformance",
@@ -1732,6 +1733,7 @@ dependencies = [
  "wasm-junction-guest-build",
  "wasmtime",
  "wasmtime-wasi",
+ "wit-parser 0.259.0",
 ]
 
 [[package]]
