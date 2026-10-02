@@ -2,7 +2,8 @@
 
 mod support;
 
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Barrier, Mutex};
 
 use support::{
     CONTEXT_TARGET, ContextMarker, FailingEngine, FakeEngine, MiddlewareMarker, NOTES, Read,
@@ -181,6 +182,41 @@ impl Provider for ContextProvider {
         Box::pin(async move {
             let marker = cx.extensions().get::<MiddlewareMarker>().unwrap();
             Ok(vec![Val::U32(marker.0)])
+        })
+    }
+}
+
+#[derive(Clone)]
+struct NotesSettings(&'static str);
+
+struct SettingsGate {
+    first: AtomicBool,
+    barrier: Barrier,
+}
+
+struct SettingsProvider {
+    seen: Arc<Mutex<Vec<Option<&'static str>>>>,
+    gate: Option<Arc<SettingsGate>>,
+}
+
+impl Provider for SettingsProvider {
+    fn call<'a>(
+        &'a self,
+        cx: &'a CallContext,
+        _call: Call,
+    ) -> BoxFuture<'a, Result<Vals, CallError>> {
+        Box::pin(async move {
+            if let Some(gate) = &self.gate
+                && gate.first.swap(false, Ordering::SeqCst)
+            {
+                gate.barrier.wait();
+                gate.barrier.wait();
+            }
+            self.seen
+                .lock()
+                .unwrap()
+                .push(cx.settings::<NotesSettings>().map(|value| value.0));
+            Ok(vec![Val::from("note")])
         })
     }
 }
@@ -394,6 +430,50 @@ fn middleware_data_reaches_provider_context() {
     ))
     .unwrap();
     assert_eq!(values, [Val::U32(7)]);
+}
+
+#[test]
+fn component_settings_are_type_indexed_per_name_and_replace_live() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let gate = Arc::new(SettingsGate {
+        first: AtomicBool::new(true),
+        barrier: Barrier::new(2),
+    });
+    let app = App::builder()
+        .engine(FakeEngine)
+        .provide(Provided::new(
+            NOTES,
+            SettingsProvider {
+                seen: seen.clone(),
+                gate: Some(gate.clone()),
+            },
+        ))
+        .provide(Provided::new(CLOCK, UnusedProvider))
+        .build()
+        .unwrap();
+    app.configure("alpha", NotesSettings("research")).unwrap();
+    for name in ["alpha", "beta"] {
+        block_on(app.load(component(name))).unwrap();
+    }
+
+    let caller = app.clone();
+    let in_flight = std::thread::spawn(move || {
+        block_on(caller.get::<Summaries>("alpha").unwrap().summarize("daily")).unwrap()
+    });
+    gate.barrier.wait();
+    app.configure("alpha", NotesSettings("drafts")).unwrap();
+    gate.barrier.wait();
+    in_flight.join().unwrap();
+
+    block_on(app.get::<Summaries>("alpha").unwrap().summarize("daily")).unwrap();
+    block_on(app.get::<Summaries>("beta").unwrap().summarize("daily")).unwrap();
+    app.configure("beta", NotesSettings("archive")).unwrap();
+    block_on(app.get::<Summaries>("beta").unwrap().summarize("daily")).unwrap();
+
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [Some("research"), Some("drafts"), None, Some("archive")]
+    );
 }
 
 #[test]

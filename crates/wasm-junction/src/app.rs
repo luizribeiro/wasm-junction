@@ -11,8 +11,8 @@ use crate::component::ComponentParts;
 use crate::middleware::{CallTarget, ErasedMiddleware};
 use crate::{
     BoxFuture, Call, CallContext, CallError, Caller, CompiledComponent, Component, Engine,
-    EngineError, Event, HostBound, ImportDispatcher, ImportTarget, InvocationContext, Middleware,
-    Provided, Provider, Resource, Val, Vals, WasiConfig,
+    EngineError, Event, Extensions, HostBound, ImportDispatcher, ImportTarget, InvocationContext,
+    Middleware, Provided, Provider, Resource, Val, Vals, WasiConfig,
 };
 
 mod lifecycle;
@@ -29,6 +29,7 @@ pub(crate) struct AppInner {
     wasi: WasiConfig,
     max_call_depth: usize,
     components: Mutex<BTreeMap<String, LoadedComponent>>,
+    settings: Mutex<BTreeMap<String, Extensions>>,
     handle_counts: Mutex<HashMap<(String, &'static str), usize>>,
     unloaded: Mutex<BTreeMap<String, Vec<Arc<str>>>>,
 }
@@ -95,6 +96,40 @@ impl App {
     #[must_use]
     pub fn builder() -> AppBuilder {
         AppBuilder::default()
+    }
+
+    /// Configures one component with a setting selected by its concrete type.
+    ///
+    /// The setting may be configured before or after the component is loaded. Reconfiguring the
+    /// same type replaces its value for the component's next invocation. App-defined setting
+    /// types never fail to configure.
+    ///
+    /// ```
+    /// # use wasm_junction::{App, ConfigureError};
+    /// # fn configure(app: &App) -> Result<(), ConfigureError> {
+    /// #[derive(Clone)]
+    /// struct NotesSettings { notebook: String }
+    ///
+    /// app.configure(
+    ///     "summarizer",
+    ///     NotesSettings { notebook: "research".into() },
+    /// )?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// App-defined settings always return `Ok`. Reserved framework settings may be rejected.
+    pub fn configure<T>(&self, name: impl Into<String>, setting: T) -> Result<(), ConfigureError>
+    where
+        T: Any + HostBound,
+    {
+        lock_or_recover(&self.0.settings)
+            .entry(name.into())
+            .or_default()
+            .insert(setting);
+        Ok(())
     }
 
     /// Compiles and loads a named component.
@@ -469,6 +504,7 @@ impl App {
                 resolved,
             )
         };
+        let context = context.with_settings(self.settings_for(&component_name));
         let call = call_for_invocation(
             &context,
             Call::new(
@@ -630,6 +666,13 @@ impl App {
         } else {
             Ok(())
         }
+    }
+
+    fn settings_for(&self, component: &str) -> Extensions {
+        lock_or_recover(&self.0.settings)
+            .get(component)
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn emit(&self, event: &Event) {
@@ -1518,6 +1561,7 @@ impl AppBuilder {
             wasi: self.wasi,
             max_call_depth: self.max_call_depth.unwrap_or(64),
             components: Mutex::new(BTreeMap::new()),
+            settings: Mutex::new(BTreeMap::new()),
             handle_counts: Mutex::new(HashMap::new()),
             unloaded: Mutex::new(BTreeMap::new()),
         })))
@@ -1572,6 +1616,21 @@ impl Error for BuildError {
         }
     }
 }
+
+/// An error from configuring a component setting.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConfigureError {
+    _private: (),
+}
+
+impl Display for ConfigureError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("component setting was rejected")
+    }
+}
+
+impl Error for ConfigureError {}
 
 #[cfg(all(feature = "wasmtime", not(target_family = "wasm")))]
 fn default_engine() -> Result<Arc<dyn Engine>, BuildError> {
