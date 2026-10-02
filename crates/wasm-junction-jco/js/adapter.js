@@ -20,9 +20,17 @@
  * @typedef {(interfaceName: string, resourceName: string, id: number) => Promise<void>} DropResource
  * @typedef {[string, string]} ResourceFunction
  * @typedef {[string, string, string, string | undefined, ResourceFunction[], ResourceFunction[]]} ResourceDefinition
+ * @typedef {{ poisoned: boolean }} ImportState
  */
 
 const RESOURCE_MARKER = "$wasm-junction-resource";
+const IMPORT_FAILURE = Symbol("wasm-junction-import-failure");
+const IMPORT_STATE = "wasm-junction:internal/import-state";
+
+/** @param {unknown} value @returns {object} */
+export function poison(value) {
+  return { [IMPORT_FAILURE]: value };
+}
 
 /**
  * @param {string} source
@@ -65,14 +73,15 @@ export async function invoke(
 ) {
   /** @type {Promise<void>[]} */
   const drops = [];
-  const classes = makeResourceClasses(runtime.resources, dispatch, dropResource, drops);
+  const state = { poisoned: false };
+  const classes = makeResourceClasses(runtime.resources, dispatch, dropResource, drops, state);
   const instance = await runtime.namespace.instantiate(
     name => {
       const module = runtime.modules.get(name);
       if (!module) throw new Error(`missing compiled core module ${name}`);
       return module;
     },
-    makeImports(dispatch, classes),
+    makeImports(dispatch, classes, state),
   );
   const shortName = interfaceName
     .slice(interfaceName.lastIndexOf("/") + 1)
@@ -93,14 +102,16 @@ export async function invoke(
 /**
  * @param {Dispatch} dispatch
  * @param {Map<string, Map<string, Function>>} classes
+ * @param {ImportState} state
  * @returns {WebAssembly.Imports}
  */
-function makeImports(dispatch, classes) {
+function makeImports(dispatch, classes, state) {
   /** @type {Map<string, WebAssembly.ModuleImports>} */
   const interfaces = new Map();
   return new Proxy(/** @type {WebAssembly.Imports} */ ({}), {
     get(_target, interfaceName) {
       if (typeof interfaceName !== "string" || interfaceName === "then") return undefined;
+      if (interfaceName === IMPORT_STATE) return state;
       let interfaceImports = interfaces.get(interfaceName);
       if (!interfaceImports) {
         interfaceImports = new Proxy(/** @type {WebAssembly.ModuleImports} */ ({}), {
@@ -112,10 +123,7 @@ function makeImports(dispatch, classes) {
             const witName = functionName.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`);
             /** @type {ComponentFunction} */
             const importedFunction = (...args) =>
-              dispatch(interfaceName, witName, args).then(
-                value => materialize(value, classes),
-                error => Promise.reject(materialize(error, classes)),
-              );
+              callImport(state, dispatch, classes, interfaceName, witName, args);
             return importedFunction;
           },
         });
@@ -131,8 +139,9 @@ function makeImports(dispatch, classes) {
  * @param {Dispatch} dispatch
  * @param {DropResource} dropResource
  * @param {Promise<void>[]} drops
+ * @param {ImportState} state
  */
-function makeResourceClasses(definitions, dispatch, dropResource, drops) {
+function makeResourceClasses(definitions, dispatch, dropResource, drops, state) {
   /** @type {Map<string, Map<string, Function>>} */
   const interfaces = new Map();
   for (const [
@@ -146,13 +155,12 @@ function makeResourceClasses(definitions, dispatch, dropResource, drops) {
     /** @param {...unknown} args */
     function Resource(...args) {
       if (!constructorName) throw new TypeError(`${className} has no constructor`);
-      return dispatch(interfaceName, constructorName, args).then(value =>
-        materialize(value, interfaces),
-      );
+      return callImport(state, dispatch, interfaces, interfaceName, constructorName, args);
     }
     Object.defineProperty(Resource.prototype, Symbol.dispose, {
       /** @this {{id?: number}} */
       value() {
+        if (state.poisoned) return;
         const id = this.id;
         if (typeof id !== "number" || !Number.isInteger(id)) {
           throw new TypeError(`${className} resource is no longer valid`);
@@ -165,9 +173,7 @@ function makeResourceClasses(definitions, dispatch, dropResource, drops) {
     for (const [witName, jsName] of methods) {
       /** @this {unknown} @param {...unknown} args */
       const method = function (...args) {
-        return dispatch(interfaceName, witName, [this, ...args]).then(value =>
-          materialize(value, interfaces),
-        );
+        return callImport(state, dispatch, interfaces, interfaceName, witName, [this, ...args]);
       };
       Object.defineProperty(Resource.prototype, jsName, {
         value: method,
@@ -176,7 +182,7 @@ function makeResourceClasses(definitions, dispatch, dropResource, drops) {
     for (const [witName, jsName] of statics) {
       /** @type {ComponentFunction} */
       const staticFunction = (...args) =>
-        dispatch(interfaceName, witName, args).then(value => materialize(value, interfaces));
+        callImport(state, dispatch, interfaces, interfaceName, witName, args);
       Object.defineProperty(Resource, jsName, {
         value: staticFunction,
       });
@@ -190,6 +196,28 @@ function makeResourceClasses(definitions, dispatch, dropResource, drops) {
     resources.set(resourceName, Resource);
   }
   return interfaces;
+}
+
+/**
+ * @param {ImportState} state
+ * @param {Dispatch} dispatch
+ * @param {Map<string, Map<string, Function>>} classes
+ * @param {string} interfaceName
+ * @param {string} functionName
+ * @param {unknown[]} args
+ * @returns {Promise<unknown>}
+ */
+function callImport(state, dispatch, classes, interfaceName, functionName, args) {
+  return dispatch(interfaceName, functionName, args).then(
+    value => {
+      if (value && typeof value === "object" && IMPORT_FAILURE in value) {
+        state.poisoned = true;
+        return materialize(value[IMPORT_FAILURE], classes);
+      }
+      return materialize(value, classes);
+    },
+    error => Promise.reject(materialize(error, classes)),
+  );
 }
 
 /** @param {Map<string, Map<string, Function>>} classes @param {string} interfaceName */

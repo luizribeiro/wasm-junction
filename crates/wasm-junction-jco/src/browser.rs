@@ -36,6 +36,8 @@ extern "C" {
         dispatch: &js_sys::Function,
         drop_resource: &js_sys::Function,
     ) -> Result<JsValue, JsValue>;
+
+    fn poison(value: JsValue) -> JsValue;
 }
 
 /// A browser component engine backed by jco-generated JavaScript and JSPI.
@@ -137,6 +139,7 @@ impl CompiledComponent for BrowserCompiled {
                         match bridge.dispatch(&interface, &function, &args).await {
                             Ok(JsResult::Return(value)) => Ok(value),
                             Ok(JsResult::Throw(value)) => Err(value),
+                            Ok(JsResult::Poison(value)) => Ok(poison(value)),
                             Err(error) => {
                                 bridge.remember(error.clone());
                                 Err(js_sys::Error::new(&error.to_string()).into())
@@ -228,6 +231,9 @@ impl Bridge {
             .signatures
             .import(interface, function)
             .map_err(CallError::unavailable)?;
+        if self.import_error.borrow().is_some() {
+            return default_result(signature);
+        }
         let args = lift_args_tracked(args, signature, &self.resources)?;
         let result = self
             .imports
@@ -255,6 +261,9 @@ impl Bridge {
     }
 
     async fn drop_resource(&self, interface: String, name: String, id: u32) -> Result<(), JsValue> {
+        if self.import_error.borrow().is_some() {
+            return Ok(());
+        }
         let resource = self
             .resources
             .take(&interface, &name, id)

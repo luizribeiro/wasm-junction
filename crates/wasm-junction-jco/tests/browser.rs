@@ -115,6 +115,31 @@ async fn wit_error_provider_refusal_and_guest_trap_remain_distinct() {
 }
 
 #[wasm_bindgen_test]
+async fn refused_import_stops_before_later_host_effects() {
+    let fixture = Fixture::new(JcoEngine::new()).await.unwrap();
+    let error = fixture
+        .call("summarize", vec![Val::from("provider-refusal")])
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert_eq!(error.to_string(), "notes provider refused the call");
+    assert_eq!(fixture.host().normalizations(), 0);
+    assert_eq!(
+        fixture.trace().entries(),
+        [
+            "invocation start summarizer",
+            "call host → summarizer example:notes/summarizer@0.1.0.summarize(\"provider-refusal\")",
+            "invocation start host",
+            "call summarizer → host example:notes/notes@0.1.0.read(\"provider-refusal\")",
+            "trap summarizer → host example:notes/notes@0.1.0.read(notes provider refused the call)",
+            "invocation end host",
+            "trap host → summarizer example:notes/summarizer@0.1.0.summarize(notes provider refused the call)",
+            "invocation end summarizer",
+        ]
+    );
+}
+
+#[wasm_bindgen_test]
 async fn provider_error_does_not_leak_into_the_next_call() {
     let fixture = Fixture::new(JcoEngine::new()).await.unwrap();
     let refusal = fixture

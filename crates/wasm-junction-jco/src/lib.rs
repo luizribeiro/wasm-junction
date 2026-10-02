@@ -54,7 +54,8 @@ fn transpile_component(bytes: &[u8]) -> Result<TranspiledComponent, EngineError>
             let generated_source = String::from_utf8(bytes).map_err(|error| {
                 EngineError::new(format!("jco generated invalid UTF-8 JavaScript: {error}"))
             })?;
-            source = Some(repair_char_lowering(&generated_source)?);
+            let generated_source = repair_char_lowering(&generated_source)?;
+            source = Some(guard_failed_imports(&generated_source)?);
         } else if extension.is_some_and(|extension| extension.eq_ignore_ascii_case("wasm")) {
             modules.push((name, bytes));
         }
@@ -67,6 +68,43 @@ fn transpile_component(bytes: &[u8]) -> Result<TranspiledComponent, EngineError>
             signatures,
         })
         .ok_or_else(|| EngineError::new("jco did not generate a JavaScript module"))
+}
+
+fn guard_failed_imports(source: &str) -> Result<String, EngineError> {
+    const HEADER: &str = "export function instantiate(getCoreModule, imports, instantiateCore = WebAssembly.instantiate) {";
+    const STATE: &str =
+        "const wasmJunctionImportState = imports['wasm-junction:internal/import-state'];";
+    const GUARD: &str = "if (wasmJunctionImportState.poisoned) {\n\
+         throw new WebAssembly.RuntimeError('component import called after an earlier import failed');\n\
+         }";
+    const DECLARATIONS: [&str; 2] = [
+        "async function _lowerImport(args) {",
+        "function _lowerImportBackwardsCompat(args) {",
+    ];
+    let uses_imports = source.contains("imports[") || source.contains("imports.");
+    if !uses_imports {
+        return Ok(source.to_owned());
+    }
+    if !DECLARATIONS
+        .iter()
+        .any(|declaration| source.contains(declaration))
+    {
+        return Err(EngineError::new(
+            "jco generated imports without a recognized lowering function",
+        ));
+    }
+    if !source.contains(HEADER) {
+        return Err(EngineError::new(
+            "jco generated an unrecognized instantiation function",
+        ));
+    }
+    let mut source = source.replacen(HEADER, &format!("{HEADER}\n  {STATE}"), 1);
+    for declaration in DECLARATIONS {
+        if source.contains(declaration) {
+            source = source.replace(declaration, &format!("{declaration}\n    {GUARD}"));
+        }
+    }
+    Ok(source)
 }
 
 fn repair_char_lowering(source: &str) -> Result<String, EngineError> {
@@ -151,6 +189,8 @@ mod tests {
             .source;
         assert!(source.contains("WebAssembly.Suspending"));
         assert!(source.contains("WebAssembly.promising"));
+        assert!(source.contains("wasmJunctionImportState.poisoned"));
+        assert!(source.contains("component import called after an earlier import failed"));
         assert!(source.contains("invalid WIT char"));
         assert!(source.contains("codePoint >= 0xD800 && codePoint <= 0xDFFF"));
         assert!(!source.contains("i32ToChar(ctx.vals[0])"));
@@ -187,6 +227,25 @@ mod tests {
     fn leaves_source_without_a_char_lowerer_untouched() {
         let source = "export const answer = 42;";
         assert_eq!(repair_char_lowering(source).unwrap(), source);
+    }
+
+    #[test]
+    fn refuses_imports_with_an_unrecognized_lowerer() {
+        let source = "export function instantiate(getCoreModule, imports, instantiateCore = WebAssembly.instantiate) {\n\
+                      const read = imports['example:notes/notes'].read;\n\
+                      function renamedLowering(args) { return read(args); }\n\
+                      }";
+        let error = guard_failed_imports(source).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "jco generated imports without a recognized lowering function"
+        );
+    }
+
+    #[test]
+    fn leaves_source_without_imports_untouched() {
+        let source = "export function instantiate(getCoreModule, imports, instantiateCore = WebAssembly.instantiate) { return {}; }";
+        assert_eq!(guard_failed_imports(source).unwrap(), source);
     }
 
     fn is_static_import(line: &str) -> bool {

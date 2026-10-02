@@ -31,6 +31,7 @@ impl ResourceTracker {
 pub(crate) enum JsResult {
     Return(JsValue),
     Throw(JsValue),
+    Poison(JsValue),
 }
 
 #[cfg(test)]
@@ -82,7 +83,7 @@ pub(crate) fn lower_result(values: &Vals, signature: &FunctionType) -> Result<Js
 
 pub(crate) fn default_result(signature: &FunctionType) -> Result<JsResult, CallError> {
     let Some(result) = &signature.result else {
-        return Ok(JsResult::Return(JsValue::UNDEFINED));
+        return Ok(JsResult::Poison(JsValue::UNDEFINED));
     };
     let result = match result {
         ValueType::Result { ok, .. } => match ok.as_deref() {
@@ -91,7 +92,7 @@ pub(crate) fn default_result(signature: &FunctionType) -> Result<JsResult, CallE
         },
         result => lower(default_value(result)?, result, &ResourceTracker::default())?,
     };
-    Ok(JsResult::Return(result))
+    Ok(JsResult::Poison(result))
 }
 
 fn default_value(ty: &ValueType) -> Result<Val, CallError> {
@@ -1223,7 +1224,7 @@ mod tests {
 
     #[wasm_bindgen_test]
     fn supplies_a_valid_placeholder_for_a_failed_import() {
-        let JsResult::Return(value) = default_result(&FunctionType {
+        let JsResult::Poison(value) = default_result(&FunctionType {
             params: Vec::new(),
             result: Some(ValueType::Tuple(vec![ValueType::U32, ValueType::String])),
         })
