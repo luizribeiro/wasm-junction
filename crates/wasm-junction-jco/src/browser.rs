@@ -23,6 +23,7 @@ extern "C" {
         source: &str,
         names: &Array,
         modules: &Array,
+        resources: &Array,
     ) -> Result<JsValue, JsValue>;
 
     #[wasm_bindgen(catch)]
@@ -32,6 +33,7 @@ extern "C" {
         function: &str,
         args: &Array,
         dispatch: &js_sys::Function,
+        drop_resource: &js_sys::Function,
     ) -> Result<JsValue, JsValue>;
 }
 
@@ -80,7 +82,8 @@ async fn compile(
         names.push(&JsValue::from_str(&name));
         modules.push(&Uint8Array::from(bytes.as_slice()));
     }
-    let runtime = compile_component(&plan.source, &names, &modules)
+    let resources = resource_definitions(&plan.signatures);
+    let runtime = compile_component(&plan.source, &names, &modules, &resources)
         .await
         .map_err(|error| EngineError::new(js_error(&error)))?;
     Ok(Arc::new(BrowserCompiled {
@@ -122,6 +125,7 @@ impl CompiledComponent for BrowserCompiled {
                 signatures: self.signatures.clone(),
                 import_error: import_error.clone(),
             };
+            let drop_bridge = bridge.clone();
             let callback = Closure::wrap(Box::new(
                 move |interface: String, function: String, args: Array| {
                     let bridge = bridge.clone();
@@ -138,6 +142,16 @@ impl CompiledComponent for BrowserCompiled {
                 },
             )
                 as Box<dyn Fn(String, String, Array) -> js_sys::Promise>);
+            let drop_callback = Closure::wrap(Box::new(
+                move |interface: String, resource: String, id: u32| {
+                    let bridge = drop_bridge.clone();
+                    future_to_promise(async move {
+                        bridge.drop_resource(interface, resource, id).await?;
+                        Ok(JsValue::UNDEFINED)
+                    })
+                },
+            )
+                as Box<dyn Fn(String, String, u32) -> js_sys::Promise>);
             self.instantiations
                 .set(self.instantiations.get().saturating_add(1));
             let result = invoke(
@@ -146,6 +160,7 @@ impl CompiledComponent for BrowserCompiled {
                 &function,
                 &args,
                 callback.as_ref().unchecked_ref(),
+                drop_callback.as_ref().unchecked_ref(),
             )
             .await;
             match result {
@@ -207,6 +222,54 @@ impl Bridge {
             .await?;
         lower_result(&result, signature)
     }
+
+    async fn drop_resource(&self, interface: String, name: String, id: u32) -> Result<(), JsValue> {
+        self.imports
+            .drop_resource(
+                self.context.clone(),
+                self.component.clone(),
+                wasm_junction_core::Resource::owned(interface, name, id),
+            )
+            .await
+            .map_err(|error| {
+                self.remember(error.clone());
+                js_sys::Error::new(&error.to_string()).into()
+            })
+    }
+}
+
+fn resource_definitions(signatures: &Signatures) -> Array {
+    signatures
+        .resources()
+        .iter()
+        .map(|resource| {
+            let definition = Array::new();
+            definition.push(&resource.interface.clone().into());
+            definition.push(&resource.name.clone().into());
+            definition.push(&resource.js_name.clone().into());
+            definition.push(
+                &resource
+                    .constructor
+                    .as_deref()
+                    .map_or(JsValue::UNDEFINED, JsValue::from_str),
+            );
+            definition.push(&resource_functions(&resource.methods));
+            definition.push(&resource_functions(&resource.statics));
+            JsValue::from(definition)
+        })
+        .collect()
+}
+
+fn resource_functions(functions: &[crate::types::ResourceFunction]) -> Array {
+    functions
+        .iter()
+        .map(|function| {
+            JsValue::from(Array::of2(
+                &JsValue::from_str(&function.wit_name),
+                &JsValue::from_str(&function.js_name),
+            ))
+        })
+        .collect()
 }
 
 fn js_error(value: &JsValue) -> String {
