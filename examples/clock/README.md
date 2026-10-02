@@ -3,6 +3,7 @@
 This example runs an ordinary Rust `wasm32-wasip2` guest with deterministic WASI settings. The
 guest reads `GREETING` through `wasi:cli/environment` and the current time through
 `wasi:clocks/wall-clock`. Both calls pass through the same middleware as the exported `run` call.
+The application registers WASI explicitly with `.provide(wasi::provider())`.
 
 Run it from the repository root:
 

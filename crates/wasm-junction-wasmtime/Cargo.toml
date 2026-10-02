@@ -22,7 +22,7 @@ wasmtime-wasi = { version = "=49.0.1", default-features = false, features = ["p2
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "time"] }
-wasm-junction = { path = "../wasm-junction", version = "=0.0.0", default-features = false }
+wasm-junction = { path = "../wasm-junction", version = "=0.0.0", default-features = false, features = ["wasi"] }
 wasm-junction-conformance = { path = "../wasm-junction-conformance", version = "=0.0.0" }
 [build-dependencies]
 wasm-junction-guest-build = { path = "../wasm-junction-guest-build", version = "=0.0.0" }

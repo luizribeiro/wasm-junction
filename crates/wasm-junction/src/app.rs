@@ -101,12 +101,10 @@ impl App {
     }
 
     fn engine_provides(&self, requested: &str) -> bool {
-        self.0.engine.supports_import(requested)
-            || self
-                .0
-                .engine_interfaces
-                .iter()
-                .any(|provided| interfaces_compatible(requested, provided))
+        self.0
+            .engine_interfaces
+            .iter()
+            .any(|provided| interfaces_compatible(requested, provided))
     }
 
     /// Configures one component with a setting selected by its concrete type.

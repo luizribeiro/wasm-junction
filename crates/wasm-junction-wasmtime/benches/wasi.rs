@@ -95,6 +95,7 @@ fn main() {
     let gated = runtime.block_on(async {
         let app = App::builder()
             .engine(WasmtimeEngine::new().unwrap())
+            .provide(wasm_junction::wasi::provider())
             .wasi(WasiConfig::new().env("GREETING", "hello"))
             .build()
             .unwrap();

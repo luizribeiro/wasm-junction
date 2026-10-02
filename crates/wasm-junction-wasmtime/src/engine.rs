@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
+use wasm_junction_core::WASI_PROVIDER_NAME;
 use wasm_junction_core::{
     BoxFuture, CallError, CompiledComponent, Engine, EngineError, ImportDispatcher,
     InvocationContext, Resource, StreamHandle, Val, Vals, WasiConfig, validate_resource_lowering,
@@ -16,6 +17,7 @@ use wasmtime::component::{
 use wasmtime::{AsContextMut, Config, Engine as RuntimeEngine, Store};
 use wasmtime_wasi::{WasiCtxBuilder, WasiCtxView, WasiView};
 
+use crate::WASI_INTERFACES;
 use crate::imports::{ResourceDefinition, define_imports};
 use crate::streams::lower_stream;
 use crate::values::{ExpectedResource, LiftValue, LowerValue, from_wasmtime, to_wasmtime};
@@ -79,8 +81,8 @@ impl WasmtimeEngine {
 }
 
 impl Engine for WasmtimeEngine {
-    fn supports_import(&self, interface: &str) -> bool {
-        interface.starts_with("wasi:")
+    fn provider_interfaces(&self, provider: &str) -> Option<&'static [&'static str]> {
+        (provider == WASI_PROVIDER_NAME).then_some(WASI_INTERFACES)
     }
 
     fn compile(

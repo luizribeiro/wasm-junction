@@ -4,7 +4,7 @@ mod support;
 
 use std::sync::{Arc, Mutex};
 
-use support::{NOTES, block_on, component_bytes};
+use support::{NOTES, block_on, component_bytes, component_bytes_from};
 use wasm_junction::{
     App, BoxFuture, Call, CallContext, CallError, CompiledComponent, Component, Engine,
     EngineError, ImportDispatcher, LoadError, Provided, Provider, Vals, WasiConfig,
@@ -118,6 +118,59 @@ fn duplicate_provider_error_names_both_registration_sites() {
     assert!(text.contains(NOTES));
     assert!(text.contains(&format!("{}:{first_line}", file!())));
     assert!(text.contains(&format!("{}:{second_line}", file!())));
+}
+
+#[cfg(all(feature = "wasi", feature = "wasmtime", not(target_family = "wasm")))]
+#[test]
+fn wasi_provider_conflicts_with_an_app_provider() {
+    let duplicate = App::builder()
+        .provide(wasm_junction::wasi::provider())
+        .provide(wasm_junction::wasi::provider())
+        .build()
+        .err()
+        .unwrap();
+    assert!(duplicate.to_string().contains("wasi:cli/environment"));
+
+    let first = wasm_junction::wasi::provider();
+    let first_line = line!() + 1;
+    let builder = App::builder().provide(first);
+    let second = Provided::new("wasi:cli/environment@0.2.12", UnusedProvider);
+    let second_line = line!() + 1;
+    let error = builder.provide(second).build().err().unwrap();
+    let text = error.to_string();
+
+    assert!(text.contains("wasi:cli/environment@0.2.12"));
+    assert!(text.contains(&format!("{}:{first_line}", file!())));
+    assert!(text.contains(&format!("{}:{second_line}", file!())));
+}
+
+#[cfg(all(feature = "wasi", feature = "wasmtime", not(target_family = "wasm")))]
+#[test]
+fn wasi_preview_three_import_is_missing_with_the_provider() {
+    let bytes = component_bytes_from(
+        &[
+            (
+                "wasi-http.wit",
+                "package wasi:http@0.3.0; interface client { send: func(); }",
+            ),
+            (
+                "fixture.wit",
+                "package test:client@1.0.0; world plugin { import wasi:http/client@0.3.0; }",
+            ),
+        ],
+        "test:client/plugin@1.0.0",
+    );
+    let app = App::builder()
+        .provide(wasm_junction::wasi::provider())
+        .build()
+        .unwrap();
+
+    let error =
+        block_on(app.load(Component::from_bytes(bytes).unwrap().named("client"))).unwrap_err();
+    let LoadError::MissingImports(missing) = error else {
+        panic!("expected missing imports")
+    };
+    assert_eq!(missing.interfaces(), ["wasi:http/client@0.3.0"]);
 }
 
 fn _engine_contract_is_object_safe(

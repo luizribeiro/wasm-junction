@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use wasm_junction::{
     App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Caller, CompiledComponent,
-    Component, Engine, EngineError, ImportDispatcher, InvocationContext, Middleware, Next,
-    Provided, Provider, Resource, Val, Vals, WasiConfig,
+    Component, Engine, EngineError, ImportDispatcher, InvocationContext, LoadError, Middleware,
+    Next, Provided, Provider, Resource, Val, Vals, WasiConfig,
 };
 use wasm_junction_conformance::{
     CYCLE_A, DECORATION, Fixture, FixtureHost, RELOAD_GREETER, RESOURCE_CLIENT, RESOURCE_HOST,
@@ -182,8 +182,8 @@ impl TrackingEngine {
 }
 
 impl Engine for TrackingEngine {
-    fn supports_import(&self, interface: &str) -> bool {
-        self.inner.supports_import(interface)
+    fn provider_interfaces(&self, provider: &str) -> Option<&'static [&'static str]> {
+        self.inner.provider_interfaces(provider)
     }
 
     fn compile(
@@ -480,10 +480,28 @@ impl Middleware for EnvironmentBehavior {
 }
 
 #[test]
+fn wasi_imports_are_missing_without_the_provider() {
+    let app = App::builder()
+        .engine(WasmtimeEngine::new().unwrap())
+        .build()
+        .unwrap();
+    let component = Component::from_bytes(WASI_COMPONENT).unwrap().named("wasi");
+    let mut expected = component.imports().to_vec();
+    expected.sort();
+
+    let error = block_on(app.load(component)).unwrap_err();
+    let LoadError::MissingImports(missing) = error else {
+        panic!("expected missing imports")
+    };
+    assert_eq!(missing.interfaces(), expected);
+}
+
+#[test]
 fn environment_gate_traces_refuses_and_rewrites() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let app = App::builder()
         .engine(WasmtimeEngine::new().unwrap())
+        .provide(wasm_junction::wasi::provider())
         .wasi(WasiConfig::new().env("GREETING", "hello from WASI"))
         .middleware(EnvironmentBehavior(calls.clone()))
         .build()
@@ -737,6 +755,7 @@ fn wasi_gate_can_await_on_a_current_thread_tokio_runtime() {
         .unwrap();
     let app = App::builder()
         .engine(WasmtimeEngine::new().unwrap())
+        .provide(wasm_junction::wasi::provider())
         .middleware(AwaitTokioTimer)
         .build()
         .unwrap();

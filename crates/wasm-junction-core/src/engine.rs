@@ -84,11 +84,6 @@ pub trait ImportDispatcher: HostBound {
 ///
 /// Engines live in separate crates so applications choose their runtime explicitly.
 pub trait Engine: HostBound {
-    /// Reports whether this engine supplies an imported interface directly.
-    fn supports_import(&self, _interface: &str) -> bool {
-        false
-    }
-
     /// Returns the interfaces supplied by a named engine-provided provider.
     ///
     /// Engine and facade crates must use a shared provider-name constant, such as
