@@ -5,48 +5,12 @@ use wasmtime::component::{Linker, Resource};
 use wasmtime::{AsContextMut, StoreContextMut};
 use wasmtime_wasi::clocks::WasiClocksView;
 use wasmtime_wasi::p2::DynPollable;
-use wasmtime_wasi::p2::bindings::clocks::{monotonic_clock, wall_clock};
+use wasmtime_wasi::p2::bindings::clocks::monotonic_clock;
 
 use super::{StoreData, WasiState, dispatch, lock};
 use crate::GATED_WASI_INTERFACES;
 
 const MONOTONIC_INTERFACE: &str = GATED_WASI_INTERFACES[1];
-const WALL_INTERFACE: &str = GATED_WASI_INTERFACES[2];
-
-#[derive(Clone, Copy)]
-enum WallOperation {
-    Now,
-    Resolution,
-}
-
-struct WallTarget(Arc<Mutex<WasiState>>, WallOperation);
-
-impl ImportTarget for WallTarget {
-    fn call(
-        &self,
-        _context: InvocationContext,
-        args: Vals,
-    ) -> BoxFuture<'static, Result<Vals, CallError>> {
-        let state = self.0.clone();
-        let operation = self.1;
-        Box::pin(async move {
-            if !args.is_empty() {
-                return Err(CallError::trap("WASI wall-clock call takes no arguments"));
-            }
-            let mut state = lock(&state);
-            let datetime = match operation {
-                WallOperation::Now => wall_clock::Host::now(&mut state.clocks()),
-                WallOperation::Resolution => wall_clock::Host::resolution(&mut state.clocks()),
-            }
-            .map_err(|error| CallError::trap(error.to_string()))?;
-            Ok(vec![Val::Record(vec![
-                ("seconds".to_owned(), Val::U64(datetime.seconds)),
-                ("nanoseconds".to_owned(), Val::U32(datetime.nanoseconds)),
-            ])])
-        })
-    }
-}
-
 #[derive(Clone, Copy)]
 enum MonotonicOperation {
     Now,
@@ -103,20 +67,7 @@ impl ImportTarget for SubscriptionTarget {
     }
 }
 
-pub(super) fn add_wall_clock_gate(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
-    let mut instance = linker.instance(WALL_INTERFACE)?;
-    instance.func_wrap_async("now", |mut store, (): ()| {
-        Box::new(async move { Ok((call_wall(&mut store, "now", WallOperation::Now).await?,)) })
-    })?;
-    instance.func_wrap_async("resolution", |mut store, (): ()| {
-        Box::new(async move {
-            Ok((call_wall(&mut store, "resolution", WallOperation::Resolution).await?,))
-        })
-    })?;
-    add_monotonic_clock_gate(linker)
-}
-
-fn add_monotonic_clock_gate(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+pub(super) fn add_monotonic_clock_gate(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let mut instance = linker.instance(MONOTONIC_INTERFACE)?;
     instance.func_wrap_async("now", |mut store, (): ()| {
         Box::new(
@@ -139,39 +90,6 @@ fn add_monotonic_clock_gate(linker: &mut Linker<StoreData>) -> wasmtime::Result<
     instance.func_wrap_async("subscribe-duration", |mut store, (value,): (u64,)| {
         Box::new(async move { Ok((subscribe(&mut store, Subscription::Duration, value).await?,)) })
     })
-}
-
-async fn call_wall(
-    store: &mut StoreContextMut<'_, StoreData>,
-    function: &'static str,
-    operation: WallOperation,
-) -> wasmtime::Result<wall_clock::Datetime> {
-    let target = {
-        let mut context = store.as_context_mut();
-        let data = context.data_mut();
-        Arc::new(WallTarget(data.gated_wasi.clone(), operation))
-    };
-    let values = dispatch(store, WALL_INTERFACE, function, Vec::new(), target).await?;
-    decode_datetime(&values)
-}
-
-fn decode_datetime(values: &[Val]) -> wasmtime::Result<wall_clock::Datetime> {
-    let [Val::Record(fields)] = values else {
-        return Err(wasmtime::Error::msg("wall clock returned the wrong shape"));
-    };
-    match fields.as_slice() {
-        [(seconds, Val::U64(value)), (nanoseconds, Val::U32(nanos))]
-            if seconds == "seconds" && nanoseconds == "nanoseconds" =>
-        {
-            Ok(wall_clock::Datetime {
-                seconds: *value,
-                nanoseconds: *nanos,
-            })
-        }
-        _ => Err(wasmtime::Error::msg(
-            "wall clock record has the wrong shape",
-        )),
-    }
 }
 
 async fn call_monotonic(

@@ -39,7 +39,8 @@ impl WasiView for WasiState {
 
 pub(crate) fn add_gates(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     gates::add_environment(linker)?;
-    clocks::add_wall_clock_gate(linker)
+    gates::add_wall_clock(linker)?;
+    clocks::add_monotonic_clock_gate(linker)
 }
 
 pub(super) async fn dispatch(

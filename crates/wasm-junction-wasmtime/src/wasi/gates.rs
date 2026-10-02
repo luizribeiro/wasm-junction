@@ -1,5 +1,6 @@
 use wasm_junction_core::{CallError, Val, Vals};
 use wasmtime::component::Linker;
+use wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime;
 
 use super::trampoline::{self, Real};
 use crate::engine::StoreData;
@@ -77,6 +78,34 @@ impl<A: FromVal, B: FromVal> FromVal for (A, B) {
     }
 }
 
+impl ToVal for Datetime {
+    fn to_val(self) -> Val {
+        Val::Record(vec![
+            ("seconds".to_owned(), Val::U64(self.seconds)),
+            ("nanoseconds".to_owned(), Val::U32(self.nanoseconds)),
+        ])
+    }
+}
+
+impl FromVal for Datetime {
+    fn from_val(value: Val) -> Result<Self, CallError> {
+        let Val::Record(fields) = value else {
+            return Err(shape("datetime"));
+        };
+        match fields.as_slice() {
+            [(seconds, Val::U64(value)), (nanoseconds, Val::U32(nanos))]
+                if seconds == "seconds" && nanoseconds == "nanoseconds" =>
+            {
+                Ok(Self {
+                    seconds: *value,
+                    nanoseconds: *nanos,
+                })
+            }
+            _ => Err(shape("datetime fields")),
+        }
+    }
+}
+
 fn finish<T: FromVal>(outcome: Result<Vals, CallError>) -> wasmtime::Result<T> {
     let values = outcome.map_err(wasmtime::Error::new)?;
     let [value] = <[Val; 1]>::try_from(values).map_err(|_| shape("one result"))?;
@@ -120,12 +149,27 @@ pub(super) fn add_environment(linker: &mut Linker<StoreData>) -> wasmtime::Resul
     Ok(())
 }
 
+pub(super) fn add_wall_clock(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    gate!(linker, "wasi:clocks/wall-clock@0.2.12", "now", clocks,
+        wasmtime_wasi::p2::bindings::clocks::wall_clock::Host::now,
+        () -> Datetime);
+    gate!(linker, "wasi:clocks/wall-clock@0.2.12", "resolution", clocks,
+        wasmtime_wasi::p2::bindings::clocks::wall_clock::Host::resolution,
+        () -> Datetime);
+    Ok(())
+}
+
 mod views {
     use wasmtime_wasi::cli::WasiCliView;
+    use wasmtime_wasi::clocks::WasiClocksView;
 
     use crate::engine::StoreData;
 
     pub(super) fn cli(store: &mut StoreData) -> wasmtime_wasi::cli::WasiCliCtxView<'_> {
         store.cli()
+    }
+
+    pub(super) fn clocks(store: &mut StoreData) -> wasmtime_wasi::clocks::WasiClocksCtxView<'_> {
+        store.clocks()
     }
 }
