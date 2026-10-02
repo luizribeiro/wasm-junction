@@ -74,7 +74,10 @@ export async function invoke(
     },
     makeImports(dispatch, classes),
   );
-  const shortName = interfaceName.slice(interfaceName.lastIndexOf("/") + 1).split("@")[0];
+  const shortName = interfaceName
+    .slice(interfaceName.lastIndexOf("/") + 1)
+    .split("@")[0]
+    .replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
   const exports = instance[shortName];
   const jsName = functionName.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
   if (typeof exports?.[jsName] !== "function") {

@@ -12,7 +12,8 @@ use wasm_junction_core::{
 
 use crate::types::Signatures;
 use crate::values::{
-    JsResult, lift_args, lift_result, lift_result_error, lower_args, lower_result,
+    JsResult, ResourceTracker, default_result, lift_args_tracked, lift_result_error_tracked,
+    lift_result_tracked, lower_args_tracked, lower_result_tracked,
 };
 use crate::{TranspiledComponent, transpile_component};
 
@@ -114,7 +115,8 @@ impl CompiledComponent for BrowserCompiled {
                 "missing component export `{interface}.{function}`"
             )))));
         };
-        let args = lower_args(args, &signature);
+        let resources = ResourceTracker::default();
+        let args = lower_args_tracked(args, &signature, &resources);
         Box::pin(async move {
             let args = args?;
             let import_error = Rc::new(RefCell::new(None));
@@ -124,6 +126,7 @@ impl CompiledComponent for BrowserCompiled {
                 component,
                 signatures: self.signatures.clone(),
                 import_error: import_error.clone(),
+                resources: resources.clone(),
             };
             let drop_bridge = bridge.clone();
             let callback = Closure::wrap(Box::new(
@@ -164,12 +167,18 @@ impl CompiledComponent for BrowserCompiled {
             )
             .await;
             match result {
-                Ok(result) => lift_result(result, &signature),
+                Ok(result) => {
+                    if let Some(error) = import_error.borrow_mut().take() {
+                        return Err(error);
+                    }
+                    lift_result_tracked(result, &signature, &resources)
+                }
                 Err(error) => {
                     if let Some(error) = import_error.borrow_mut().take() {
                         return Err(error);
                     }
-                    if let Some(result) = lift_result_error(&error, &signature)? {
+                    if let Some(result) = lift_result_error_tracked(&error, &signature, &resources)?
+                    {
                         return Ok(result);
                     }
                     Err(CallError::trap(format!(
@@ -189,6 +198,7 @@ struct Bridge {
     component: Arc<str>,
     signatures: Signatures,
     import_error: Rc<RefCell<Option<CallError>>>,
+    resources: ResourceTracker,
 }
 
 impl Bridge {
@@ -209,7 +219,7 @@ impl Bridge {
             .signatures
             .import(interface, function)
             .map_err(CallError::unavailable)?;
-        let args = lift_args(args, signature)?;
+        let args = lift_args_tracked(args, signature, &self.resources)?;
         let result = self
             .imports
             .call(
@@ -219,8 +229,14 @@ impl Bridge {
                 Arc::from(function),
                 args,
             )
-            .await?;
-        lower_result(&result, signature)
+            .await;
+        match result {
+            Ok(result) => lower_result_tracked(&result, signature, &self.resources),
+            Err(error) => {
+                self.remember(error);
+                default_result(signature)
+            }
+        }
     }
 
     async fn drop_resource(&self, interface: String, name: String, id: u32) -> Result<(), JsValue> {

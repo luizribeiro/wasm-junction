@@ -29,6 +29,7 @@ pub(crate) enum JsResult {
     Throw(JsValue),
 }
 
+#[cfg(test)]
 pub(crate) fn lower_args(values: Vals, signature: &FunctionType) -> Result<Array, CallError> {
     lower_args_tracked(values, signature, &ResourceTracker::default())
 }
@@ -49,6 +50,7 @@ pub(crate) fn lower_args_tracked(
 }
 
 #[allow(clippy::cast_possible_truncation)]
+#[cfg(test)]
 pub(crate) fn lift_args(values: &Array, signature: &FunctionType) -> Result<Vals, CallError> {
     lift_args_tracked(values, signature, &ResourceTracker::default())
 }
@@ -69,8 +71,79 @@ pub(crate) fn lift_args_tracked(
         .collect()
 }
 
+#[cfg(test)]
 pub(crate) fn lower_result(values: &Vals, signature: &FunctionType) -> Result<JsResult, CallError> {
     lower_result_tracked(values, signature, &ResourceTracker::default())
+}
+
+pub(crate) fn default_result(signature: &FunctionType) -> Result<JsResult, CallError> {
+    let Some(result) = &signature.result else {
+        return Ok(JsResult::Return(JsValue::UNDEFINED));
+    };
+    let result = match result {
+        ValueType::Result { ok, .. } => match ok.as_deref() {
+            Some(ok) => lower(default_value(ok)?, ok, &ResourceTracker::default())?,
+            None => JsValue::UNDEFINED,
+        },
+        result => lower(default_value(result)?, result, &ResourceTracker::default())?,
+    };
+    Ok(JsResult::Return(result))
+}
+
+fn default_value(ty: &ValueType) -> Result<Val, CallError> {
+    Ok(match ty {
+        ValueType::Bool => Val::Bool(false),
+        ValueType::S8 => Val::S8(0),
+        ValueType::U8 => Val::U8(0),
+        ValueType::S16 => Val::S16(0),
+        ValueType::U16 => Val::U16(0),
+        ValueType::S32 => Val::S32(0),
+        ValueType::U32 => Val::U32(0),
+        ValueType::S64 => Val::S64(0),
+        ValueType::U64 => Val::U64(0),
+        ValueType::F32 => Val::F32(0.0),
+        ValueType::F64 => Val::F64(0.0),
+        ValueType::Char => Val::Char('\0'),
+        ValueType::String => Val::String(String::new()),
+        ValueType::List(_) => Val::List(Vec::new()),
+        ValueType::Tuple(types) => {
+            Val::Tuple(types.iter().map(default_value).collect::<Result<_, _>>()?)
+        }
+        ValueType::Record(fields) => Val::Record(
+            fields
+                .iter()
+                .map(|field| Ok((field.name.clone(), default_value(&field.ty)?)))
+                .collect::<Result<_, CallError>>()?,
+        ),
+        ValueType::Variant(cases) => {
+            let case = cases
+                .first()
+                .ok_or_else(|| CallError::trap("variant has no cases"))?;
+            Val::Variant {
+                case: case.name.clone(),
+                value: case
+                    .ty
+                    .as_ref()
+                    .map(default_value)
+                    .transpose()?
+                    .map(Box::new),
+            }
+        }
+        ValueType::Enum(cases) => Val::Enum(
+            cases
+                .first()
+                .ok_or_else(|| CallError::trap("enum has no cases"))?
+                .clone(),
+        ),
+        ValueType::Flags(_) => Val::Flags(Vec::new()),
+        ValueType::Option(_) => Val::Option(None),
+        ValueType::Result { ok, .. } => Val::Result(Ok(ok
+            .as_deref()
+            .map(default_value)
+            .transpose()?
+            .map(Box::new))),
+        ValueType::Resource(_) | ValueType::Unsupported(_) => return Err(unsupported(ty.name())),
+    })
 }
 
 pub(crate) fn lower_result_tracked(
@@ -97,6 +170,7 @@ pub(crate) fn lower_result_tracked(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn lift_result(value: JsValue, signature: &FunctionType) -> Result<Vals, CallError> {
     lift_result_tracked(value, signature, &ResourceTracker::default())
 }
@@ -116,6 +190,7 @@ pub(crate) fn lift_result_tracked(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn lift_result_error(
     value: &JsValue,
     signature: &FunctionType,
@@ -1130,6 +1205,28 @@ mod tests {
         let error =
             lower_args_tracked(vec![Val::Resource(borrowed)], &signature, &resources).unwrap_err();
         assert!(error.to_string().contains("requires Own"), "{error}");
+    }
+
+    #[wasm_bindgen_test]
+    fn supplies_a_valid_placeholder_for_a_failed_import() {
+        let JsResult::Return(value) = default_result(&FunctionType {
+            params: Vec::new(),
+            result: Some(ValueType::Tuple(vec![ValueType::U32, ValueType::String])),
+        })
+        .unwrap() else {
+            panic!("placeholder unexpectedly threw")
+        };
+        assert_eq!(
+            lift_result(
+                value,
+                &FunctionType {
+                    params: Vec::new(),
+                    result: Some(ValueType::Tuple(vec![ValueType::U32, ValueType::String])),
+                }
+            )
+            .unwrap(),
+            [Val::Tuple(vec![Val::U32(0), Val::from("")])]
+        );
     }
 
     fn lift_error(value: JsValue, expected: ValueType) -> String {
