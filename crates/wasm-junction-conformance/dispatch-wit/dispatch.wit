@@ -5,6 +5,7 @@ interface pinger {
 }
 
 interface runner {
+  echo-bytes: func(bytes: list<u8>) -> list<u8>;
   imports: func(iterations: u32) -> u32;
   noop: func() -> u32;
 }

@@ -36,6 +36,10 @@ name = "dispatch"
 harness = false
 
 [[bench]]
+name = "bytes"
+harness = false
+
+[[bench]]
 name = "wasi"
 harness = false
 required-features = ["wasi"]

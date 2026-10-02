@@ -13,6 +13,10 @@ use bindings::example::dispatch::pinger;
 struct Component;
 
 impl bindings::exports::example::dispatch::runner::Guest for Component {
+    fn echo_bytes(bytes: Vec<u8>) -> Vec<u8> {
+        bytes
+    }
+
     fn imports(iterations: u32) -> u32 {
         let mut value = 0;
         for _ in 0..iterations {
