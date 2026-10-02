@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+
+usage() {
+  echo "usage: scripts/browser-bench [chromium|firefox|webkit|all]" >&2
+  exit 2
+}
+
+[ "$#" -le 1 ] || usage
+browser=${1:-all}
+
+case "$browser" in
+  chromium|firefox|webkit|all) ;;
+  *) usage ;;
+esac
+
+repo_dir=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+"$repo_dir/scripts/browser-test" "$browser" -- \
+  --release -p wasm-junction-jco --test browser browser_reload_benchmark -- \
+  --include-ignored --nocapture
