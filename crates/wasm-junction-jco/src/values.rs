@@ -4,6 +4,11 @@ use wasm_junction_core::{CallError, Val, Vals};
 
 use crate::types::{FunctionType, ValueType};
 
+pub(crate) enum JsResult {
+    Return(JsValue),
+    Throw(JsValue),
+}
+
 pub(crate) fn lower_args(values: Vals, signature: &FunctionType) -> Result<Array, CallError> {
     if values.len() != signature.params.len() {
         return Err(CallError::trap("component argument count mismatch"));
@@ -28,10 +33,22 @@ pub(crate) fn lift_args(values: &Array, signature: &FunctionType) -> Result<Vals
         .collect()
 }
 
-pub(crate) fn lower_result(values: &Vals, signature: &FunctionType) -> Result<JsValue, CallError> {
+pub(crate) fn lower_result(values: &Vals, signature: &FunctionType) -> Result<JsResult, CallError> {
     match (values.as_slice(), &signature.result) {
-        ([], None) => Ok(JsValue::UNDEFINED),
-        ([value], Some(ty)) => lower(value.clone(), ty),
+        ([], None) => Ok(JsResult::Return(JsValue::UNDEFINED)),
+        ([Val::Result(value)], Some(ValueType::Result { ok, err })) => {
+            let (result, ty, throws) = match value {
+                Ok(value) => (value, ok.as_deref(), false),
+                Err(value) => (value, err.as_deref(), true),
+            };
+            let payload = lower_optional_payload(result.as_deref(), ty)?;
+            Ok(if throws {
+                JsResult::Throw(payload)
+            } else {
+                JsResult::Return(payload)
+            })
+        }
+        ([value], Some(ty)) => lower(value.clone(), ty).map(JsResult::Return),
         _ => Err(CallError::trap("imported result count mismatch")),
     }
 }
@@ -39,8 +56,48 @@ pub(crate) fn lower_result(values: &Vals, signature: &FunctionType) -> Result<Js
 pub(crate) fn lift_result(value: JsValue, signature: &FunctionType) -> Result<Vals, CallError> {
     signature.result.as_ref().map_or_else(
         || Ok(Vec::new()),
-        |ty| lift(value, ty).map(|value| vec![value]),
+        |ty| match ty {
+            ValueType::Result { ok, .. } => lift_optional_payload(value, ok.as_deref())
+                .map(|value| vec![Val::Result(Ok(value))]),
+            _ => lift(value, ty).map(|value| vec![value]),
+        },
     )
+}
+
+pub(crate) fn lift_result_error(
+    value: &JsValue,
+    signature: &FunctionType,
+) -> Result<Option<Vals>, CallError> {
+    let Some(ValueType::Result { err, .. }) = &signature.result else {
+        return Ok(None);
+    };
+    // jco generates `ComponentError` per component, so Rust cannot name its class.
+    if !Reflect::has(value, &"payload".into()).map_err(|error| {
+        CallError::trap(format!("could not inspect jco result error: {error:?}"))
+    })? {
+        return Ok(None);
+    }
+    let payload = Reflect::get(value, &"payload".into())
+        .map_err(|error| CallError::trap(format!("could not read jco result error: {error:?}")))?;
+    lift_optional_payload(payload, err.as_deref()).map(|value| Some(vec![Val::Result(Err(value))]))
+}
+
+fn lower_optional_payload(
+    value: Option<&Val>,
+    ty: Option<&ValueType>,
+) -> Result<JsValue, CallError> {
+    match (value, ty) {
+        (Some(value), Some(ty)) => lower(value.clone(), ty),
+        (None, None) => Ok(JsValue::UNDEFINED),
+        _ => Err(CallError::trap("wrong payload for top-level WIT result")),
+    }
+}
+
+fn lift_optional_payload(
+    value: JsValue,
+    ty: Option<&ValueType>,
+) -> Result<Option<Box<Val>>, CallError> {
+    ty.map(|ty| lift(value, ty).map(Box::new)).transpose()
 }
 
 fn lower(value: Val, expected: &ValueType) -> Result<JsValue, CallError> {
@@ -583,7 +640,9 @@ mod tests {
             params: Vec::new(),
             result: Some(ValueType::String),
         };
-        let lowered = lower_result(&result, &signature).unwrap();
+        let JsResult::Return(lowered) = lower_result(&result, &signature).unwrap() else {
+            panic!("plain result unexpectedly threw")
+        };
         assert_eq!(lift_result(lowered, &signature).unwrap(), result);
         let signature = FunctionType {
             params: vec![ValueType::Unsupported("record")],
@@ -807,6 +866,43 @@ mod tests {
             Some("err".to_owned())
         );
         assert_eq!(lift_args(&lowered, &signature).unwrap(), values);
+    }
+
+    #[wasm_bindgen_test]
+    fn translates_top_level_results_to_jco_exceptions() {
+        let signature = FunctionType {
+            params: Vec::new(),
+            result: Some(ValueType::Result {
+                ok: Some(Box::new(ValueType::U64)),
+                err: Some(Box::new(ValueType::String)),
+            }),
+        };
+        let JsResult::Return(ok) = lower_result(
+            &vec![Val::Result(Ok(Some(Box::new(Val::U64(7)))))],
+            &signature,
+        )
+        .unwrap() else {
+            panic!("successful result threw")
+        };
+        assert!(ok.dyn_into::<BigInt>().is_ok());
+        let JsResult::Throw(error) = lower_result(
+            &vec![Val::Result(Err(Some(Box::new(Val::from("denied")))))],
+            &signature,
+        )
+        .unwrap() else {
+            panic!("error result returned")
+        };
+        assert_eq!(error.as_string().as_deref(), Some("denied"));
+        assert_eq!(
+            lift_result(BigInt::from(7_u64).into(), &signature).unwrap(),
+            [Val::Result(Ok(Some(Box::new(Val::U64(7)))))]
+        );
+        let component_error = js_sys::Error::new("denied");
+        Reflect::set(&component_error, &"payload".into(), &"denied".into()).unwrap();
+        assert_eq!(
+            lift_result_error(&component_error.into(), &signature).unwrap(),
+            Some(vec![Val::Result(Err(Some(Box::new(Val::from("denied")))))]),
+        );
     }
 
     #[wasm_bindgen_test]

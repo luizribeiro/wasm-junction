@@ -11,7 +11,9 @@ use wasm_junction_core::{
 };
 
 use crate::types::Signatures;
-use crate::values::{lift_args, lift_result, lower_args, lower_result};
+use crate::values::{
+    JsResult, lift_args, lift_result, lift_result_error, lower_args, lower_result,
+};
 use crate::{TranspiledComponent, transpile_component};
 
 #[wasm_bindgen(module = "/js/adapter.js")]
@@ -122,10 +124,11 @@ impl CompiledComponent for BrowserCompiled {
                 move |interface: String, function: String, args: Array| {
                     let bridge = bridge.clone();
                     future_to_promise(async move {
-                        bridge
-                            .dispatch(&interface, &function, &args)
-                            .await
-                            .map_err(|error| JsValue::from_str(&error.to_string()))
+                        match bridge.dispatch(&interface, &function, &args).await {
+                            Ok(JsResult::Return(value)) => Ok(value),
+                            Ok(JsResult::Throw(value)) => Err(value),
+                            Err(error) => Err(js_sys::Error::new(&error.to_string()).into()),
+                        }
                     })
                 },
             )
@@ -139,9 +142,19 @@ impl CompiledComponent for BrowserCompiled {
                 &args,
                 callback.as_ref().unchecked_ref(),
             )
-            .await
-            .map_err(|error| CallError::trap(js_error(&error)))?;
-            lift_result(result, &signature)
+            .await;
+            match result {
+                Ok(result) => lift_result(result, &signature),
+                Err(error) => {
+                    if let Some(result) = lift_result_error(&error, &signature)? {
+                        return Ok(result);
+                    }
+                    Err(CallError::trap(format!(
+                        "component export `{interface}#{function}` trapped: {}",
+                        js_error(&error)
+                    )))
+                }
+            }
         })
     }
 }
@@ -160,7 +173,7 @@ impl Bridge {
         interface: &str,
         function: &str,
         args: &Array,
-    ) -> Result<JsValue, CallError> {
+    ) -> Result<JsResult, CallError> {
         let (resolved_interface, signature) = self
             .signatures
             .import(interface, function)
@@ -183,5 +196,10 @@ impl Bridge {
 fn js_error(value: &JsValue) -> String {
     value
         .as_string()
+        .or_else(|| {
+            js_sys::Reflect::get(value, &"message".into())
+                .ok()
+                .and_then(|message| message.as_string())
+        })
         .unwrap_or_else(|| format!("JavaScript error: {value:?}"))
 }
