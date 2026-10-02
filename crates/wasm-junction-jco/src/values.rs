@@ -743,9 +743,11 @@ fn lower_resource(
     }
     if resource.interface() != expected.interface || resource.name() != expected.name {
         return Err(CallError::refused(format!(
-            "resource `{}/{}` does not match the resource type declared by the call",
+            "resource `{}/{}` does not match the resource type `{}/{}` declared by the call",
             resource.interface(),
-            resource.name()
+            resource.name(),
+            expected.interface,
+            expected.name
         )));
     }
     if expected.ownership == ResourceOwnership::Own {

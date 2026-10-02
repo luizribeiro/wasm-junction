@@ -13,8 +13,9 @@ use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 use wasm_encoder::{CodeSection, EntityType, ExportKind, ExportSection, Function, FunctionSection};
 use wasm_encoder::{ImportSection, Instruction, Module, TypeSection, ValType};
 use wasm_junction::{
-    App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Component, Engine, Middleware,
-    Next, Provided, Provider, Val, Vals, WasiConfig,
+    App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Component, Engine,
+    ImportDispatcher, InvocationContext, Middleware, Next, Provided, Provider, Resource, Val, Vals,
+    WasiConfig,
 };
 use wasm_junction_conformance::{
     CYCLE_A, DECORATION, Fixture, FixtureHost, RESOURCE_CLIENT, ResourceHost, RoutedFixture,
@@ -172,6 +173,122 @@ async fn completed_invocation_cleans_up_retained_host_resources() {
         .unwrap();
     assert_eq!(result, [Val::from("profile:Grace")]);
     assert_eq!(host.active_resources(), 0);
+}
+
+#[wasm_bindgen_test]
+async fn resources_cross_guest_exports_as_borrows_and_owned_values() {
+    let host = ResourceHost::default();
+    let app = resource_app(host.clone()).await;
+
+    let owned = one_resource(
+        &call_resource_host(&app, "[constructor]session", vec![Val::from("Lin")]).await,
+    );
+    let borrowed = Resource::borrowed(owned.interface(), owned.name(), owned.id());
+    let inspected = app
+        .call(
+            "resource-client",
+            RESOURCE_CLIENT,
+            "inspect",
+            vec![Val::Resource(borrowed)],
+        )
+        .await
+        .unwrap();
+    assert_eq!(inspected, [Val::from("profile:Lin")]);
+    assert_eq!(host.active_resources(), 1);
+
+    let borrowed = Resource::borrowed(owned.interface(), owned.name(), owned.id());
+    let error = app
+        .call(
+            "resource-client",
+            RESOURCE_CLIENT,
+            "round-trip",
+            vec![Val::Resource(borrowed)],
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert!(error.to_string().contains("requires Own"), "{error}");
+
+    let returned = app
+        .call(
+            "resource-client",
+            RESOURCE_CLIENT,
+            "round-trip",
+            vec![Val::Resource(owned)],
+        )
+        .await
+        .unwrap();
+    let [Val::Resource(returned)] = returned.as_slice() else {
+        panic!("guest did not return the owned session")
+    };
+    drop_host_resource(&app, returned.clone()).await;
+    assert_eq!(host.active_resources(), 0);
+
+    let file =
+        one_resource(&call_resource_host(&app, "open-file", vec![Val::from("notes.txt")]).await);
+    let error = app
+        .call(
+            "resource-client",
+            RESOURCE_CLIENT,
+            "round-trip",
+            vec![Val::Resource(file.clone())],
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert!(
+        error
+            .to_string()
+            .contains("does not match the resource type")
+    );
+    drop_host_resource(&app, file).await;
+}
+
+async fn resource_app(host: ResourceHost) -> App {
+    let app = App::builder()
+        .engine(JcoEngine::new())
+        .provide(host.provided())
+        .build()
+        .unwrap();
+    app.load(
+        Component::from_bytes(resource_component())
+            .unwrap()
+            .named("resource-client"),
+    )
+    .await
+    .unwrap();
+    app
+}
+
+async fn call_resource_host(app: &App, function: &str, args: Vals) -> Vals {
+    ImportDispatcher::call(
+        app,
+        InvocationContext::default(),
+        Arc::from("resource-client"),
+        Arc::from(wasm_junction_conformance::RESOURCE_HOST),
+        Arc::from(function),
+        args,
+    )
+    .await
+    .unwrap()
+}
+
+async fn drop_host_resource(app: &App, resource: Resource) {
+    ImportDispatcher::drop_resource(
+        app,
+        InvocationContext::default(),
+        Arc::from("resource-client"),
+        resource,
+    )
+    .await
+    .unwrap();
+}
+
+fn one_resource(values: &[Val]) -> Resource {
+    let [Val::Resource(resource)] = values else {
+        panic!("host did not return a resource")
+    };
+    resource.clone()
 }
 
 #[wasm_bindgen_test]

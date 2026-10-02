@@ -344,10 +344,13 @@ fn value_type(resolve: &Resolve, ty: Type) -> ValueType {
 }
 
 fn resource_type(resolve: &Resolve, handle: Handle) -> ValueType {
-    let (resource, ownership) = match handle {
+    let (mut resource, ownership) = match handle {
         Handle::Own(resource) => (resource, ResourceOwnership::Own),
         Handle::Borrow(resource) => (resource, ResourceOwnership::Borrow),
     };
+    while let TypeDefKind::Type(Type::Id(alias)) = &resolve.types[resource].kind {
+        resource = *alias;
+    }
     let definition = &resolve.types[resource];
     let TypeOwner::Interface(owner) = definition.owner else {
         return ValueType::Unsupported("resource");
@@ -472,6 +475,13 @@ mod tests {
         assert_eq!(resource.interface, "example:resources/host@1.0.0");
         assert_eq!(resource.name, "session");
         assert_eq!(resource.ownership, ResourceOwnership::Own);
+        let inspect = signatures
+            .export("example:resources/client@1.0.0", "inspect")
+            .unwrap();
+        let ValueType::Resource(resource) = &inspect.params[0] else {
+            panic!("inspect did not borrow a resource")
+        };
+        assert_eq!(resource.interface, "example:resources/host@1.0.0");
         let session = &signatures.resources[0];
         assert_eq!(session.js_name, "Session");
         assert_eq!(session.constructor.as_deref(), Some("[constructor]session"));
