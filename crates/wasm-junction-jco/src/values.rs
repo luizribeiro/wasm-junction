@@ -4,24 +4,43 @@ use wasm_junction_core::{CallError, Val, Vals};
 
 use crate::types::{FunctionType, ValueType};
 
+#[derive(Clone, Default)]
+pub(crate) struct ResourceTracker;
+
 pub(crate) enum JsResult {
     Return(JsValue),
     Throw(JsValue),
 }
 
 pub(crate) fn lower_args(values: Vals, signature: &FunctionType) -> Result<Array, CallError> {
+    lower_args_tracked(values, signature, &ResourceTracker::default())
+}
+
+pub(crate) fn lower_args_tracked(
+    values: Vals,
+    signature: &FunctionType,
+    resources: &ResourceTracker,
+) -> Result<Array, CallError> {
     if values.len() != signature.params.len() {
         return Err(CallError::trap("component argument count mismatch"));
     }
     values
         .into_iter()
         .zip(&signature.params)
-        .map(|(value, expected)| lower(value, expected))
+        .map(|(value, expected)| lower(value, expected, resources))
         .collect()
 }
 
 #[allow(clippy::cast_possible_truncation)]
 pub(crate) fn lift_args(values: &Array, signature: &FunctionType) -> Result<Vals, CallError> {
+    lift_args_tracked(values, signature, &ResourceTracker::default())
+}
+
+pub(crate) fn lift_args_tracked(
+    values: &Array,
+    signature: &FunctionType,
+    resources: &ResourceTracker,
+) -> Result<Vals, CallError> {
     if values.length() as usize != signature.params.len() {
         return Err(CallError::trap("imported argument count mismatch"));
     }
@@ -29,11 +48,19 @@ pub(crate) fn lift_args(values: &Array, signature: &FunctionType) -> Result<Vals
         .params
         .iter()
         .enumerate()
-        .map(|(index, ty)| lift(values.get(index as u32), ty))
+        .map(|(index, ty)| lift(values.get(index as u32), ty, resources))
         .collect()
 }
 
 pub(crate) fn lower_result(values: &Vals, signature: &FunctionType) -> Result<JsResult, CallError> {
+    lower_result_tracked(values, signature, &ResourceTracker::default())
+}
+
+pub(crate) fn lower_result_tracked(
+    values: &Vals,
+    signature: &FunctionType,
+    resources: &ResourceTracker,
+) -> Result<JsResult, CallError> {
     match (values.as_slice(), &signature.result) {
         ([], None) => Ok(JsResult::Return(JsValue::UNDEFINED)),
         ([Val::Result(value)], Some(ValueType::Result { ok, err })) => {
@@ -41,25 +68,33 @@ pub(crate) fn lower_result(values: &Vals, signature: &FunctionType) -> Result<Js
                 Ok(value) => (value, ok.as_deref(), false),
                 Err(value) => (value, err.as_deref(), true),
             };
-            let payload = lower_optional_payload(result.as_deref(), ty)?;
+            let payload = lower_optional_payload(result.as_deref(), ty, resources)?;
             Ok(if throws {
                 JsResult::Throw(payload)
             } else {
                 JsResult::Return(payload)
             })
         }
-        ([value], Some(ty)) => lower(value.clone(), ty).map(JsResult::Return),
+        ([value], Some(ty)) => lower(value.clone(), ty, resources).map(JsResult::Return),
         _ => Err(CallError::trap("imported result count mismatch")),
     }
 }
 
 pub(crate) fn lift_result(value: JsValue, signature: &FunctionType) -> Result<Vals, CallError> {
+    lift_result_tracked(value, signature, &ResourceTracker::default())
+}
+
+pub(crate) fn lift_result_tracked(
+    value: JsValue,
+    signature: &FunctionType,
+    resources: &ResourceTracker,
+) -> Result<Vals, CallError> {
     signature.result.as_ref().map_or_else(
         || Ok(Vec::new()),
         |ty| match ty {
-            ValueType::Result { ok, .. } => lift_optional_payload(value, ok.as_deref())
+            ValueType::Result { ok, .. } => lift_optional_payload(value, ok.as_deref(), resources)
                 .map(|value| vec![Val::Result(Ok(value))]),
-            _ => lift(value, ty).map(|value| vec![value]),
+            _ => lift(value, ty, resources).map(|value| vec![value]),
         },
     )
 }
@@ -67,6 +102,14 @@ pub(crate) fn lift_result(value: JsValue, signature: &FunctionType) -> Result<Va
 pub(crate) fn lift_result_error(
     value: &JsValue,
     signature: &FunctionType,
+) -> Result<Option<Vals>, CallError> {
+    lift_result_error_tracked(value, signature, &ResourceTracker::default())
+}
+
+pub(crate) fn lift_result_error_tracked(
+    value: &JsValue,
+    signature: &FunctionType,
+    resources: &ResourceTracker,
 ) -> Result<Option<Vals>, CallError> {
     let Some(ValueType::Result { err, .. }) = &signature.result else {
         return Ok(None);
@@ -79,15 +122,17 @@ pub(crate) fn lift_result_error(
     }
     let payload = Reflect::get(value, &"payload".into())
         .map_err(|error| CallError::trap(format!("could not read jco result error: {error:?}")))?;
-    lift_optional_payload(payload, err.as_deref()).map(|value| Some(vec![Val::Result(Err(value))]))
+    lift_optional_payload(payload, err.as_deref(), resources)
+        .map(|value| Some(vec![Val::Result(Err(value))]))
 }
 
 fn lower_optional_payload(
     value: Option<&Val>,
     ty: Option<&ValueType>,
+    resources: &ResourceTracker,
 ) -> Result<JsValue, CallError> {
     match (value, ty) {
-        (Some(value), Some(ty)) => lower(value.clone(), ty),
+        (Some(value), Some(ty)) => lower(value.clone(), ty, resources),
         (None, None) => Ok(JsValue::UNDEFINED),
         _ => Err(CallError::trap("wrong payload for top-level WIT result")),
     }
@@ -96,11 +141,17 @@ fn lower_optional_payload(
 fn lift_optional_payload(
     value: JsValue,
     ty: Option<&ValueType>,
+    resources: &ResourceTracker,
 ) -> Result<Option<Box<Val>>, CallError> {
-    ty.map(|ty| lift(value, ty).map(Box::new)).transpose()
+    ty.map(|ty| lift(value, ty, resources).map(Box::new))
+        .transpose()
 }
 
-fn lower(value: Val, expected: &ValueType) -> Result<JsValue, CallError> {
+fn lower(
+    value: Val,
+    expected: &ValueType,
+    resources: &ResourceTracker,
+) -> Result<JsValue, CallError> {
     let value = match (value, expected) {
         (Val::Bool(value), ValueType::Bool) => JsValue::from_bool(value),
         (Val::S8(value), ValueType::S8) => JsValue::from_f64(f64::from(value)),
@@ -125,7 +176,9 @@ fn lower(value: Val, expected: &ValueType) -> Result<JsValue, CallError> {
                 .collect::<Result<Vec<_>, _>>()?;
             Uint8Array::from(bytes.as_slice()).into()
         }
-        (Val::List(values), ValueType::List(element)) => lower_sequence(values, element)?,
+        (Val::List(values), ValueType::List(element)) => {
+            lower_sequence(values, element, resources)?
+        }
         (Val::Tuple(values), ValueType::Tuple(elements)) => {
             if values.len() != elements.len() {
                 return Err(mismatch(
@@ -137,21 +190,25 @@ fn lower(value: Val, expected: &ValueType) -> Result<JsValue, CallError> {
             values
                 .into_iter()
                 .zip(elements)
-                .map(|(value, element)| lower(value, element))
+                .map(|(value, element)| lower(value, element, resources))
                 .collect::<Result<Array, _>>()?
                 .into()
         }
-        (Val::Record(values), ValueType::Record(fields)) => lower_record(values, fields, expected)?,
+        (Val::Record(values), ValueType::Record(fields)) => {
+            lower_record(values, fields, expected, resources)?
+        }
         (Val::Variant { case, value }, ValueType::Variant(cases)) => {
-            lower_variant(case, value, cases, expected)?
+            lower_variant(case, value, cases, expected, resources)?
         }
         (Val::Enum(case), ValueType::Enum(cases)) if cases.contains(&case) => {
             JsValue::from_str(&case)
         }
         (Val::Flags(names), ValueType::Flags(flags)) => lower_flags(names, flags, expected)?,
-        (Val::Option(value), ValueType::Option(payload)) => lower_option(value, payload, expected)?,
+        (Val::Option(value), ValueType::Option(payload)) => {
+            lower_option(value, payload, expected, resources)?
+        }
         (Val::Result(value), ValueType::Result { ok, err }) => {
-            lower_nested_result(value, ok.as_deref(), err.as_deref(), expected)?
+            lower_nested_result(value, ok.as_deref(), err.as_deref(), expected, resources)?
         }
         (_, ValueType::Unsupported(name)) => return Err(unsupported(name)),
         (value, expected) => {
@@ -161,7 +218,11 @@ fn lower(value: Val, expected: &ValueType) -> Result<JsValue, CallError> {
     Ok(value)
 }
 
-fn lift(value: JsValue, expected: &ValueType) -> Result<Val, CallError> {
+fn lift(
+    value: JsValue,
+    expected: &ValueType,
+    resources: &ResourceTracker,
+) -> Result<Val, CallError> {
     macro_rules! number {
         ($ty:ty, $variant:ident) => {
             number(&value, expected)
@@ -197,7 +258,7 @@ fn lift(value: JsValue, expected: &ValueType) -> Result<Val, CallError> {
             .dyn_into::<Uint8Array>()
             .map(|values| Val::List(values.to_vec().into_iter().map(Val::U8).collect()))
             .map_err(|value| wrong_js_type(expected, &value)),
-        ValueType::List(element) => lift_sequence(value, element).map(Val::List),
+        ValueType::List(element) => lift_sequence(value, element, resources).map(Val::List),
         ValueType::Tuple(elements) => {
             let values = js_array(value, expected)?;
             if values.length() as usize != elements.len() {
@@ -206,39 +267,47 @@ fn lift(value: JsValue, expected: &ValueType) -> Result<Val, CallError> {
             elements
                 .iter()
                 .enumerate()
-                .map(|(index, element)| lift(values.get(index as u32), element))
+                .map(|(index, element)| lift(values.get(index as u32), element, resources))
                 .collect::<Result<Vec<_>, _>>()
                 .map(Val::Tuple)
         }
-        ValueType::Record(fields) => lift_record(value, fields, expected),
-        ValueType::Variant(cases) => lift_variant(value, cases, expected),
+        ValueType::Record(fields) => lift_record(value, fields, expected, resources),
+        ValueType::Variant(cases) => lift_variant(value, cases, expected, resources),
         ValueType::Enum(cases) => value
             .as_string()
             .filter(|case| cases.contains(case))
             .map(Val::Enum)
             .ok_or_else(|| mismatch(expected, &value, "unknown enum case")),
         ValueType::Flags(flags) => lift_flags(value, flags, expected),
-        ValueType::Option(payload) => lift_option(value, payload, expected),
+        ValueType::Option(payload) => lift_option(value, payload, expected, resources),
         ValueType::Result { ok, err } => {
-            lift_nested_result(value, ok.as_deref(), err.as_deref(), expected)
+            lift_nested_result(value, ok.as_deref(), err.as_deref(), expected, resources)
         }
         ValueType::Resource(_) => Err(unsupported("resource")),
         ValueType::Unsupported(name) => Err(unsupported(name)),
     }
 }
 
-fn lower_sequence(values: Vec<Val>, element: &ValueType) -> Result<JsValue, CallError> {
+fn lower_sequence(
+    values: Vec<Val>,
+    element: &ValueType,
+    resources: &ResourceTracker,
+) -> Result<JsValue, CallError> {
     values
         .into_iter()
-        .map(|value| lower(value, element))
+        .map(|value| lower(value, element, resources))
         .collect::<Result<Array, _>>()
         .map(Into::into)
 }
 
-fn lift_sequence(value: JsValue, element: &ValueType) -> Result<Vec<Val>, CallError> {
+fn lift_sequence(
+    value: JsValue,
+    element: &ValueType,
+    resources: &ResourceTracker,
+) -> Result<Vec<Val>, CallError> {
     js_array(value, &ValueType::List(Box::new(element.clone())))?
         .iter()
-        .map(|value| lift(value, element))
+        .map(|value| lift(value, element, resources))
         .collect()
 }
 
@@ -254,6 +323,7 @@ fn lower_record(
     mut values: Vec<(String, Val)>,
     fields: &[crate::types::FieldType],
     expected: &ValueType,
+    resources: &ResourceTracker,
 ) -> Result<JsValue, CallError> {
     for field in fields {
         if !values.iter().any(|(name, _)| name == &field.name) {
@@ -285,7 +355,7 @@ fn lower_record(
         Reflect::set(
             &object,
             &JsValue::from_str(&field.js_name),
-            &lower(value, &field.ty)?,
+            &lower(value, &field.ty, resources)?,
         )
         .map_err(|error| mismatch(expected, &error, "could not set record field"))?;
     }
@@ -296,6 +366,7 @@ fn lift_record(
     value: JsValue,
     fields: &[crate::types::FieldType],
     expected: &ValueType,
+    resources: &ResourceTracker,
 ) -> Result<Val, CallError> {
     if !value.is_object() || Array::is_array(&value) {
         return Err(wrong_js_type(expected, &value));
@@ -328,7 +399,7 @@ fn lift_record(
             }
             Reflect::get(&object, &key)
                 .map_err(|error| mismatch(expected, &error, "could not read record field"))
-                .and_then(|value| lift(value, &field.ty))
+                .and_then(|value| lift(value, &field.ty, resources))
                 .map(|value| (field.name.clone(), value))
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -340,6 +411,7 @@ fn lower_variant(
     value: Option<Box<Val>>,
     cases: &[crate::types::CaseType],
     expected: &ValueType,
+    resources: &ResourceTracker,
 ) -> Result<JsValue, CallError> {
     let actual = Val::Variant {
         case: case.clone(),
@@ -354,7 +426,7 @@ fn lower_variant(
     match (value, &case_type.ty) {
         (None, None) => {}
         (Some(value), Some(ty)) => {
-            Reflect::set(&object, &"val".into(), &lower(*value, ty)?)
+            Reflect::set(&object, &"val".into(), &lower(*value, ty, resources)?)
                 .map_err(|error| mismatch(expected, &error, "could not set variant payload"))?;
         }
         _ => {
@@ -372,6 +444,7 @@ fn lift_variant(
     value: JsValue,
     cases: &[crate::types::CaseType],
     expected: &ValueType,
+    resources: &ResourceTracker,
 ) -> Result<Val, CallError> {
     if !value.is_object() || Array::is_array(&value) {
         return Err(wrong_js_type(expected, &value));
@@ -390,7 +463,7 @@ fn lift_variant(
         .map(|ty| {
             Reflect::get(&value, &"val".into())
                 .map_err(|error| mismatch(expected, &error, "could not read variant payload"))
-                .and_then(|value| lift(value, ty))
+                .and_then(|value| lift(value, ty, resources))
                 .map(Box::new)
         })
         .transpose()?;
@@ -455,12 +528,13 @@ fn lower_option(
     value: Option<Box<Val>>,
     payload: &ValueType,
     expected: &ValueType,
+    resources: &ResourceTracker,
 ) -> Result<JsValue, CallError> {
     match (value, maybe_null(payload)) {
         (None, false) => Ok(JsValue::UNDEFINED),
-        (Some(value), false) => lower(*value, payload),
+        (Some(value), false) => lower(*value, payload, resources),
         (None, true) => tagged("none", None, expected),
-        (Some(value), true) => tagged("some", Some(lower(*value, payload)?), expected),
+        (Some(value), true) => tagged("some", Some(lower(*value, payload, resources)?), expected),
     }
 }
 
@@ -468,18 +542,19 @@ fn lift_option(
     value: JsValue,
     payload: &ValueType,
     expected: &ValueType,
+    resources: &ResourceTracker,
 ) -> Result<Val, CallError> {
     if !maybe_null(payload) {
         return if value.is_null() || value.is_undefined() {
             Ok(Val::Option(None))
         } else {
-            lift(value, payload).map(|value| Val::Option(Some(Box::new(value))))
+            lift(value, payload, resources).map(|value| Val::Option(Some(Box::new(value))))
         };
     }
     let (tag, value) = tagged_parts(&value, expected)?;
     match tag.as_str() {
         "none" => Ok(Val::Option(None)),
-        "some" => lift(value, payload).map(|value| Val::Option(Some(Box::new(value)))),
+        "some" => lift(value, payload, resources).map(|value| Val::Option(Some(Box::new(value)))),
         _ => Err(mismatch(expected, &value, "unknown option case")),
     }
 }
@@ -517,13 +592,14 @@ fn lower_nested_result(
     ok: Option<&ValueType>,
     err: Option<&ValueType>,
     expected: &ValueType,
+    resources: &ResourceTracker,
 ) -> Result<JsValue, CallError> {
     let (tag, value, ty) = match value {
         Ok(value) => ("ok", value, ok),
         Err(value) => ("err", value, err),
     };
     let payload = match (value, ty) {
-        (Some(value), Some(ty)) => lower(*value, ty)?,
+        (Some(value), Some(ty)) => lower(*value, ty, resources)?,
         (None, None) => JsValue::UNDEFINED,
         (value, _) => {
             return Err(mismatch(expected, &value, "wrong payload for result case"));
@@ -537,10 +613,11 @@ fn lift_nested_result(
     ok: Option<&ValueType>,
     err: Option<&ValueType>,
     expected: &ValueType,
+    resources: &ResourceTracker,
 ) -> Result<Val, CallError> {
     let (tag, payload) = tagged_parts(&value, expected)?;
     let lift_payload = |ty: Option<&ValueType>| {
-        ty.map(|ty| lift(payload.clone(), ty).map(Box::new))
+        ty.map(|ty| lift(payload.clone(), ty, resources).map(Box::new))
             .transpose()
     };
     match tag.as_str() {
