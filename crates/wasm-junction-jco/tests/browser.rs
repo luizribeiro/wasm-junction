@@ -436,6 +436,19 @@ impl Middleware for CountCalls {
     }
 }
 
+struct RefuseDecoration(Rc<Cell<usize>>);
+
+impl Middleware for RefuseDecoration {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.interface.as_ref() == DECORATION {
+            self.0.set(self.0.get() + 1);
+            Err(CallError::refused("decoration refused"))
+        } else {
+            next.run(call).await
+        }
+    }
+}
+
 #[wasm_bindgen_test]
 async fn nested_routed_call_can_await_a_timer() {
     let waited = Rc::new(Cell::new(false));
@@ -461,6 +474,37 @@ async fn nested_routed_call_can_await_a_timer() {
         .unwrap();
     assert_eq!(result, [Val::from("host: async #1")]);
     assert!(waited.get());
+}
+
+#[wasm_bindgen_test]
+async fn refusal_in_a_routed_callee_stops_its_later_import() {
+    let refusals = Rc::new(Cell::new(0));
+    let host = RoutedHost::default();
+    let app = App::builder()
+        .engine(JcoEngine::new())
+        .provide(host.clone().provided())
+        .middleware(RefuseDecoration(refusals.clone()))
+        .build()
+        .unwrap();
+    app.load_all([
+        Component::from_bytes(translator_component())
+            .unwrap()
+            .named("translator"),
+        Component::from_bytes(writer_component())
+            .unwrap()
+            .named("writer"),
+    ])
+    .await
+    .unwrap();
+
+    let error = app
+        .call("writer", WRITER, "write-twice", vec![Val::from("blocked")])
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert_eq!(error.to_string(), "decoration refused");
+    assert_eq!(refusals.get(), 1);
+    assert!(host.callers().is_empty());
 }
 
 #[wasm_bindgen_test]

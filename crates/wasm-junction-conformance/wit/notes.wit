@@ -57,11 +57,13 @@ interface decoration {
 
 interface translator {
   translate: func(text: string) -> string;
+  translate-twice: func(text: string) -> string;
   translate-async: async func(text: string) -> string;
 }
 
 interface writer {
   write: func(text: string) -> string;
+  write-twice: func(text: string) -> string;
   write-async: async func(text: string) -> string;
 }
 

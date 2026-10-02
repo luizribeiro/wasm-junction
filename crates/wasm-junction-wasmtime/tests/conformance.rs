@@ -13,9 +13,9 @@ use wasm_junction::{
     Provided, Provider, Resource, Val, Vals, WasiConfig,
 };
 use wasm_junction_conformance::{
-    CYCLE_A, Fixture, FixtureHost, RELOAD_GREETER, RESOURCE_CLIENT, RESOURCE_HOST, ReloadGreeter,
-    ReloadHost, ResourceHost, RoutedFixture, RoutedHost, SUMMARIZER, WRITER, component,
-    cycle_a_component, cycle_b_component, reload_v1_component, reload_v2_component,
+    CYCLE_A, DECORATION, Fixture, FixtureHost, RELOAD_GREETER, RESOURCE_CLIENT, RESOURCE_HOST,
+    ReloadGreeter, ReloadHost, ResourceHost, RoutedFixture, RoutedHost, SUMMARIZER, WRITER,
+    component, cycle_a_component, cycle_b_component, reload_v1_component, reload_v2_component,
     resource_component, run, run_reload, run_resources, run_routed, sample_note,
     translator_component, writer_component,
 };
@@ -613,6 +613,19 @@ impl Middleware for CountCalls {
     }
 }
 
+struct RefuseDecoration(Arc<AtomicUsize>);
+
+impl Middleware for RefuseDecoration {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.interface.as_ref() == DECORATION {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Err(CallError::refused("decoration refused"))
+        } else {
+            next.run(call).await
+        }
+    }
+}
+
 #[test]
 fn nested_routed_call_can_await_on_a_current_thread_tokio_runtime() {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -646,6 +659,32 @@ fn nested_routed_call_can_await_on_a_current_thread_tokio_runtime() {
         .recv_timeout(Duration::from_secs(30))
         .expect("nested routed call deadlocked the current-thread Tokio runtime");
     assert_eq!(result.unwrap(), [Val::from("host: async #1")]);
+}
+
+#[test]
+fn refusal_in_a_routed_callee_stops_its_later_import() {
+    let refusals = Arc::new(AtomicUsize::new(0));
+    let host = RoutedHost::default();
+    let app = App::builder()
+        .engine(WasmtimeEngine::new().unwrap())
+        .provide(host.clone().provided())
+        .middleware(RefuseDecoration(refusals.clone()))
+        .build()
+        .unwrap();
+    let translator = Component::from_bytes(translator_component())
+        .unwrap()
+        .named("translator");
+    let writer = Component::from_bytes(writer_component())
+        .unwrap()
+        .named("writer");
+    block_on(app.load_all([translator, writer])).unwrap();
+
+    let error = block_on(app.call("writer", WRITER, "write-twice", vec![Val::from("blocked")]))
+        .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert_eq!(error.to_string(), "decoration refused");
+    assert_eq!(refusals.load(Ordering::Relaxed), 1);
+    assert!(host.callers().is_empty());
 }
 
 #[test]

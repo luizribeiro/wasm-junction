@@ -17,6 +17,10 @@ impl bindings::exports::example::notes::writer::Guest for Component {
         translator::translate(&text)
     }
 
+    fn write_twice(text: String) -> String {
+        translator::translate_twice(&text)
+    }
+
     async fn write_async(text: String) -> String {
         translator::translate_async(text).await
     }

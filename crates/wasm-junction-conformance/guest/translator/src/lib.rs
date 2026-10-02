@@ -21,6 +21,11 @@ impl bindings::exports::example::notes::translator::Guest for Component {
         translated(decoration::decorate(&text))
     }
 
+    fn translate_twice(text: String) -> String {
+        let text = decoration::decorate(&text);
+        translated(decoration::decorate(&text))
+    }
+
     async fn translate_async(text: String) -> String {
         translated(decoration::decorate_async(text).await)
     }
