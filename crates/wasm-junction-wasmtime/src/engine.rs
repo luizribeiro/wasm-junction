@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
+#[cfg(feature = "wasi")]
 use wasm_junction_core::WASI_PROVIDER_NAME;
 use wasm_junction_core::{
     BoxFuture, CallError, CompiledComponent, Engine, EngineError, ImportDispatcher,
@@ -15,25 +16,31 @@ use wasmtime::component::{
     Component, InstancePre, Linker, ResourceAny, ResourceDynamic, ResourceType, Val as WasmtimeVal,
 };
 use wasmtime::{AsContextMut, Config, Engine as RuntimeEngine, Store};
+#[cfg(feature = "wasi")]
 use wasmtime_wasi::{WasiCtxBuilder, WasiCtxView, WasiView};
 
+#[cfg(feature = "wasi")]
 use crate::WASI_INTERFACES;
 use crate::imports::{ResourceDefinition, define_imports};
 use crate::streams::lower_stream;
 use crate::values::{ExpectedResource, LiftValue, LowerValue, from_wasmtime, to_wasmtime};
+#[cfg(feature = "wasi")]
 use crate::wasi::{WasiState, add_gates, add_ungated_interfaces};
 
 pub(crate) struct StoreData {
     pub(crate) imports: Arc<dyn ImportDispatcher>,
     pub(crate) context: InvocationContext,
     pub(crate) component: Arc<str>,
+    #[cfg(feature = "wasi")]
     wasi: WasiState,
+    #[cfg(feature = "wasi")]
     pub(crate) gated_wasi: Arc<std::sync::Mutex<WasiState>>,
     pub(crate) resources: Arc<[ResourceDefinition]>,
     pub(crate) owned_resources: HashSet<Resource>,
     pub(crate) active_streams: crate::streams::ActiveStreams,
 }
 
+#[cfg(feature = "wasi")]
 impl WasiView for StoreData {
     fn ctx(&mut self) -> WasiCtxView<'_> {
         WasiCtxView {
@@ -63,9 +70,14 @@ impl WasmtimeEngine {
             .wasm_component_model_async(true)
             .concurrency_support(true);
         let engine = RuntimeEngine::new(&config)?;
-        let mut linker = Linker::new(&engine);
-        add_ungated_interfaces(&mut linker)?;
-        add_gates(&mut linker)?;
+        let linker = Linker::new(&engine);
+        #[cfg(feature = "wasi")]
+        let linker = {
+            let mut linker = linker;
+            add_ungated_interfaces(&mut linker)?;
+            add_gates(&mut linker)?;
+            linker
+        };
         Ok(Self {
             engine,
             linker,
@@ -82,7 +94,15 @@ impl WasmtimeEngine {
 
 impl Engine for WasmtimeEngine {
     fn provider_interfaces(&self, provider: &str) -> Option<&'static [&'static str]> {
-        (provider == WASI_PROVIDER_NAME).then_some(WASI_INTERFACES)
+        #[cfg(feature = "wasi")]
+        {
+            (provider == WASI_PROVIDER_NAME).then_some(WASI_INTERFACES)
+        }
+        #[cfg(not(feature = "wasi"))]
+        {
+            let _ = provider;
+            None
+        }
     }
 
     fn compile(
@@ -189,6 +209,8 @@ fn compile_component(
     bytes: Arc<[u8]>,
     wasi: WasiConfig,
 ) -> CompileResult {
+    #[cfg(not(feature = "wasi"))]
+    drop(wasi);
     let component =
         Component::new(engine, bytes).map_err(|error| EngineError::new(error.to_string()))?;
     let resources = define_imports(&mut linker, &component)
@@ -199,6 +221,7 @@ fn compile_component(
     Ok(Arc::new(Compiled {
         pre,
         instantiations,
+        #[cfg(feature = "wasi")]
         wasi,
         resources: resources.into(),
     }))
@@ -207,6 +230,7 @@ fn compile_component(
 struct Compiled {
     pre: InstancePre<StoreData>,
     instantiations: Arc<AtomicU64>,
+    #[cfg(feature = "wasi")]
     wasi: WasiConfig,
     resources: Arc<[ResourceDefinition]>,
 }
@@ -250,7 +274,9 @@ impl Compiled {
                 imports,
                 context,
                 component,
+                #[cfg(feature = "wasi")]
                 wasi: wasi_context(&self.wasi),
+                #[cfg(feature = "wasi")]
                 gated_wasi: Arc::new(std::sync::Mutex::new(wasi_context(&self.wasi))),
                 resources: self.resources.clone(),
                 owned_resources: HashSet::new(),
@@ -468,6 +494,7 @@ async fn cleanup_resources(store: &mut Store<StoreData>) -> Result<(), wasmtime:
     Ok(())
 }
 
+#[cfg(feature = "wasi")]
 fn wasi_context(configuration: &WasiConfig) -> WasiState {
     let mut builder = WasiCtxBuilder::new();
     for (name, value) in configuration.environment() {

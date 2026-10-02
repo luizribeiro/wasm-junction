@@ -1551,6 +1551,7 @@ impl AppBuilder {
     ) -> Result<App, BuildError> {
         let engine = self.engine.map_or_else(default, Ok)?;
         let mut providers = HashMap::new();
+        #[cfg_attr(not(feature = "wasi"), allow(unused_mut))]
         let mut engine_interfaces = Vec::new();
         let mut locations = HashMap::new();
         for registration in self.providers {
@@ -1562,6 +1563,7 @@ impl AppBuilder {
                     register_location(&mut locations, interface, registration.location)?;
                     providers.insert(interface, provider);
                 }
+                #[cfg(feature = "wasi")]
                 ProvidedKind::Engine(name) => {
                     let interfaces = engine
                         .provider_interfaces(name)
@@ -1903,6 +1905,7 @@ mod tests {
     }
 
     impl Engine for ExplicitEngine {
+        #[cfg(feature = "wasi")]
         fn provider_interfaces(&self, provider: &str) -> Option<&'static [&'static str]> {
             (provider == "settings").then_some(&["system:settings/config@1.0.0"])
         }
@@ -1931,6 +1934,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "wasi")]
     fn duplicate_engine_providers_name_both_registration_sites() {
         let first = Provided::engine("settings");
         let first_line = line!() + 1;

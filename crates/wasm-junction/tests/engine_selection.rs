@@ -4,7 +4,7 @@ use std::process::Command;
 
 const WASM_TARGETS: [&str; 2] = ["wasm32-unknown-unknown", "wasm32-wasip2"];
 
-fn tree(target: &str, no_default_features: bool) -> String {
+fn tree(target: &str, no_default_features: bool, features: Option<&str>) -> String {
     let manifest = format!("{}/Cargo.toml", env!("CARGO_MANIFEST_DIR"));
     let mut command = Command::new(env!("CARGO"));
     command.args([
@@ -22,6 +22,9 @@ fn tree(target: &str, no_default_features: bool) -> String {
     ]);
     if no_default_features {
         command.arg("--no-default-features");
+    }
+    if let Some(features) = features {
+        command.args(["--features", features]);
     }
     let output = command.output().unwrap();
     assert!(
@@ -48,8 +51,8 @@ fn disabled_defaults_select_no_engine_on_any_target() {
         .into_iter()
         .chain(WASM_TARGETS)
     {
-        assert!(!contains_wasmtime(&tree(target, true)), "{target}");
-        assert!(!contains_jco(&tree(target, true)), "{target}");
+        assert!(!contains_wasmtime(&tree(target, true, None)), "{target}");
+        assert!(!contains_jco(&tree(target, true, None)), "{target}");
     }
 }
 
@@ -57,11 +60,33 @@ fn disabled_defaults_select_no_engine_on_any_target() {
 fn defaults_select_each_engine_only_on_its_target() {
     assert!(contains_wasmtime(&tree(
         env!("WASM_JUNCTION_TARGET"),
-        false
+        false,
+        None
     )));
-    assert!(!contains_jco(&tree(env!("WASM_JUNCTION_TARGET"), false)));
-    assert!(contains_jco(&tree("wasm32-unknown-unknown", false)));
-    assert!(!contains_wasmtime(&tree("wasm32-unknown-unknown", false)));
-    assert!(!contains_jco(&tree("wasm32-wasip2", false)));
-    assert!(!contains_wasmtime(&tree("wasm32-wasip2", false)));
+    assert!(!contains_jco(&tree(
+        env!("WASM_JUNCTION_TARGET"),
+        false,
+        None
+    )));
+    assert!(contains_jco(&tree("wasm32-unknown-unknown", false, None)));
+    assert!(!contains_wasmtime(&tree(
+        "wasm32-unknown-unknown",
+        false,
+        None
+    )));
+    assert!(!contains_jco(&tree("wasm32-wasip2", false, None)));
+    assert!(!contains_wasmtime(&tree("wasm32-wasip2", false, None)));
+}
+
+#[test]
+fn wasi_dependency_follows_the_feature() {
+    let without = tree(env!("WASM_JUNCTION_TARGET"), true, Some("wasmtime"));
+    let with = tree(env!("WASM_JUNCTION_TARGET"), true, Some("wasmtime,wasi"));
+
+    assert!(
+        !without
+            .lines()
+            .any(|line| line.starts_with("wasmtime-wasi "))
+    );
+    assert!(with.lines().any(|line| line.starts_with("wasmtime-wasi ")));
 }

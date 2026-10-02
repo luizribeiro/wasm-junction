@@ -18,7 +18,7 @@ workspace = true
 [features]
 default = ["wasmtime", "jco", "wasi"]
 jco = ["dep:wasm-junction-jco"]
-wasi = []
+wasi = ["wasm-junction-wasmtime?/wasi"]
 wasmtime = ["dep:wasm-junction-wasmtime"]
 
 [dependencies]
@@ -28,7 +28,7 @@ semver = "1.0.28"
 wasmparser = { version = "=0.259.0", default-features = false, features = ["component-model", "std", "validate"] }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-wasm-junction-wasmtime = { path = "../wasm-junction-wasmtime", version = "=0.0.0", optional = true }
+wasm-junction-wasmtime = { path = "../wasm-junction-wasmtime", version = "=0.0.0", default-features = false, features = ["parallel-compilation"], optional = true }
 
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 wasm-junction-jco = { path = "../wasm-junction-jco", version = "=0.0.0", optional = true }

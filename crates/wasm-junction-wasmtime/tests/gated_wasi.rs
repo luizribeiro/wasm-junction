@@ -1,5 +1,7 @@
 //! WASI interception coverage for the native engine.
 
+#![cfg(feature = "wasi")]
+
 use wasm_junction_wasmtime::GATED_WASI_INTERFACES;
 
 #[test]

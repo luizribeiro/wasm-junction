@@ -8,10 +8,12 @@ use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
 
 use wasm_junction::{
-    App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Caller, CompiledComponent,
-    Component, Engine, EngineError, ImportDispatcher, InvocationContext, LoadError, Middleware,
-    Next, Provided, Provider, Resource, Val, Vals, WasiConfig,
+    App, BoxFuture, Call, CallContext, CallError, CallErrorKind, CompiledComponent, Component,
+    Engine, EngineError, ImportDispatcher, InvocationContext, Middleware, Next, Provided, Provider,
+    Resource, Val, Vals, WasiConfig,
 };
+#[cfg(feature = "wasi")]
+use wasm_junction::{Caller, LoadError};
 use wasm_junction_conformance::{
     CYCLE_A, DECORATION, Fixture, FixtureHost, RELOAD_GREETER, RESOURCE_CLIENT, RESOURCE_HOST,
     ReloadGreeter, ReloadHost, ResourceHost, RoutedFixture, RoutedHost, SUMMARIZER, WRITER,
@@ -21,10 +23,15 @@ use wasm_junction_conformance::{
 };
 use wasm_junction_wasmtime::WasmtimeEngine;
 
+#[cfg(feature = "wasi")]
 const WASI_COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wasi-test.wasm"));
+#[cfg(feature = "wasi")]
 const ENVIRONMENT: &str = "test:wasi/environment@0.1.0";
+#[cfg(feature = "wasi")]
 const WASI_ENVIRONMENT: &str = "wasi:cli/environment@0.2.12";
+#[cfg(feature = "wasi")]
 const WALL_CLOCK: &str = "wasi:clocks/wall-clock@0.2.12";
+#[cfg(feature = "wasi")]
 const MONOTONIC_CLOCK: &str = "wasi:clocks/monotonic-clock@0.2.12";
 
 struct ThreadWake(std::thread::Thread);
@@ -434,8 +441,10 @@ fn every_call_uses_a_fresh_store() {
     assert_eq!(fixture.host().normalizations(), 2);
 }
 
+#[cfg(feature = "wasi")]
 struct EnvironmentBehavior(Arc<Mutex<Vec<Call>>>);
 
+#[cfg(feature = "wasi")]
 impl Middleware for EnvironmentBehavior {
     async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
         if call.interface.as_ref() == WALL_CLOCK && call.function.as_ref() == "now" {
@@ -480,6 +489,7 @@ impl Middleware for EnvironmentBehavior {
 }
 
 #[test]
+#[cfg(feature = "wasi")]
 fn wasi_imports_are_missing_without_the_provider() {
     let app = App::builder()
         .engine(WasmtimeEngine::new().unwrap())
@@ -497,6 +507,7 @@ fn wasi_imports_are_missing_without_the_provider() {
 }
 
 #[test]
+#[cfg(feature = "wasi")]
 fn environment_gate_traces_refuses_and_rewrites() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let app = App::builder()
@@ -614,8 +625,10 @@ impl Middleware for AwaitTimer {
     }
 }
 
+#[cfg(feature = "wasi")]
 struct AwaitTokioTimer;
 
+#[cfg(feature = "wasi")]
 impl Middleware for AwaitTokioTimer {
     async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
         if call.interface.as_ref() == WALL_CLOCK && call.function.as_ref() == "now" {
@@ -748,6 +761,7 @@ fn cyclic_routed_calls_stop_at_the_depth_limit() {
 }
 
 #[test]
+#[cfg(feature = "wasi")]
 fn wasi_gate_can_await_on_a_current_thread_tokio_runtime() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_time()

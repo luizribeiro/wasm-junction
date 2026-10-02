@@ -4,7 +4,9 @@ mod support;
 
 use std::sync::{Arc, Mutex};
 
-use support::{NOTES, block_on, component_bytes, component_bytes_from};
+#[cfg(all(feature = "wasi", feature = "wasmtime", not(target_family = "wasm")))]
+use support::component_bytes_from;
+use support::{NOTES, block_on, component_bytes};
 use wasm_junction::{
     App, BoxFuture, Call, CallContext, CallError, CompiledComponent, Component, Engine,
     EngineError, ImportDispatcher, LoadError, Provided, Provider, Vals, WasiConfig,

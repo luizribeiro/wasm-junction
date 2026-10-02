@@ -42,6 +42,7 @@ pub(crate) enum ProvidedKind {
         interface: &'static str,
         provider: Arc<dyn Provider>,
     },
+    #[cfg(feature = "wasi")]
     Engine(&'static str),
 }
 
@@ -57,6 +58,7 @@ impl Provided {
         }
     }
 
+    #[cfg(feature = "wasi")]
     pub(crate) const fn engine(name: &'static str) -> Self {
         Self {
             kind: ProvidedKind::Engine(name),
@@ -78,6 +80,7 @@ impl std::fmt::Debug for Provided {
             } => debug
                 .field("interface", interface)
                 .field("provider", &Arc::as_ptr(provider)),
+            #[cfg(feature = "wasi")]
             ProvidedKind::Engine(name) => debug.field("engine_provider", name),
         }
         .finish()

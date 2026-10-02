@@ -12,13 +12,14 @@ publish.workspace = true
 workspace = true
 
 [features]
-default = ["parallel-compilation"]
+default = ["parallel-compilation", "wasi"]
 parallel-compilation = ["wasmtime/parallel-compilation"]
+wasi = ["dep:wasmtime-wasi"]
 
 [dependencies]
 wasm-junction-core = { path = "../wasm-junction-core", version = "=0.0.0" }
 wasmtime = { version = "=49.0.1", default-features = false, features = ["component-model-async", "cranelift", "runtime", "std"] }
-wasmtime-wasi = { version = "=49.0.1", default-features = false, features = ["p2"] }
+wasmtime-wasi = { version = "=49.0.1", default-features = false, features = ["p2"], optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "time"] }
@@ -34,6 +35,7 @@ harness = false
 [[bench]]
 name = "wasi"
 harness = false
+required-features = ["wasi"]
 
 [[bench]]
 name = "reload"

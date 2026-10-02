@@ -1,8 +1,8 @@
 //! A native wasm-junction engine powered by Wasmtime.
 //!
-//! All WASI Preview 2 interfaces are available. Calls to [`GATED_WASI_INTERFACES`] are
-//! intercepted by application middleware; the remaining WASI interfaces use wasmtime-wasi
-//! directly.
+//! With the default `wasi` feature, WASI Preview 2 interfaces are available through the explicit
+//! provider. Calls to [`GATED_WASI_INTERFACES`] are intercepted by application middleware; the
+//! remaining WASI interfaces use wasmtime-wasi directly.
 //!
 //! The default `parallel-compilation` feature lets Wasmtime compile functions across every
 //! available core. Disable default features when predictable CPU use matters more than load and
@@ -16,11 +16,13 @@ mod engine;
 mod imports;
 mod streams;
 mod values;
+#[cfg(feature = "wasi")]
 mod wasi;
 
 pub use engine::WasmtimeEngine;
 
 /// WASI Preview 2 interfaces supplied by [`WasmtimeEngine`].
+#[cfg(feature = "wasi")]
 pub const WASI_INTERFACES: &[&str] = &[
     "wasi:cli/environment@0.2.12",
     "wasi:cli/exit@0.2.12",
@@ -52,6 +54,7 @@ pub const WASI_INTERFACES: &[&str] = &[
 ];
 
 /// WASI Preview 2 interfaces intercepted by the application middleware chain.
+#[cfg(feature = "wasi")]
 pub const GATED_WASI_INTERFACES: &[&str] = &[
     "wasi:cli/environment@0.2.12",
     "wasi:clocks/monotonic-clock@0.2.12",

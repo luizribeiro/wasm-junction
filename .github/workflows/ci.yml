@@ -25,6 +25,10 @@ jobs:
         run: nix develop -c pre-commit run --all-files --show-diff-on-failure
       - name: Check generated bindings for wasm32
         run: nix develop -c cargo check -p wasm-junction --test bindgen_calls --test bindgen_handles --test bindgen_resources --test bindgen_streams --test bindgen_with --target wasm32-unknown-unknown --no-default-features --locked
+      - name: Check without WASI
+        run: |
+          nix develop -c cargo check -p wasm-junction-wasmtime --no-default-features --locked
+          nix develop -c cargo check -p wasm-junction --no-default-features --features wasmtime --locked
       - name: Read Playwright version
         id: playwright
         run: |
