@@ -123,6 +123,21 @@ pub(crate) struct Signatures {
 }
 
 impl Signatures {
+    #[cfg(all(test, target_family = "wasm"))]
+    pub(crate) fn for_test_import(
+        interface: &str,
+        function: &str,
+        signature: FunctionType,
+    ) -> Self {
+        let imports = BTreeMap::from([((interface.to_owned(), function.to_owned()), signature)]);
+        Self {
+            import_aliases: import_aliases(&imports),
+            imports,
+            exports: BTreeMap::new(),
+            resources: Vec::new(),
+        }
+    }
+
     pub(crate) fn from_component(bytes: &[u8]) -> Result<Self, String> {
         let DecodedWasm::Component(resolve, world) = decode(bytes)
             .map_err(|error| format!("could not inspect WebAssembly component: {error:#}"))?

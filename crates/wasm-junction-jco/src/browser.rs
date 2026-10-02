@@ -354,3 +354,85 @@ fn js_error(value: &JsValue) -> String {
         })
         .unwrap_or_else(|| format!("JavaScript error: {value:?}"))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use wasm_bindgen_test::wasm_bindgen_test;
+    use wasm_junction_core::ImportTarget;
+
+    use super::*;
+    use crate::types::{FunctionType, ValueType};
+
+    const HOST: &str = "example:test/host@1.0.0";
+
+    #[derive(Default)]
+    struct CountingDispatcher(Cell<usize>);
+
+    impl ImportDispatcher for CountingDispatcher {
+        fn call(
+            &self,
+            _context: InvocationContext,
+            _caller: Arc<str>,
+            _interface: Arc<str>,
+            _function: Arc<str>,
+            _args: Vals,
+        ) -> BoxFuture<'_, Result<Vals, CallError>> {
+            self.0.set(self.0.get() + 1);
+            Box::pin(std::future::ready(Ok(Vec::new())))
+        }
+
+        fn call_engine(
+            &self,
+            _context: InvocationContext,
+            _caller: Arc<str>,
+            _interface: Arc<str>,
+            _function: Arc<str>,
+            _args: Vals,
+            _target: Arc<dyn ImportTarget>,
+        ) -> BoxFuture<'_, Result<Vals, CallError>> {
+            Box::pin(std::future::ready(Ok(Vec::new())))
+        }
+
+        fn drop_resource(
+            &self,
+            _context: InvocationContext,
+            _caller: Arc<str>,
+            _resource: wasm_junction_core::Resource,
+        ) -> BoxFuture<'_, Result<(), CallError>> {
+            self.0.set(self.0.get() + 1);
+            Box::pin(std::future::ready(Ok(())))
+        }
+    }
+
+    #[wasm_bindgen_test]
+    async fn remembered_failure_blocks_bridge_dispatch_and_drop() {
+        let dispatcher = Arc::new(CountingDispatcher::default());
+        let bridge = Bridge {
+            imports: dispatcher.clone(),
+            context: InvocationContext::default(),
+            component: Arc::from("resource-client"),
+            signatures: Signatures::for_test_import(
+                HOST,
+                "read",
+                FunctionType {
+                    params: vec![ValueType::String],
+                    result: Some(ValueType::U32),
+                },
+            ),
+            import_error: Rc::new(RefCell::new(Some(CallError::refused("denied")))),
+            resources: ResourceTracker::default(),
+        };
+        let args = Array::of1(&JsValue::from_str("Ada"));
+        assert!(matches!(
+            bridge.dispatch(HOST, "read", &args).await.unwrap(),
+            JsResult::Poison(_)
+        ));
+        bridge
+            .drop_resource(HOST.to_owned(), "session".to_owned(), 7)
+            .await
+            .unwrap();
+        assert_eq!(dispatcher.0.get(), 0);
+    }
+}
