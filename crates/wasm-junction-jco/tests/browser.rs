@@ -20,16 +20,15 @@ use wasm_junction::{
     Provider, Resource, Val, Vals, WasiConfig,
 };
 use wasm_junction_conformance::{
-    CYCLE_A, DECORATION, Fixture, FixtureHost, RESOURCE_CLIENT, ResourceHost, RetainHost,
-    RoutedFixture, RoutedHost, STREAM_PROBE, SUMMARIZER, StreamHost, TRANSLATOR, WRITER, component,
-    cycle_a_component, cycle_b_component, resource_component, run_default, run_resource_refusal,
-    run_resources, run_routed, run_streams, sample_note, sample_summary, stream_component,
-    translator_component, writer_component,
+    CYCLE_A, DECORATION, Fixture, FixtureHost, PoisonHost, RESOURCE_CLIENT, ResourceHost,
+    RetainHost, RoutedFixture, RoutedHost, STREAM_PROBE, SUMMARIZER, StreamHost, TRANSLATOR,
+    WRITER, component, cycle_a_component, cycle_b_component, resource_component, run_default,
+    run_resource_refusal, run_resources, run_routed, run_streams, sample_note, sample_summary,
+    stream_component, translator_component, writer_component,
 };
 use wasm_junction_jco::JcoEngine;
 
 wasm_bindgen_test_configure!(run_in_dedicated_worker);
-
 #[wasm_bindgen(inline_js = r#"
 export async function jspiSmoke(bytes) {
   if (typeof WebAssembly.Suspending !== 'function' ||
@@ -307,6 +306,41 @@ async fn open_guest_stream_is_aborted_when_its_store_ends() {
         input.read().await.unwrap_err().to_string(),
         "stream was aborted when its invocation ended"
     );
+}
+
+#[wasm_bindgen_test]
+async fn poisoned_invocation_blocks_further_stream_effects() {
+    let host = PoisonHost::default();
+    let app = App::builder()
+        .engine(JcoEngine::new())
+        .provide(host.clone().provided())
+        .build()
+        .unwrap();
+    app.load(
+        Component::from_bytes(stream_component())
+            .unwrap()
+            .named("streams"),
+    )
+    .await
+    .unwrap();
+    let error = app
+        .call("streams", STREAM_PROBE, "poison-streams", Vec::new())
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert_eq!(error.to_string(), "stream refused");
+
+    let mut guest = host.take_guest().unwrap();
+    let source = host.take_source().unwrap();
+    assert_eq!(
+        guest.read().await.unwrap_err().to_string(),
+        "stream was aborted when its invocation ended"
+    );
+    assert_eq!(
+        source.write(b"late").await.unwrap_err().to_string(),
+        "stream reader is closed"
+    );
+    assert_eq!(host.advances(), 0);
 }
 
 #[wasm_bindgen_test]
