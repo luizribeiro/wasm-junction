@@ -1,20 +1,16 @@
-import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import { once } from "node:events";
-import { tmpdir } from "node:os";
-import process from "node:process";
 import type { Buffer } from "node:buffer";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import process from "node:process";
 import type { Browser } from "playwright-core";
 
 const [browserName, ...cargoArgs] = process.argv.slice(2);
 const configuredPlaywrightRoot = process.env.PLAYWRIGHT_NODE_PATH;
 if (!configuredPlaywrightRoot) throw new Error("run this command inside `nix develop`");
-if (
-  browserName !== "chromium" &&
-  browserName !== "firefox" &&
-  browserName !== "webkit"
-) {
+if (browserName !== "chromium" && browserName !== "firefox" && browserName !== "webkit") {
   throw new Error("browser and cargo test arguments are required");
 }
 if (cargoArgs.length === 0) throw new Error("browser and cargo test arguments are required");
@@ -33,7 +29,9 @@ if (process.platform === "linux") {
 }
 
 // The runtime path and declarations both come from the flake's playwright-driver package.
-const playwright: typeof import("playwright-core") = await import(join(playwrightRoot, "index.mjs"));
+const playwright: typeof import("playwright-core") = await import(
+  join(playwrightRoot, "index.mjs")
+);
 const browserType = playwright[selectedBrowserName];
 
 // The dev shell points XDG_DATA_DIRS at the Nix store only, which hides the system's GSettings
@@ -42,7 +40,7 @@ const browserEnv = { ...process.env };
 delete browserEnv.XDG_DATA_DIRS;
 
 function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
     const timer = setTimeout(resolve, milliseconds);
     timer.unref();
   });
@@ -80,8 +78,11 @@ const child = spawn(
 );
 
 let output = "";
-const { promise: server, resolve: settleServer, reject: rejectServer } =
-  Promise.withResolvers<string>();
+const {
+  promise: server,
+  resolve: settleServer,
+  reject: rejectServer,
+} = Promise.withResolvers<string>();
 
 function capture(chunk: Buffer, destination: NodeJS.WritableStream): void {
   destination.write(chunk);
@@ -90,8 +91,8 @@ function capture(chunk: Buffer, destination: NodeJS.WritableStream): void {
   if (match) settleServer(match[1]);
 }
 
-child.stdout.on("data", (chunk) => capture(chunk, process.stdout));
-child.stderr.on("data", (chunk) => capture(chunk, process.stderr));
+child.stdout.on("data", chunk => capture(chunk, process.stdout));
+child.stderr.on("data", chunk => capture(chunk, process.stderr));
 child.once("error", rejectServer);
 child.once("exit", (code, signal) => {
   rejectServer(new Error(`test runner exited before serving (${code ?? signal})`));
@@ -116,7 +117,7 @@ async function stop(): Promise<void> {
 }
 
 async function printBrowserDiagnostics(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  await new Promise(resolve => setTimeout(resolve, 50));
   const diagnostics = existsSync(diagnosticsPath)
     ? readFileSync(diagnosticsPath, "utf8").trimEnd()
     : "";
@@ -124,7 +125,10 @@ async function printBrowserDiagnostics(): Promise<void> {
   console.error(diagnostics || "(no browser output captured)");
 }
 
-for (const [signal, status] of [["SIGINT", 130], ["SIGTERM", 143]] as const) {
+for (const [signal, status] of [
+  ["SIGINT", 130],
+  ["SIGTERM", 143],
+] as const) {
   process.once(signal, async () => {
     await stop();
     process.exit(status);
@@ -134,14 +138,16 @@ for (const [signal, status] of [["SIGINT", 130], ["SIGTERM", 143]] as const) {
 try {
   const url = await Promise.race([
     server,
-    delay(600_000).then(() => { throw new Error("timed out waiting for the test server"); }),
+    delay(600_000).then(() => {
+      throw new Error("timed out waiting for the test server");
+    }),
   ]);
   const launchedBrowser = await browserType.launch({ headless: true, env: browserEnv });
   browser = launchedBrowser;
   console.log(`${selectedBrowserName} ${launchedBrowser.version()} (Playwright 1.63.0)`);
   const page = await launchedBrowser.newPage();
-  page.on("console", (message) => console.log(message.text()));
-  page.on("pageerror", (error) => console.error(`page error: ${error.message}`));
+  page.on("console", message => console.log(message.text()));
+  page.on("pageerror", error => console.error(`page error: ${error.message}`));
   await page.goto(url);
   // Keep this a string because the runner's Node and WebWorker types don't declare document.
   await page.waitForFunction(

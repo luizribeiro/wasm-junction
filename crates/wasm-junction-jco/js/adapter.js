@@ -44,14 +44,11 @@ export async function compileComponent(source, names, modules) {
  * @returns {Promise<unknown>}
  */
 export async function invoke(runtime, interfaceName, functionName, args, dispatch) {
-  const instance = await runtime.namespace.instantiate(
-    name => {
-      const module = runtime.modules.get(name);
-      if (!module) throw new Error(`missing compiled core module ${name}`);
-      return module;
-    },
-    makeImports(dispatch),
-  );
+  const instance = await runtime.namespace.instantiate(name => {
+    const module = runtime.modules.get(name);
+    if (!module) throw new Error(`missing compiled core module ${name}`);
+    return module;
+  }, makeImports(dispatch));
   const shortName = interfaceName.slice(interfaceName.lastIndexOf("/") + 1).split("@")[0];
   const exports = instance[shortName];
   const jsName = functionName.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());

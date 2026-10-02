@@ -80,6 +80,10 @@
             inherit stages;
           };
         offlineHooks = {
+          biome = {
+            enable = true;
+            files = "^(scripts/|crates/[^/]+/js/|(?:biome|tsconfig)\\.json$)";
+          };
           nixfmt.enable = true;
           check-toml.enable = true;
           end-of-file-fixer.enable = true;
