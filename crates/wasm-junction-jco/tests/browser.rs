@@ -2,9 +2,11 @@
 
 #![cfg(target_family = "wasm")]
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::future::poll_fn;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::task::Poll;
 
 use js_sys::Uint8Array;
 use wasm_bindgen::prelude::*;
@@ -18,8 +20,8 @@ use wasm_junction::{
     Provider, Resource, Val, Vals, WasiConfig,
 };
 use wasm_junction_conformance::{
-    CYCLE_A, DECORATION, Fixture, FixtureHost, RESOURCE_CLIENT, ResourceHost, RoutedFixture,
-    RoutedHost, STREAM_PROBE, SUMMARIZER, StreamHost, TRANSLATOR, WRITER, component,
+    CYCLE_A, DECORATION, Fixture, FixtureHost, RESOURCE_CLIENT, ResourceHost, RetainHost,
+    RoutedFixture, RoutedHost, STREAM_PROBE, SUMMARIZER, StreamHost, TRANSLATOR, WRITER, component,
     cycle_a_component, cycle_b_component, resource_component, run_default, run_resource_refusal,
     run_resources, run_routed, run_streams, sample_note, sample_summary, stream_component,
     translator_component, writer_component,
@@ -277,6 +279,34 @@ async fn guest_reads_the_first_chunk_before_requesting_the_second() {
         .unwrap();
     assert_eq!(result, [Val::from("first second")]);
     assert!(host.advanced());
+}
+
+#[wasm_bindgen_test]
+async fn open_guest_stream_is_aborted_when_its_store_ends() {
+    let host = RetainHost::default();
+    let app = App::builder()
+        .engine(JcoEngine::new())
+        .provide(host.clone().provided())
+        .build()
+        .unwrap();
+    app.load(
+        Component::from_bytes(stream_component())
+            .unwrap()
+            .named("streams"),
+    )
+    .await
+    .unwrap();
+    app.call("streams", STREAM_PROBE, "leave-open", Vec::new())
+        .await
+        .unwrap();
+
+    assert_eq!(host.first(), b"written");
+    let mut input = host.take_input().unwrap();
+    assert_eq!(input.read().await.unwrap(), Some(b"in flight".to_vec()));
+    assert_eq!(
+        input.read().await.unwrap_err().to_string(),
+        "stream was aborted when its invocation ended"
+    );
 }
 
 #[wasm_bindgen_test]
