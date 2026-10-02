@@ -244,6 +244,63 @@ async fn resources_cross_guest_exports_as_borrows_and_owned_values() {
     drop_host_resource(&app, file).await;
 }
 
+struct WrongResourceResult;
+
+impl Provider for WrongResourceResult {
+    fn call<'a>(
+        &'a self,
+        _context: &'a CallContext,
+        call: Call,
+    ) -> BoxFuture<'a, Result<Vals, CallError>> {
+        Box::pin(async move {
+            match call.function.as_ref() {
+                "[constructor]session" => Ok(vec![Val::Resource(Resource::owned(
+                    wasm_junction_conformance::RESOURCE_HOST,
+                    "file",
+                    0,
+                ))]),
+                function => Err(CallError::unavailable(format!(
+                    "wrong resource host has no `{function}` function"
+                ))),
+            }
+        })
+    }
+}
+
+#[wasm_bindgen_test]
+async fn provider_resource_results_match_the_import_signature() {
+    let app = App::builder()
+        .engine(JcoEngine::new())
+        .provide(Provided::new(
+            wasm_junction_conformance::RESOURCE_HOST,
+            WrongResourceResult,
+        ))
+        .build()
+        .unwrap();
+    app.load(
+        Component::from_bytes(resource_component())
+            .unwrap()
+            .named("resource-client"),
+    )
+    .await
+    .unwrap();
+    let error = app
+        .call(
+            "resource-client",
+            RESOURCE_CLIENT,
+            "run",
+            vec![Val::Bool(false)],
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert!(
+        error
+            .to_string()
+            .contains("does not match the resource type")
+    );
+}
+
 async fn resource_app(host: ResourceHost) -> App {
     let app = App::builder()
         .engine(JcoEngine::new())

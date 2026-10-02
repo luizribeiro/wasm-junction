@@ -146,7 +146,15 @@ fn default_value(ty: &ValueType) -> Result<Val, CallError> {
             .map(default_value)
             .transpose()?
             .map(Box::new))),
-        ValueType::Resource(_) | ValueType::Unsupported(_) => return Err(unsupported(ty.name())),
+        ValueType::Resource(resource) => Val::Resource(match resource.ownership {
+            ResourceOwnership::Own => {
+                Resource::owned(resource.interface.clone(), resource.name.clone(), u32::MAX)
+            }
+            ResourceOwnership::Borrow => {
+                Resource::borrowed(resource.interface.clone(), resource.name.clone(), u32::MAX)
+            }
+        }),
+        ValueType::Unsupported(_) => return Err(unsupported(ty.name())),
     })
 }
 

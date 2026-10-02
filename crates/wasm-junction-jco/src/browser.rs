@@ -240,7 +240,13 @@ impl Bridge {
             )
             .await;
         match result {
-            Ok(result) => lower_result_tracked(&result, signature, &self.resources),
+            Ok(result) => match lower_result_tracked(&result, signature, &self.resources) {
+                Ok(result) => Ok(result),
+                Err(error) => {
+                    self.remember(error);
+                    default_result(signature)
+                }
+            },
             Err(error) => {
                 self.remember(error);
                 default_result(signature)
