@@ -84,13 +84,14 @@ fn wit_functions() -> BTreeSet<(String, String)> {
         String::from_utf8_lossy(&output.stderr)
     );
     let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let manifest = metadata["packages"]
+    let resolved: Vec<_> = metadata["packages"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|package| package["name"] == "wasmtime-wasi" && package["version"] == "49.0.1")
-        .and_then(|package| package["manifest_path"].as_str())
-        .unwrap();
+        .filter(|package| package["name"] == "wasmtime-wasi")
+        .collect();
+    assert_eq!(resolved.len(), 1, "expected one resolved wasmtime-wasi");
+    let manifest = resolved[0]["manifest_path"].as_str().unwrap();
     let wit = Path::new(manifest).parent().unwrap().join("src/p2/wit");
     let mut resolve = wit_parser::Resolve::default();
     resolve.push_dir(wit).unwrap();
