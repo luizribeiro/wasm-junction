@@ -1,0 +1,9 @@
+package test:bytes;
+
+interface codec {
+  echo: func(value: list<u8>) -> list<u8>;
+}
+
+world plugin {
+  export codec;
+}

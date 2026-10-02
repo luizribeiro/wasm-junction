@@ -72,6 +72,7 @@ impl Generator<'_> {
     ) -> syn::Result<TokenStream> {
         match kind {
             TypeDefKind::Type(ty) => self.encode(*ty, value, item),
+            TypeDefKind::List(Type::U8) => Ok(quote!(::wasm_junction::Val::Bytes(#value))),
             TypeDefKind::List(ty) => {
                 let element = self.encode(*ty, quote!(value), item)?;
                 Ok(quote!(::wasm_junction::Val::List(
@@ -117,6 +118,10 @@ impl Generator<'_> {
         let expected = format!("expected {item} {}", kind.as_str());
         match kind {
             TypeDefKind::Type(ty) => self.decode(*ty, value, item),
+            TypeDefKind::List(Type::U8) => Ok(quote!(match #value {
+                ::wasm_junction::Val::Bytes(values) => Ok(values),
+                _ => Err(::wasm_junction::TypeError::new(#expected)),
+            })),
             TypeDefKind::List(ty) => {
                 let element = self.decode(*ty, quote!(value), item)?;
                 Ok(quote!(match #value {

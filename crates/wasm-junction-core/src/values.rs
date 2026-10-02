@@ -36,6 +36,8 @@ pub enum Val {
     Char(char),
     /// A WIT `string`.
     String(String),
+    /// A WIT `list<u8>`.
+    Bytes(Vec<u8>),
     /// A WIT `list`, in element order.
     List(Vec<Self>),
     /// A WIT `tuple`, in element order.
@@ -108,6 +110,24 @@ impl From<&str> for Val {
     }
 }
 
+impl From<Vec<u8>> for Val {
+    fn from(value: Vec<u8>) -> Self {
+        Self::Bytes(value)
+    }
+}
+
+impl TryFrom<Val> for Vec<u8> {
+    type Error = TypeError;
+
+    fn try_from(value: Val) -> Result<Self, Self::Error> {
+        if let Val::Bytes(value) = value {
+            Ok(value)
+        } else {
+            Err(TypeError::new("expected list<u8>"))
+        }
+    }
+}
+
 /// An error converting an engine-neutral value to its expected WIT type.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TypeError(String);
@@ -127,3 +147,18 @@ impl Display for TypeError {
 }
 
 impl Error for TypeError {}
+
+#[cfg(test)]
+mod tests {
+    use super::{TypeError, Val};
+
+    #[test]
+    fn bytes_are_the_only_byte_list_shape() {
+        let bytes = vec![0, 127, 255];
+        assert_eq!(Vec::<u8>::try_from(Val::from(bytes.clone())), Ok(bytes));
+        assert_eq!(
+            Vec::<u8>::try_from(Val::List(vec![Val::U8(1)])),
+            Err(TypeError::new("expected list<u8>"))
+        );
+    }
+}

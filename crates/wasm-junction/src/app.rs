@@ -986,6 +986,7 @@ fn values_are_plain(values: &[Val]) -> bool {
         | Val::F64(_)
         | Val::Char(_)
         | Val::String(_)
+        | Val::Bytes(_)
         | Val::Enum(_)
         | Val::Flags(_) => true,
         _ => false,

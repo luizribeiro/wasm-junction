@@ -160,6 +160,14 @@ fn val(value: &Val) -> String {
         Val::F64(value) => value.to_string(),
         Val::Char(value) => format!("{value:?}"),
         Val::String(value) => format!("{value:?}"),
+        Val::Bytes(values) => format!(
+            "bytes[{}]",
+            values
+                .iter()
+                .map(|value| format!("{value:02x}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
         Val::List(values) => format!("[{}]", vals(values)),
         Val::Tuple(values) => format!("({})", vals(values)),
         Val::Record(fields) => format!(
@@ -378,6 +386,7 @@ mod tests {
     #[test]
     fn expected_trace_covers_calls_returns_and_boundaries() {
         assert_eq!(val(&sample_note()), NOTE);
+        assert_eq!(val(&Val::Bytes(vec![0, 127, 255])), "bytes[00 7f ff]");
         assert!(val(&sample_summary()).starts_with("ok({text:"));
         assert_eq!(EXPECTED_TRACE.len(), 12);
         assert_eq!(EXPECTED_RESOURCE_TRACE.len(), 13);
