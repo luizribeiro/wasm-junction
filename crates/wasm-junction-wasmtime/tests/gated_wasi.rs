@@ -7,7 +7,9 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
-use wasm_junction::{App, Call, CallError, Component, InvocationId, Middleware, Next, Val, Vals};
+use wasm_junction::{
+    App, Call, CallError, Component, InvocationId, Middleware, Next, Resource, Val, Vals,
+};
 use wasm_junction_wasmtime::{GATED_WASI_INTERFACES, WASI_INTERFACES};
 
 const COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wasi-test.wasm"));
@@ -44,6 +46,65 @@ impl Middleware for RecordResourceScope {
     }
 }
 
+enum RewritePollable {
+    Foreign(Mutex<Option<Resource>>),
+    Mistyped,
+    Unscoped,
+}
+
+impl Middleware for RewritePollable {
+    async fn call(&self, mut call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.function.as_ref() == "[method]pollable.ready" {
+            let invocation = call.invocation_id();
+            let Val::Resource(current) = &call.args[0] else {
+                panic!("ready did not receive a resource");
+            };
+            let replacement = match self {
+                Self::Foreign(saved) => {
+                    let mut saved = saved.lock().unwrap();
+                    if let Some(foreign) = saved.as_ref() {
+                        Some(foreign.clone())
+                    } else {
+                        *saved = Some(current.clone());
+                        None
+                    }
+                }
+                Self::Mistyped => Some(Resource::__borrowed_for_invocation(
+                    "test:wrong/handle@1.0.0",
+                    "wrong",
+                    current.id(),
+                    invocation,
+                )),
+                Self::Unscoped => Some(Resource::borrowed(
+                    current.interface(),
+                    current.name(),
+                    current.id(),
+                )),
+            };
+            if let Some(replacement) = replacement {
+                call.args[0] = Val::Resource(replacement);
+            }
+        }
+        next.run(call).await
+    }
+}
+
+fn checked_app(middleware: impl Middleware + 'static) -> (App, tokio::runtime::Runtime) {
+    let app = App::builder()
+        .engine(wasm_junction_wasmtime::WasmtimeEngine::new().unwrap())
+        .provide(wasm_junction::wasi::provider())
+        .middleware(middleware)
+        .build()
+        .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(app.load(Component::from_bytes(COMPONENT).unwrap().named("checked")))
+        .unwrap();
+    (app, runtime)
+}
 #[test]
 fn gated_wasi_set_changes_only_deliberately() {
     assert_eq!(
@@ -89,6 +150,48 @@ fn wasi_resources_carry_their_invocation() {
 
     let (call, resource) = seen.lock().unwrap().unwrap();
     assert_eq!(resource, call);
+}
+
+#[test]
+fn foreign_pollable_is_refused() {
+    let (app, runtime) = checked_app(RewritePollable::Foreign(Mutex::new(None)));
+    runtime
+        .block_on(app.call("checked", EXPORT, "coverage", Vec::new()))
+        .unwrap();
+    let error = runtime
+        .block_on(app.call("checked", EXPORT, "coverage", Vec::new()))
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("does not belong to this invocation")
+    );
+}
+
+#[test]
+fn mistyped_pollable_is_refused() {
+    let (app, runtime) = checked_app(RewritePollable::Mistyped);
+    let error = runtime
+        .block_on(app.call("checked", EXPORT, "coverage", Vec::new()))
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("does not match the resource type")
+    );
+}
+
+#[test]
+fn unscoped_pollable_is_refused() {
+    let (app, runtime) = checked_app(RewritePollable::Unscoped);
+    let error = runtime
+        .block_on(app.call("checked", EXPORT, "coverage", Vec::new()))
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("does not belong to this invocation")
+    );
 }
 
 #[test]

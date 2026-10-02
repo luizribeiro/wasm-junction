@@ -1,5 +1,6 @@
 use wasm_junction_core::{
     CallError, InvocationId, Resource as JunctionResource, ResourceOwnership, Val, Vals,
+    validate_resource_for_invocation,
 };
 use wasmtime::component::{Linker, Resource};
 use wasmtime_wasi::p2::DynPollable;
@@ -51,6 +52,43 @@ fn scope_values(values: Vals, invocation: InvocationId) -> Vals {
         .into_iter()
         .map(|value| scope(value, invocation))
         .collect()
+}
+
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "validators share one fallible function signature in the gate macro"
+)]
+fn no_resource_validation(_values: &[Val], _store: &mut StoreData) -> Result<(), CallError> {
+    Ok(())
+}
+
+fn validate_pollable_borrows(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
+    let invocation = store
+        .context
+        .invocation_id()
+        .ok_or_else(|| CallError::trap("WASI call has no invocation id"))?;
+    for value in values {
+        match value {
+            Val::List(values) => validate_pollable_borrows(values, store)?,
+            Val::Resource(resource) => {
+                validate_resource_for_invocation(
+                    resource,
+                    POLLABLE_INTERFACE,
+                    POLLABLE,
+                    ResourceOwnership::Borrow,
+                    invocation,
+                )?;
+                store
+                    .wasi_table()
+                    .get(&Resource::<DynPollable>::new_borrow(resource.id()))
+                    .map_err(|_| {
+                        CallError::refused(format!("unknown pollable handle {}", resource.id()))
+                    })?;
+            }
+            _ => return Err(shape(POLLABLE)),
+        }
+    }
+    Ok(())
 }
 impl ToVal for String {
     fn to_val(self) -> Val {
@@ -233,24 +271,24 @@ fn finish_unit(outcome: Result<Vals, CallError>) -> wasmtime::Result<()> {
 macro_rules! gate {
     ($linker:ident, $iface:literal, $name:literal, $view:ident, $method:path, plain,
      $signature:tt -> $ok:ty) => {
-        gate!(@define $linker, $iface, $name, $view, $method, , $signature -> $ok, one);
+        gate!(@define $linker, $iface, $name, $view, $method, no_resource_validation, , $signature -> $ok, one);
     };
     ($linker:ident, $iface:literal, $name:literal, $view:ident, $method:path, resource,
      $signature:tt -> $ok:ty) => {
-        gate!(@define $linker, $iface, $name, $view, $method, , $signature -> $ok, one);
+        gate!(@define $linker, $iface, $name, $view, $method, no_resource_validation, , $signature -> $ok, one);
     };
     ($linker:ident, $iface:literal, $name:literal, $view:ident, $method:path, borrowed,
      ($($arg:ident: $ty:ty),*) -> ()) => {
-        gate!(@define $linker, $iface, $name, $view, $method, await,
+        gate!(@define $linker, $iface, $name, $view, $method, validate_pollable_borrows, await,
             ($($arg: $ty),*) -> (), unit);
     };
     ($linker:ident, $iface:literal, $name:literal, $view:ident, $method:path, borrowed,
      $signature:tt -> $ok:ty) => {
-        gate!(@define $linker, $iface, $name, $view, $method, await,
+        gate!(@define $linker, $iface, $name, $view, $method, validate_pollable_borrows, await,
             $signature -> $ok, one);
     };
     (@define $linker:ident, $iface:literal, $name:literal, $view:ident, $method:path,
-     $($await:ident)?, ($($arg:ident: $ty:ty),*) -> $ok:ty, $shape:ident) => {
+     $validate:ident, $($await:ident)?, ($($arg:ident: $ty:ty),*) -> $ok:ty, $shape:ident) => {
         $linker.instance($iface)?.func_wrap_async(
             $name,
             |mut store, ($($arg,)*): ($($ty,)*)| Box::new(async move {
@@ -258,6 +296,7 @@ macro_rules! gate {
                     .ok_or_else(|| wasmtime::Error::msg("WASI call has no invocation id"))?;
                 let args = scope_values(vec![$($arg.to_val()),*], invocation);
                 let real: Real = |mut store, args| Box::pin(async move {
+                    $validate(&args, store.data_mut())?;
                     #[allow(unused_mut, unused_variables)]
                     let mut args = args.into_iter();
                     $(let $arg = <$ty>::from_val(
