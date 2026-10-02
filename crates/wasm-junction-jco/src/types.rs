@@ -32,6 +32,7 @@ pub(crate) enum ValueType {
         ok: Option<Box<ValueType>>,
         err: Option<Box<ValueType>>,
     },
+    Stream,
     Resource(ResourceType),
     Unsupported(&'static str),
 }
@@ -96,6 +97,7 @@ impl ValueType {
             Self::Flags(_) => "flags",
             Self::Option(_) => "option",
             Self::Result { .. } => "result",
+            Self::Stream => "stream<u8>",
             Self::Resource(resource) => match resource.ownership {
                 ResourceOwnership::Own => "own",
                 ResourceOwnership::Borrow => "borrow",
@@ -348,6 +350,7 @@ fn value_type(resolve: &Resolve, ty: Type) -> ValueType {
                 ok: result.ok.map(|ty| Box::new(value_type(resolve, ty))),
                 err: result.err.map(|ty| Box::new(value_type(resolve, ty))),
             },
+            TypeDefKind::Stream(Some(Type::U8)) => ValueType::Stream,
             TypeDefKind::Handle(handle) => resource_type(resolve, *handle),
             kind => ValueType::Unsupported(kind.as_str()),
         },
@@ -440,6 +443,19 @@ mod tests {
         assert!(matches!(fields[18].ty, ValueType::Option(_)));
         assert!(matches!(fields[19].ty, ValueType::Result { .. }));
         assert_eq!(echo.result.as_ref(), echo.params.first());
+    }
+
+    #[test]
+    fn collects_byte_stream_types() {
+        let signatures =
+            Signatures::from_component(wasm_junction_conformance::stream_component()).unwrap();
+        assert_eq!(
+            signatures
+                .export(wasm_junction_conformance::STREAM_PROBE, "accept")
+                .unwrap()
+                .params,
+            [ValueType::Stream]
+        );
     }
 
     #[test]

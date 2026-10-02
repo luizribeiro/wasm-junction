@@ -159,6 +159,7 @@ fn default_value(ty: &ValueType) -> Result<Val, CallError> {
             .map(default_value)
             .transpose()?
             .map(Box::new))),
+        ValueType::Stream => return Err(unsupported(ty.name())),
         ValueType::Resource(resource) => Val::Resource(match resource.ownership {
             ResourceOwnership::Own => {
                 Resource::owned(resource.interface.clone(), resource.name.clone(), u32::MAX)
@@ -332,6 +333,7 @@ fn lower(
         (Val::Resource(resource), ValueType::Resource(expected)) => {
             lower_resource(resource, expected, resources)?
         }
+        (_, ValueType::Stream) => return Err(unsupported(expected.name())),
         (_, ValueType::Unsupported(name)) => return Err(unsupported(name)),
         (value, expected) => {
             return Err(wrong_val_type(expected, &value));
@@ -406,6 +408,7 @@ fn lift(
             lift_nested_result(value, ok.as_deref(), err.as_deref(), expected, resources)
         }
         ValueType::Resource(expected) => lift_resource(value, expected, resources),
+        ValueType::Stream => Err(unsupported(expected.name())),
         ValueType::Unsupported(name) => Err(unsupported(name)),
     }
 }
