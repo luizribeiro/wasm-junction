@@ -8,9 +8,13 @@ use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 use wasm_encoder::{CodeSection, EntityType, ExportKind, ExportSection, Function, FunctionSection};
 use wasm_encoder::{ImportSection, Instruction, Module, TypeSection, ValType};
-use wasm_junction::{App, BoxFuture, Call, CallContext, CallError, Component, Provided, Provider};
-use wasm_junction::{Val, Vals};
-use wasm_junction_conformance::{DECORATION, TRANSLATOR, translator_component};
+use wasm_junction::{
+    App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Component, Provided, Provider,
+    Val, Vals,
+};
+use wasm_junction_conformance::{
+    DECORATION, Fixture, SUMMARIZER, TRANSLATOR, sample_summary, translator_component,
+};
 use wasm_junction_jco::JcoEngine;
 
 wasm_bindgen_test_configure!(run_in_dedicated_worker);
@@ -71,6 +75,51 @@ async fn awaits_an_import_and_uses_a_fresh_instance() {
         assert_eq!(result, [Val::from(format!("host: {text} #1"))]);
     }
     assert_eq!(engine.instantiations(), 2);
+}
+
+#[wasm_bindgen_test]
+async fn wit_error_provider_refusal_and_guest_trap_remain_distinct() {
+    let fixture = Fixture::new(JcoEngine::new()).await.unwrap();
+    let refusal = fixture
+        .call("summarize", vec![Val::from("private")])
+        .await
+        .unwrap();
+    assert_eq!(
+        refusal,
+        [Val::Result(Err(Some(Box::new(Val::from(
+            "permission denied"
+        )))))]
+    );
+
+    let provider_refusal = fixture
+        .call("summarize", vec![Val::from("provider-refusal")])
+        .await
+        .unwrap_err();
+    assert_eq!(provider_refusal.kind(), CallErrorKind::Refused);
+    assert_eq!(
+        provider_refusal.to_string(),
+        "notes provider refused the call"
+    );
+
+    let trap = fixture.call("crash", Vec::new()).await.unwrap_err();
+    assert_eq!(trap.kind(), CallErrorKind::Trap);
+    assert!(trap.to_string().contains(&format!("{SUMMARIZER}#crash")));
+}
+
+#[wasm_bindgen_test]
+async fn provider_error_does_not_leak_into_the_next_call() {
+    let fixture = Fixture::new(JcoEngine::new()).await.unwrap();
+    let refusal = fixture
+        .call("summarize", vec![Val::from("provider-refusal")])
+        .await
+        .unwrap_err();
+    assert_eq!(refusal.kind(), CallErrorKind::Refused);
+
+    let result = fixture
+        .call("summarize", vec![Val::from("daily")])
+        .await
+        .unwrap();
+    assert_eq!(result, [sample_summary()]);
 }
 
 struct DelayedDecoration;

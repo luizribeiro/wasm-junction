@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -114,11 +114,13 @@ impl CompiledComponent for BrowserCompiled {
         let args = lower_args(args, &signature);
         Box::pin(async move {
             let args = args?;
+            let import_error = Rc::new(RefCell::new(None));
             let bridge = Bridge {
                 imports,
                 context,
                 component,
                 signatures: self.signatures.clone(),
+                import_error: import_error.clone(),
             };
             let callback = Closure::wrap(Box::new(
                 move |interface: String, function: String, args: Array| {
@@ -127,7 +129,10 @@ impl CompiledComponent for BrowserCompiled {
                         match bridge.dispatch(&interface, &function, &args).await {
                             Ok(JsResult::Return(value)) => Ok(value),
                             Ok(JsResult::Throw(value)) => Err(value),
-                            Err(error) => Err(js_sys::Error::new(&error.to_string()).into()),
+                            Err(error) => {
+                                bridge.remember(error.clone());
+                                Err(js_sys::Error::new(&error.to_string()).into())
+                            }
                         }
                     })
                 },
@@ -146,6 +151,9 @@ impl CompiledComponent for BrowserCompiled {
             match result {
                 Ok(result) => lift_result(result, &signature),
                 Err(error) => {
+                    if let Some(error) = import_error.borrow_mut().take() {
+                        return Err(error);
+                    }
                     if let Some(result) = lift_result_error(&error, &signature)? {
                         return Ok(result);
                     }
@@ -165,9 +173,17 @@ struct Bridge {
     context: InvocationContext,
     component: Arc<str>,
     signatures: Signatures,
+    import_error: Rc<RefCell<Option<CallError>>>,
 }
 
 impl Bridge {
+    fn remember(&self, error: CallError) {
+        let mut stored = self.import_error.borrow_mut();
+        if stored.is_none() {
+            *stored = Some(error);
+        }
+    }
+
     async fn dispatch(
         &self,
         interface: &str,
