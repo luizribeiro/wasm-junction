@@ -153,3 +153,43 @@ async fn successful_calls_report_cleanup_failures_after_attempting_every_drop() 
     assert_eq!(provider.0.active.get(), 1);
     provider.remove_failed_resource();
 }
+
+#[wasm_bindgen_test]
+async fn traps_include_cleanup_failures_after_attempting_every_drop() {
+    let provider = FailingDropHost::default();
+    let error = provider
+        .app()
+        .await
+        .call(
+            "resource-client",
+            RESOURCE_CLIENT,
+            "run",
+            vec![Val::Bool(true)],
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Trap);
+    let message = error.to_string();
+    assert!(
+        message.to_ascii_lowercase().contains("unreachable"),
+        "{message}"
+    );
+    assert!(message.contains("drop refused for session#0"));
+    assert_eq!(
+        *provider.0.attempts.borrow(),
+        [
+            DropAttempt {
+                resource: 0,
+                caller: "resource-client".to_owned(),
+                marker: None,
+            },
+            DropAttempt {
+                resource: 1,
+                caller: "resource-client".to_owned(),
+                marker: None,
+            }
+        ]
+    );
+    assert_eq!(provider.0.active.get(), 1);
+    provider.remove_failed_resource();
+}
