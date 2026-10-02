@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::{error::Error, fmt};
 
-use crate::{BoxFuture, CallError, HostBound, InvocationContext, Resource, Vals};
+use crate::{BoxFuture, CallError, HostBound, InvocationContext, InvocationId, Resource, Vals};
 
 /// Name shared by applications and engines for the built-in WASI provider.
 pub const WASI_PROVIDER_NAME: &str = "WASI";
@@ -130,10 +130,11 @@ pub trait ImportDispatcher: HostBound {
     ) -> BoxFuture<'_, Result<(), CallError>>;
 
     /// Reports that an engine began bridging a stream across its boundary.
-    fn channel_open(&self, _stream: u64, _direction: ChannelDirection) {}
+    fn channel_open(&self, _invocation: InvocationId, _stream: u64, _direction: ChannelDirection) {}
 
     /// Reports that an engine finished bridging a stream across its boundary.
-    fn channel_close(&self, _stream: u64, _direction: ChannelDirection) {}
+    fn channel_close(&self, _invocation: InvocationId, _stream: u64, _direction: ChannelDirection) {
+    }
 }
 
 /// Compiles WebAssembly components for an application dispatcher.

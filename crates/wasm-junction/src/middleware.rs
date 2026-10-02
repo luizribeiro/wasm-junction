@@ -49,6 +49,8 @@ pub enum Event {
     /// This event fires before the provider's drop runs and remains observable whether that drop
     /// succeeds or fails.
     ResourceDrop {
+        /// The invocation that owned the resource.
+        invocation: InvocationId,
         /// The resource's defining versioned interface.
         interface: Arc<str>,
         /// The resource name within its defining interface.
@@ -58,6 +60,8 @@ pub enum Event {
     },
     /// A byte stream began crossing the engine boundary.
     ChannelOpen {
+        /// The invocation whose call opened the channel.
+        invocation: InvocationId,
         /// The opaque stream id.
         stream: u64,
         /// The direction bytes travel.
@@ -65,6 +69,8 @@ pub enum Event {
     },
     /// A byte stream stopped crossing the engine boundary.
     ChannelClose {
+        /// The invocation whose call opened the channel.
+        invocation: InvocationId,
         /// The opaque stream id.
         stream: u64,
         /// The direction bytes traveled.

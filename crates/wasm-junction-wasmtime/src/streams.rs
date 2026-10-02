@@ -5,7 +5,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll};
 
 use wasm_junction_core::{
-    ChannelDirection, ImportDispatcher, InputStream, OutputStream, OutputStreamWriter, StreamHandle,
+    ChannelDirection, ImportDispatcher, InputStream, InvocationId, OutputStream,
+    OutputStreamWriter, StreamHandle,
 };
 use wasmtime::component::{
     Destination, Source, StreamAny, StreamConsumer, StreamProducer, StreamReader, StreamResult,
@@ -23,9 +24,11 @@ pub(crate) fn abort_streams(store: &StoreData) {
         .collect::<Vec<_>>();
     for (id, writer) in streams {
         writer.abort();
-        store
-            .imports
-            .channel_close(id, ChannelDirection::GuestToHost);
+        if let Some(invocation) = store.context.invocation_id() {
+            store
+                .imports
+                .channel_close(invocation, id, ChannelDirection::GuestToHost);
+        }
     }
 }
 
@@ -38,7 +41,8 @@ pub(crate) fn lift_stream(
     let handle = StreamHandle::from(output);
     let id = handle.id();
     let imports = store.as_context().data().imports.clone();
-    imports.channel_open(id, ChannelDirection::GuestToHost);
+    let invocation = invocation_id(store.as_context().data())?;
+    imports.channel_open(invocation, id, ChannelDirection::GuestToHost);
     let active = store.as_context().data().active_streams.clone();
     lock_active(&active).insert(id, writer.clone());
     reader.pipe(
@@ -46,6 +50,7 @@ pub(crate) fn lift_stream(
         CoreConsumer {
             writer: Some(writer),
             id,
+            invocation,
             imports,
             active,
             closed: false,
@@ -62,12 +67,14 @@ pub(crate) fn lower_stream(
     let input =
         InputStream::try_from(handle).map_err(|error| wasmtime::Error::msg(error.to_string()))?;
     let imports = store.as_context().data().imports.clone();
-    imports.channel_open(id, ChannelDirection::HostToGuest);
+    let invocation = invocation_id(store.as_context().data())?;
+    imports.channel_open(invocation, id, ChannelDirection::HostToGuest);
     let reader = StreamReader::new(
         store.as_context_mut(),
         CoreProducer {
             input: Some(input),
             id,
+            invocation,
             imports,
             closed: false,
         },
@@ -78,6 +85,7 @@ pub(crate) fn lower_stream(
 struct CoreProducer {
     input: Option<InputStream>,
     id: u64,
+    invocation: InvocationId,
     imports: Arc<dyn ImportDispatcher>,
     closed: bool,
 }
@@ -90,7 +98,7 @@ impl CoreProducer {
         if !self.closed {
             self.closed = true;
             self.imports
-                .channel_close(self.id, ChannelDirection::HostToGuest);
+                .channel_close(self.invocation, self.id, ChannelDirection::HostToGuest);
         }
     }
 }
@@ -161,6 +169,7 @@ impl StreamProducer<StoreData> for CoreProducer {
 struct CoreConsumer {
     writer: Option<OutputStreamWriter>,
     id: u64,
+    invocation: InvocationId,
     imports: Arc<dyn ImportDispatcher>,
     active: ActiveStreams,
     closed: bool,
@@ -174,10 +183,17 @@ impl CoreConsumer {
             self.closed = true;
             if was_active {
                 self.imports
-                    .channel_close(self.id, ChannelDirection::GuestToHost);
+                    .channel_close(self.invocation, self.id, ChannelDirection::GuestToHost);
             }
         }
     }
+}
+
+fn invocation_id(store: &StoreData) -> Result<InvocationId, wasmtime::Error> {
+    store
+        .context
+        .invocation_id()
+        .ok_or_else(|| wasmtime::Error::msg("stream has no invocation id"))
 }
 
 fn lock_active(active: &ActiveStreams) -> MutexGuard<'_, HashMap<u64, OutputStreamWriter>> {

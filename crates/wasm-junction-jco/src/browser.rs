@@ -128,7 +128,7 @@ impl CompiledComponent for BrowserCompiled {
                 "missing component export `{interface}.{function}`"
             )))));
         };
-        let resources = ResourceTracker::with_imports(imports.clone());
+        let resources = ResourceTracker::with_imports(imports.clone(), context.invocation_id());
         let args = lower_args_tracked(args, &signature, &resources);
         Box::pin(async move {
             let args = args?;

@@ -91,11 +91,16 @@ impl Middleware for Trace {
                 interface,
                 resource,
                 id,
+                ..
             } => self.record(format!("resource drop {interface}/{resource}#{id}")),
-            Event::ChannelOpen { stream, direction } => {
+            Event::ChannelOpen {
+                stream, direction, ..
+            } => {
                 self.channel("open", *stream, *direction);
             }
-            Event::ChannelClose { stream, direction } => {
+            Event::ChannelClose {
+                stream, direction, ..
+            } => {
                 self.channel("close", *stream, *direction);
             }
             _ => {}
@@ -374,10 +379,12 @@ mod tests {
     fn channel_trace_correlates_opaque_ids_with_stable_labels() {
         let trace = Trace::default();
         trace.event(&Event::ChannelOpen {
+            invocation: wasm_junction::InvocationId::__from_counter(1),
             stream: 91,
             direction: ChannelDirection::HostToGuest,
         });
         trace.event(&Event::ChannelClose {
+            invocation: wasm_junction::InvocationId::__from_counter(1),
             stream: 91,
             direction: ChannelDirection::HostToGuest,
         });

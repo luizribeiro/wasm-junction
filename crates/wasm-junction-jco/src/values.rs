@@ -6,8 +6,8 @@ use std::sync::Arc;
 use js_sys::{Array, BigInt, Object, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_junction_core::{
-    CallError, ChannelDirection, ImportDispatcher, InputStream, Resource, ResourceOwnership,
-    StreamHandle, Val, Vals, validate_resource_lowering,
+    CallError, ChannelDirection, ImportDispatcher, InputStream, InvocationId, Resource,
+    ResourceOwnership, StreamHandle, Val, Vals, validate_resource_lowering,
 };
 
 use crate::types::{FunctionType, ResourceType, ValueType};
@@ -22,12 +22,17 @@ pub(crate) struct ResourceTracker {
     guest_streams: Rc<RefCell<HashMap<u64, StreamHandle>>>,
     refuse_guest_streams: Rc<Cell<bool>>,
     imports: Option<Arc<dyn ImportDispatcher>>,
+    invocation: Option<InvocationId>,
 }
 
 impl ResourceTracker {
-    pub(crate) fn with_imports(imports: Arc<dyn ImportDispatcher>) -> Self {
+    pub(crate) fn with_imports(
+        imports: Arc<dyn ImportDispatcher>,
+        invocation: Option<InvocationId>,
+    ) -> Self {
         Self {
             imports: Some(imports),
+            invocation,
             ..Self::default()
         }
     }
@@ -89,14 +94,14 @@ impl ResourceTracker {
     }
 
     fn channel_open(&self, id: u64, direction: ChannelDirection) {
-        if let Some(imports) = &self.imports {
-            imports.channel_open(id, direction);
+        if let (Some(imports), Some(invocation)) = (&self.imports, self.invocation) {
+            imports.channel_open(invocation, id, direction);
         }
     }
 
     fn channel_close(&self, id: u64, direction: ChannelDirection) {
-        if let Some(imports) = &self.imports {
-            imports.channel_close(id, direction);
+        if let (Some(imports), Some(invocation)) = (&self.imports, self.invocation) {
+            imports.channel_close(invocation, id, direction);
         }
     }
 }

@@ -665,6 +665,9 @@ impl App {
                 ))
             })?;
         self.emit(&Event::ResourceDrop {
+            invocation: cx
+                .invocation_id()
+                .ok_or_else(|| CallError::trap("resource drop has no invocation id"))?,
             interface: Arc::from(resource.interface()),
             resource: Arc::from(resource.name()),
             id: resource.id(),
@@ -897,12 +900,30 @@ impl ImportDispatcher for App {
         })
     }
 
-    fn channel_open(&self, stream: u64, direction: crate::ChannelDirection) {
-        self.emit(&Event::ChannelOpen { stream, direction });
+    fn channel_open(
+        &self,
+        invocation: InvocationId,
+        stream: u64,
+        direction: crate::ChannelDirection,
+    ) {
+        self.emit(&Event::ChannelOpen {
+            invocation,
+            stream,
+            direction,
+        });
     }
 
-    fn channel_close(&self, stream: u64, direction: crate::ChannelDirection) {
-        self.emit(&Event::ChannelClose { stream, direction });
+    fn channel_close(
+        &self,
+        invocation: InvocationId,
+        stream: u64,
+        direction: crate::ChannelDirection,
+    ) {
+        self.emit(&Event::ChannelClose {
+            invocation,
+            stream,
+            direction,
+        });
     }
 }
 
@@ -2075,17 +2096,20 @@ mod tests {
             .build()
             .unwrap();
 
-        ImportDispatcher::channel_open(&app, 7, crate::ChannelDirection::HostToGuest);
-        ImportDispatcher::channel_close(&app, 7, crate::ChannelDirection::HostToGuest);
+        let invocation = InvocationId::__from_counter(9);
+        ImportDispatcher::channel_open(&app, invocation, 7, crate::ChannelDirection::HostToGuest);
+        ImportDispatcher::channel_close(&app, invocation, 7, crate::ChannelDirection::HostToGuest);
 
         assert_eq!(
             *events.lock().unwrap(),
             [
                 Event::ChannelOpen {
+                    invocation,
                     stream: 7,
                     direction: crate::ChannelDirection::HostToGuest,
                 },
                 Event::ChannelClose {
+                    invocation,
                     stream: 7,
                     direction: crate::ChannelDirection::HostToGuest,
                 },

@@ -42,11 +42,16 @@ impl Middleware for Trace {
                 interface,
                 resource,
                 id,
+                ..
             } => (self.output)(format!("resource drop {interface}/{resource}#{id}")),
-            Event::ChannelOpen { stream, direction } => {
+            Event::ChannelOpen {
+                stream, direction, ..
+            } => {
                 self.channel("open", *stream, *direction);
             }
-            Event::ChannelClose { stream, direction } => {
+            Event::ChannelClose {
+                stream, direction, ..
+            } => {
                 self.channel("close", *stream, *direction);
             }
             _ => {}
