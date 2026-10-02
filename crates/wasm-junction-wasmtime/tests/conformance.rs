@@ -16,8 +16,8 @@ use wasm_junction_conformance::{
     CYCLE_A, DECORATION, Fixture, FixtureHost, RELOAD_GREETER, RESOURCE_CLIENT, RESOURCE_HOST,
     ReloadGreeter, ReloadHost, ResourceHost, RoutedFixture, RoutedHost, SUMMARIZER, WRITER,
     component, cycle_a_component, cycle_b_component, reload_v1_component, reload_v2_component,
-    resource_component, run, run_reload, run_resources, run_routed, sample_note,
-    translator_component, writer_component,
+    resource_component, run, run_reload, run_resource_refusal, run_resources, run_routed,
+    sample_note, translator_component, writer_component,
 };
 use wasm_junction_wasmtime::WasmtimeEngine;
 
@@ -88,6 +88,11 @@ fn successful_scenario_matches_the_engine_neutral_trace() {
 #[test]
 fn routed_scenario_matches_the_engine_neutral_trace() {
     block_on(run_routed(WasmtimeEngine::new().unwrap())).unwrap();
+}
+
+#[test]
+fn refused_resource_call_defers_the_drop_to_cleanup() {
+    block_on(run_resource_refusal(WasmtimeEngine::new().unwrap())).unwrap();
 }
 
 #[test]

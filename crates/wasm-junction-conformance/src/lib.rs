@@ -21,12 +21,12 @@ pub use reload::{ReloadGreeter, ReloadHost};
 pub use resources::ResourceHost;
 pub use runner::{
     Fixture, FixtureError, ResourceFixture, RoutedFixture, StreamFixture, run, run_default,
-    run_reload, run_resources, run_routed, run_streams,
+    run_reload, run_resource_refusal, run_resources, run_routed, run_streams,
 };
 pub use stream_host::StreamHost;
 pub use trace::{
-    EXPECTED_RELOAD_TRACE, EXPECTED_RESOURCE_TRACE, EXPECTED_ROUTED_TRACE, EXPECTED_STREAM_TRACE,
-    EXPECTED_TRACE, Trace,
+    EXPECTED_RELOAD_TRACE, EXPECTED_RESOURCE_REFUSAL_TRACE, EXPECTED_RESOURCE_TRACE,
+    EXPECTED_ROUTED_TRACE, EXPECTED_STREAM_TRACE, EXPECTED_TRACE, Trace,
 };
 
 /// The fixture's types-only interface.

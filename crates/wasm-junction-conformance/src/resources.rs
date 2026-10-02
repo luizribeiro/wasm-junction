@@ -46,7 +46,11 @@ impl host::Host for ResourceHost {
     }
 
     fn session_profile(&self, _cx: &CallContext, session: &String) -> Result<String, CallError> {
-        Ok(format!("profile:{session}"))
+        if session == "refuse" {
+            Err(CallError::refused("resource profile refused"))
+        } else {
+            Ok(format!("profile:{session}"))
+        }
     }
 
     fn drop_file(&self, _cx: &CallContext, _file: String) -> Result<(), CallError> {

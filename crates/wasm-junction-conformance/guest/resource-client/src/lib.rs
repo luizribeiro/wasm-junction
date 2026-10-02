@@ -31,6 +31,12 @@ impl bindings::exports::example::resources::client::Guest for Component {
         profile
     }
 
+    fn drop_after_refusal() {
+        let session = Session::new("refuse");
+        let _ = session.profile();
+        drop(session);
+    }
+
     fn inspect(value: &Session) -> String {
         value.profile()
     }

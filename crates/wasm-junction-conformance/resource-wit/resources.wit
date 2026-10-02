@@ -16,6 +16,7 @@ interface client {
 
     run: func(trap: bool) -> string;
     retain: func() -> string;
+    drop-after-refusal: func();
     inspect: func(value: borrow<session>) -> string;
     round-trip-file: func(value: file) -> file;
     round-trip: func(value: session) -> session;

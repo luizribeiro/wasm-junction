@@ -329,6 +329,23 @@ pub const EXPECTED_RESOURCE_TRACE: &[&str] = &[
     "invocation end resource-client",
 ];
 
+/// Exact trace produced when an import fails while the guest owns a host resource.
+pub const EXPECTED_RESOURCE_REFUSAL_TRACE: &[&str] = &[
+    "invocation start resource-client",
+    "call host → resource-client example:resources/client@1.0.0.drop-after-refusal()",
+    "invocation start host",
+    "call resource-client → host example:resources/host@1.0.0.[constructor]session(\"refuse\")",
+    "return resource-client → host example:resources/host@1.0.0.[constructor]session(own(example:resources/host@1.0.0/session#0))",
+    "invocation end host",
+    "invocation start host",
+    "call resource-client → host example:resources/host@1.0.0.[method]session.profile(borrow(example:resources/host@1.0.0/session#0))",
+    "trap resource-client → host example:resources/host@1.0.0.[method]session.profile(resource profile refused)",
+    "invocation end host",
+    "resource drop example:resources/host@1.0.0/session#0",
+    "trap host → resource-client example:resources/client@1.0.0.drop-after-refusal(resource profile refused)",
+    "invocation end resource-client",
+];
+
 /// Exact trace produced by the host-to-guest and guest-to-host stream scenarios.
 pub const EXPECTED_STREAM_TRACE: &[&str] = &[
     "invocation start streams",

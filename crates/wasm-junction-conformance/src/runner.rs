@@ -11,12 +11,13 @@ use wasm_junction::{
 
 use crate::host::summary;
 use crate::{
-    EXPECTED_RELOAD_TRACE, EXPECTED_RESOURCE_TRACE, EXPECTED_ROUTED_TRACE, EXPECTED_STREAM_TRACE,
-    EXPECTED_TRACE, FixtureHost, RELOAD_GREETER, RELOAD_WRITER, RESOURCE_CLIENT, RESOURCE_HOST,
-    ReloadGreeter, ReloadHost, ResourceHost, RoutedHost, STREAM_PROBE, SUMMARIZER, SessionId,
-    StreamHost, Trace, component, reload_breaking_component, reload_v1_component,
-    reload_v2_component, reload_writer_component, resource_component, stream_component, summarizer,
-    translator_component, writer, writer_component,
+    EXPECTED_RELOAD_TRACE, EXPECTED_RESOURCE_REFUSAL_TRACE, EXPECTED_RESOURCE_TRACE,
+    EXPECTED_ROUTED_TRACE, EXPECTED_STREAM_TRACE, EXPECTED_TRACE, FixtureHost, RELOAD_GREETER,
+    RELOAD_WRITER, RESOURCE_CLIENT, RESOURCE_HOST, ReloadGreeter, ReloadHost, ResourceHost,
+    RoutedHost, STREAM_PROBE, SUMMARIZER, SessionId, StreamHost, Trace, component,
+    reload_breaking_component, reload_v1_component, reload_v2_component, reload_writer_component,
+    resource_component, stream_component, summarizer, translator_component, writer,
+    writer_component,
 };
 
 /// A loaded conformance fixture available for additional engine assertions.
@@ -400,6 +401,47 @@ pub async fn run_resources(engine: impl Engine + 'static) -> Result<ResourceFixt
         return Err(FixtureError::new("trapped resource invocation leaked"));
     }
     Ok(fixture)
+}
+
+/// Checks that a failed import defers an owned resource drop to invocation cleanup.
+///
+/// # Errors
+///
+/// Returns [`FixtureError`] if the refusal, cleanup, or exact lifecycle trace differs.
+pub async fn run_resource_refusal(engine: impl Engine + 'static) -> Result<(), FixtureError> {
+    let fixture = ResourceFixture::new(engine).await?;
+    let error = match fixture
+        .app
+        .call(
+            "resource-client",
+            RESOURCE_CLIENT,
+            "drop-after-refusal",
+            Vec::new(),
+        )
+        .await
+    {
+        Ok(output) => {
+            return Err(FixtureError::new(format!(
+                "resource refusal scenario returned {output:?}"
+            )));
+        }
+        Err(error) => error,
+    };
+    if error.kind() != CallErrorKind::Refused || error.to_string() != "resource profile refused" {
+        return Err(FixtureError::new(format!(
+            "unexpected resource refusal: {error}"
+        )));
+    }
+    if fixture.host.active_resources() != 0 {
+        return Err(FixtureError::new("refused resource invocation leaked"));
+    }
+    if fixture.trace.entries() != EXPECTED_RESOURCE_REFUSAL_TRACE {
+        return Err(FixtureError::new(format!(
+            "unexpected refused resource trace: {:#?}",
+            fixture.trace.entries()
+        )));
+    }
+    Ok(())
 }
 
 /// Checks byte streams in both directions and their exact lifecycle trace.
