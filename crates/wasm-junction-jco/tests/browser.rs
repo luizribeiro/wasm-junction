@@ -20,8 +20,8 @@ use wasm_junction::{
 use wasm_junction_conformance::{
     CYCLE_A, DECORATION, Fixture, FixtureHost, RESOURCE_CLIENT, ResourceHost, RoutedFixture,
     RoutedHost, SUMMARIZER, TRANSLATOR, WRITER, component, cycle_a_component, cycle_b_component,
-    resource_component, run_default, run_resource_refusal, run_resources, run_routed, sample_note,
-    sample_summary, translator_component, writer_component,
+    resource_component, run_default, run_resource_refusal, run_resources, run_routed, run_streams,
+    sample_note, sample_summary, translator_component, writer_component,
 };
 use wasm_junction_jco::JcoEngine;
 
@@ -192,6 +192,11 @@ async fn host_resource_calls_cross_middleware_and_the_engine() {
 #[wasm_bindgen_test]
 async fn refused_resource_call_defers_the_drop_to_cleanup() {
     run_resource_refusal(JcoEngine::new()).await.unwrap();
+}
+
+#[wasm_bindgen_test]
+async fn bidirectional_streams_match_the_engine_neutral_trace() {
+    run_streams(JcoEngine::new()).await.unwrap();
 }
 
 #[wasm_bindgen_test]

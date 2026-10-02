@@ -1,13 +1,14 @@
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use js_sys::{Array, Uint8Array};
 use wasm_bindgen::{JsCast, prelude::*};
-use wasm_bindgen_futures::future_to_promise;
+use wasm_bindgen_futures::{future_to_promise, spawn_local};
 use wasm_junction_core::{
     BoxFuture, CallError, CompiledComponent, Engine, EngineError, ImportDispatcher,
-    InvocationContext, Vals, WasiConfig,
+    InvocationContext, OutputStream, OutputStreamWriter, StreamHandle, Vals, WasiConfig,
 };
 
 use crate::types::Signatures;
@@ -35,9 +36,18 @@ extern "C" {
         args: &Array,
         dispatch: &js_sys::Function,
         drop_resource: &js_sys::Function,
+        read_stream: &js_sys::Function,
+        close_stream: &js_sys::Function,
+        open_guest_stream: &js_sys::Function,
     ) -> Result<JsValue, JsValue>;
 
     fn poison(value: JsValue) -> JsValue;
+
+    #[wasm_bindgen(catch, js_name = readGuestStream)]
+    async fn read_guest_stream(stream: &JsValue) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(catch, js_name = closeGuestStream)]
+    async fn close_guest_stream(stream: &JsValue) -> Result<(), JsValue>;
 }
 
 /// A browser component engine backed by jco-generated JavaScript and JSPI.
@@ -117,7 +127,7 @@ impl CompiledComponent for BrowserCompiled {
                 "missing component export `{interface}.{function}`"
             )))));
         };
-        let resources = ResourceTracker::default();
+        let resources = ResourceTracker::with_imports(imports.clone());
         let args = lower_args_tracked(args, &signature, &resources);
         Box::pin(async move {
             let args = args?;
@@ -129,8 +139,12 @@ impl CompiledComponent for BrowserCompiled {
                 signatures: self.signatures.clone(),
                 import_error: import_error.clone(),
                 resources: resources.clone(),
+                guest_streams: Rc::default(),
             };
             let drop_bridge = bridge.clone();
+            let read_bridge = bridge.clone();
+            let close_bridge = bridge.clone();
+            let open_bridge = bridge.clone();
             let cleanup_bridge = bridge.clone();
             let callback = Closure::wrap(Box::new(
                 move |interface: String, function: String, args: Array| {
@@ -159,6 +173,29 @@ impl CompiledComponent for BrowserCompiled {
                 },
             )
                 as Box<dyn Fn(String, String, u32) -> js_sys::Promise>);
+            let read_callback = Closure::wrap(Box::new(move |id: u64| {
+                let bridge = read_bridge.clone();
+                future_to_promise(async move {
+                    bridge.read_host_stream(id).await.map_err(|error| {
+                        bridge.remember(error.clone());
+                        js_sys::Error::new(&error.to_string()).into()
+                    })
+                })
+            })
+                as Box<dyn Fn(u64) -> js_sys::Promise>);
+            let close_callback = Closure::wrap(Box::new(move |id: u64| {
+                let bridge = close_bridge.clone();
+                future_to_promise(async move {
+                    bridge.close_host_stream(id);
+                    Ok(JsValue::UNDEFINED)
+                })
+            })
+                as Box<dyn Fn(u64) -> js_sys::Promise>);
+            let open_callback =
+                Closure::wrap(
+                    Box::new(move |stream: JsValue| open_bridge.open_guest_stream(stream))
+                        as Box<dyn Fn(JsValue) -> JsValue>,
+                );
             self.instantiations
                 .set(self.instantiations.get().saturating_add(1));
             let result = invoke(
@@ -168,6 +205,9 @@ impl CompiledComponent for BrowserCompiled {
                 &args,
                 callback.as_ref().unchecked_ref(),
                 drop_callback.as_ref().unchecked_ref(),
+                read_callback.as_ref().unchecked_ref(),
+                close_callback.as_ref().unchecked_ref(),
+                open_callback.as_ref().unchecked_ref(),
             )
             .await;
             let result = match result {
@@ -193,7 +233,7 @@ impl CompiledComponent for BrowserCompiled {
                     }
                 }
             };
-            match (result, cleanup_bridge.cleanup_resources().await) {
+            match (result, cleanup_bridge.cleanup().await) {
                 (Ok(values), Ok(())) => Ok(values),
                 (Err(error), Ok(())) => Err(error),
                 (Ok(_), Err(cleanup)) => Err(cleanup),
@@ -211,13 +251,121 @@ struct Bridge {
     signatures: Signatures,
     import_error: Rc<RefCell<Option<CallError>>>,
     resources: ResourceTracker,
+    guest_streams: Rc<RefCell<HashMap<u64, ActiveGuestStream>>>,
+}
+
+#[derive(Clone)]
+struct ActiveGuestStream {
+    writer: OutputStreamWriter,
+    stream: JsValue,
 }
 
 impl Bridge {
     fn remember(&self, error: CallError) {
-        let mut stored = self.import_error.borrow_mut();
-        if stored.is_none() {
-            *stored = Some(error);
+        let first = {
+            let mut stored = self.import_error.borrow_mut();
+            if stored.is_some() {
+                false
+            } else {
+                *stored = Some(error);
+                true
+            }
+        };
+        if first {
+            self.abort_streams();
+        }
+    }
+
+    async fn read_host_stream(&self, id: u64) -> Result<JsValue, CallError> {
+        if self.import_error.borrow().is_some() {
+            return Err(CallError::trap("stream read after import failure"));
+        }
+        let Some(mut input) = self.resources.checkout_host(id) else {
+            return Err(CallError::trap(format!("unknown host stream `{id}`")));
+        };
+        match input.read().await {
+            Ok(Some(bytes)) => {
+                self.resources.restore_host(id, input);
+                Ok(Uint8Array::from(bytes.as_slice()).into())
+            }
+            Ok(None) => {
+                self.resources.finish_host(id);
+                Ok(JsValue::NULL)
+            }
+            Err(error) => {
+                self.resources.finish_host(id);
+                Err(CallError::trap(error.to_string()))
+            }
+        }
+    }
+
+    fn close_host_stream(&self, id: u64) {
+        if let Some(input) = self.resources.take_host(id) {
+            input.close_reader();
+        }
+    }
+
+    fn open_guest_stream(&self, stream: JsValue) -> JsValue {
+        let (writer, output) = OutputStream::channel();
+        let handle = StreamHandle::from(output);
+        let id = handle.id();
+        let marker = self.resources.register_guest(handle);
+        self.guest_streams.borrow_mut().insert(
+            id,
+            ActiveGuestStream {
+                writer: writer.clone(),
+                stream: stream.clone(),
+            },
+        );
+        let active = self.guest_streams.clone();
+        let resources = self.resources.clone();
+        spawn_local(async move {
+            while let Ok(value) = read_guest_stream(&stream).await {
+                if value.is_null() {
+                    break;
+                }
+                let bytes = Uint8Array::new(&value).to_vec();
+                if writer.write(bytes).await.is_err() {
+                    let _ = close_guest_stream(&stream).await;
+                    break;
+                }
+            }
+            if active.borrow_mut().remove(&id).is_some() {
+                resources.close_guest(id);
+            }
+        });
+        marker
+    }
+
+    fn abort_streams(&self) {
+        for id in self.resources.host_ids() {
+            self.close_host_stream(id);
+        }
+        for stream in self.guest_streams.borrow().values() {
+            stream.writer.abort();
+        }
+    }
+
+    async fn cleanup(&self) -> Result<(), CallError> {
+        self.abort_streams();
+        let streams = self.guest_streams.borrow_mut().drain().collect::<Vec<_>>();
+        let mut failures = Vec::new();
+        for (id, stream) in streams {
+            if let Err(error) = close_guest_stream(&stream.stream).await {
+                failures.push(js_error(&error));
+            }
+            self.resources.close_guest(id);
+        }
+        if let Err(error) = self.cleanup_resources().await {
+            failures.push(error.to_string());
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(CallError::trap(format!(
+                "invocation cleanup failed: {}",
+                failures.join("; ")
+            )))
         }
     }
 
@@ -423,6 +571,7 @@ mod tests {
             ),
             import_error: Rc::new(RefCell::new(Some(CallError::refused("denied")))),
             resources: ResourceTracker::default(),
+            guest_streams: Rc::default(),
         };
         let args = Array::of1(&JsValue::from_str("Ada"));
         assert!(matches!(
