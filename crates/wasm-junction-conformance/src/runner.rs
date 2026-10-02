@@ -11,13 +11,13 @@ use wasm_junction::{
 
 use crate::host::summary;
 use crate::{
-    EXPECTED_RELOAD_TRACE, EXPECTED_RESOURCE_REFUSAL_TRACE, EXPECTED_RESOURCE_TRACE,
-    EXPECTED_ROUTED_TRACE, EXPECTED_STREAM_TRACE, EXPECTED_TRACE, FixtureHost, RELOAD_GREETER,
-    RELOAD_WRITER, RESOURCE_CLIENT, RESOURCE_HOST, ReloadGreeter, ReloadHost, ResourceHost,
-    RoutedHost, STREAM_PROBE, SUMMARIZER, SessionId, StreamHost, Trace, component,
-    reload_breaking_component, reload_v1_component, reload_v2_component, reload_writer_component,
-    resource_component, stream_component, summarizer, translator_component, writer,
-    writer_component,
+    ComponentSettings, EXPECTED_RELOAD_TRACE, EXPECTED_RESOURCE_REFUSAL_TRACE,
+    EXPECTED_RESOURCE_TRACE, EXPECTED_ROUTED_TRACE, EXPECTED_STREAM_TRACE, EXPECTED_TRACE,
+    FixtureHost, RELOAD_GREETER, RELOAD_WRITER, RESOURCE_CLIENT, RESOURCE_HOST, ReloadGreeter,
+    ReloadHost, ResourceHost, RoutedHost, STREAM_PROBE, SUMMARIZER, SessionId, StreamHost, Trace,
+    component, reload_breaking_component, reload_v1_component, reload_v2_component,
+    reload_writer_component, resource_component, stream_component, summarizer,
+    translator_component, writer, writer_component,
 };
 
 /// A loaded conformance fixture available for additional engine assertions.
@@ -29,6 +29,7 @@ pub struct Fixture {
 
 /// A loaded pair of components for routed-call assertions.
 pub struct RoutedFixture {
+    app: App,
     writer: writer::Writer,
     host: RoutedHost,
     trace: Trace,
@@ -166,6 +167,7 @@ impl RoutedFixture {
             .get::<writer::Writer>("writer")
             .map_err(FixtureError::source)?;
         Ok(Self {
+            app,
             writer,
             host,
             trace,
@@ -315,6 +317,14 @@ async fn check_fixture(fixture: Fixture) -> Result<Fixture, FixtureError> {
 /// Returns [`FixtureError`] if setup, invocation, output, caller, or tracing differs.
 pub async fn run_routed(engine: impl Engine + 'static) -> Result<RoutedFixture, FixtureError> {
     let fixture = RoutedFixture::new(engine).await?;
+    fixture
+        .app
+        .configure("writer", ComponentSettings("writer"))
+        .map_err(FixtureError::source)?;
+    fixture
+        .app
+        .configure("translator", ComponentSettings("translator"))
+        .map_err(FixtureError::source)?;
     for (function, expected) in [
         (
             "write",
@@ -339,6 +349,12 @@ pub async fn run_routed(engine: impl Engine + 'static) -> Result<RoutedFixture, 
     if callers != [translator.clone(), translator] {
         return Err(FixtureError::new(format!(
             "unexpected callers: {callers:?}"
+        )));
+    }
+    if fixture.host.settings() != [Some("translator"), Some("translator")] {
+        return Err(FixtureError::new(format!(
+            "unexpected settings: {:?}",
+            fixture.host.settings()
         )));
     }
     let expected = EXPECTED_ROUTED_TRACE

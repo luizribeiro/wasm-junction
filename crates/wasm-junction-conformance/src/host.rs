@@ -1,9 +1,9 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use wasm_junction::{CallContext, CallError, Caller, Provided, Val};
 
-use crate::{SessionId, TranslatorHop, decoration, notes, types};
+use crate::{ComponentSettings, SessionId, TranslatorHop, decoration, notes, types};
 
 /// The host implementation used by the notes-summary fixture.
 #[derive(Clone, Default)]
@@ -58,7 +58,10 @@ impl notes::Host for FixtureHost {
 
 /// The host provider called by the translator in the routed fixture.
 #[derive(Clone, Default)]
-pub struct RoutedHost(Arc<std::sync::Mutex<Vec<Caller>>>);
+pub struct RoutedHost {
+    callers: Arc<std::sync::Mutex<Vec<Caller>>>,
+    settings: Arc<std::sync::Mutex<Vec<Option<&'static str>>>>,
+}
 
 impl RoutedHost {
     /// Wraps this host as the fixture's decoration provider.
@@ -73,8 +76,14 @@ impl RoutedHost {
         self.lock().clone()
     }
 
+    pub(crate) fn settings(&self) -> Vec<Option<&'static str>> {
+        lock_or_recover(&self.settings).clone()
+    }
+
     fn decorate(&self, context: &CallContext, text: &str) -> String {
         self.lock().push(context.caller().clone());
+        let setting = context.settings::<ComponentSettings>().map(|value| value.0);
+        lock_or_recover(&self.settings).push(setting);
         let session = context.extensions().get::<SessionId>().map(|value| value.0);
         let hop = if context.extensions().get::<TranslatorHop>().is_some() {
             Some("writer-to-translator")
@@ -92,10 +101,14 @@ impl RoutedHost {
     }
 
     fn lock(&self) -> MutexGuard<'_, Vec<Caller>> {
-        match self.0.lock() {
-            Ok(callers) => callers,
-            Err(poisoned) => poisoned.into_inner(),
-        }
+        lock_or_recover(&self.callers)
+    }
+}
+
+fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(value) => value,
+        Err(poisoned) => poisoned.into_inner(),
     }
 }
 

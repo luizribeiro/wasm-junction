@@ -66,6 +66,8 @@ pub const DISPATCH_RUNNER: &str = "example:dispatch/runner@0.1.0";
 
 pub(crate) struct SessionId(pub u32);
 pub(crate) struct TranslatorHop;
+#[derive(Clone)]
+pub(crate) struct ComponentSettings(pub &'static str);
 
 /// Returns the notes-summary fixture component.
 #[must_use]
