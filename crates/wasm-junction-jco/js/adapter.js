@@ -18,12 +18,18 @@
  *   args: unknown[],
  * ) => Promise<unknown>} Dispatch
  * @typedef {(interfaceName: string, resourceName: string, id: number) => Promise<void>} DropResource
+ * @typedef {(id: bigint) => Promise<Uint8Array | null>} ReadStream
+ * @typedef {(id: bigint) => Promise<void>} CloseStream
+ * @typedef {(stream: object) => object} OpenGuestStream
+ * @typedef {{ read: ReadStream, close: CloseStream, open: OpenGuestStream }} StreamFunctions
  * @typedef {[string, string]} ResourceFunction
  * @typedef {[string, string, string, string | undefined, ResourceFunction[], ResourceFunction[]]} ResourceDefinition
  * @typedef {{ poisoned: boolean }} ImportState
  */
 
 const RESOURCE_MARKER = "$wasm-junction-resource";
+const STREAM_MARKER = "$wasm-junction-stream";
+const STREAM_ID = Symbol.for("wasm-junction:stream-id");
 const IMPORT_FAILURE = Symbol("wasm-junction-import-failure");
 const IMPORT_STATE = "wasm-junction:internal/import-state";
 
@@ -61,6 +67,9 @@ export async function compileComponent(source, names, modules, resources = []) {
  * @param {unknown[]} args
  * @param {Dispatch} dispatch
  * @param {DropResource} [dropResource]
+ * @param {ReadStream} [readStream]
+ * @param {CloseStream} [closeStream]
+ * @param {OpenGuestStream} [openGuestStream]
  * @returns {Promise<unknown>}
  */
 export async function invoke(
@@ -70,18 +79,31 @@ export async function invoke(
   args,
   dispatch,
   dropResource = () => Promise.reject(new Error("resource drops are unavailable")),
+  readStream = () => Promise.reject(new Error("stream reads are unavailable")),
+  closeStream = () => Promise.reject(new Error("stream closes are unavailable")),
+  openGuestStream = () => {
+    throw new Error("guest streams are unavailable");
+  },
 ) {
   /** @type {Promise<void>[]} */
   const drops = [];
   const state = { poisoned: false };
-  const classes = makeResourceClasses(runtime.resources, dispatch, dropResource, drops, state);
+  const streams = { read: readStream, close: closeStream, open: openGuestStream };
+  const classes = makeResourceClasses(
+    runtime.resources,
+    dispatch,
+    dropResource,
+    drops,
+    state,
+    streams,
+  );
   const instance = await runtime.namespace.instantiate(
     name => {
       const module = runtime.modules.get(name);
       if (!module) throw new Error(`missing compiled core module ${name}`);
       return module;
     },
-    makeImports(dispatch, classes, state),
+    makeImports(dispatch, classes, state, streams),
   );
   const shortName = interfaceName
     .slice(interfaceName.lastIndexOf("/") + 1)
@@ -93,7 +115,12 @@ export async function invoke(
     throw new Error(`missing component export ${interfaceName}.${functionName}`);
   }
   try {
-    return await exports[jsName](...args.map(value => materialize(value, classes)));
+    return dematerialize(
+      await exports[jsName](
+        ...args.map(value => materialize(value, classes, state, readStream, closeStream)),
+      ),
+      openGuestStream,
+    );
   } finally {
     await Promise.all(drops);
   }
@@ -103,9 +130,10 @@ export async function invoke(
  * @param {Dispatch} dispatch
  * @param {Map<string, Map<string, Function>>} classes
  * @param {ImportState} state
+ * @param {StreamFunctions} streams
  * @returns {WebAssembly.Imports}
  */
-function makeImports(dispatch, classes, state) {
+function makeImports(dispatch, classes, state, streams) {
   /** @type {Map<string, WebAssembly.ModuleImports>} */
   const interfaces = new Map();
   return new Proxy(/** @type {WebAssembly.Imports} */ ({}), {
@@ -123,7 +151,7 @@ function makeImports(dispatch, classes, state) {
             const witName = functionName.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`);
             /** @type {ComponentFunction} */
             const importedFunction = (...args) =>
-              callImport(state, dispatch, classes, interfaceName, witName, args);
+              callImport(state, dispatch, classes, interfaceName, witName, args, streams);
             return importedFunction;
           },
         });
@@ -140,8 +168,9 @@ function makeImports(dispatch, classes, state) {
  * @param {DropResource} dropResource
  * @param {Promise<void>[]} drops
  * @param {ImportState} state
+ * @param {StreamFunctions} streams
  */
-function makeResourceClasses(definitions, dispatch, dropResource, drops, state) {
+function makeResourceClasses(definitions, dispatch, dropResource, drops, state, streams) {
   /** @type {Map<string, Map<string, Function>>} */
   const interfaces = new Map();
   for (const [
@@ -155,7 +184,7 @@ function makeResourceClasses(definitions, dispatch, dropResource, drops, state) 
     /** @param {...unknown} args */
     function Resource(...args) {
       if (!constructorName) throw new TypeError(`${className} has no constructor`);
-      return callImport(state, dispatch, interfaces, interfaceName, constructorName, args);
+      return callImport(state, dispatch, interfaces, interfaceName, constructorName, args, streams);
     }
     Object.defineProperty(Resource.prototype, Symbol.dispose, {
       /** @this {{id?: number}} */
@@ -173,7 +202,15 @@ function makeResourceClasses(definitions, dispatch, dropResource, drops, state) 
     for (const [witName, jsName] of methods) {
       /** @this {unknown} @param {...unknown} args */
       const method = function (...args) {
-        return callImport(state, dispatch, interfaces, interfaceName, witName, [this, ...args]);
+        return callImport(
+          state,
+          dispatch,
+          interfaces,
+          interfaceName,
+          witName,
+          [this, ...args],
+          streams,
+        );
       };
       Object.defineProperty(Resource.prototype, jsName, {
         value: method,
@@ -182,7 +219,7 @@ function makeResourceClasses(definitions, dispatch, dropResource, drops, state) 
     for (const [witName, jsName] of statics) {
       /** @type {ComponentFunction} */
       const staticFunction = (...args) =>
-        callImport(state, dispatch, interfaces, interfaceName, witName, args);
+        callImport(state, dispatch, interfaces, interfaceName, witName, args, streams);
       Object.defineProperty(Resource, jsName, {
         value: staticFunction,
       });
@@ -205,18 +242,23 @@ function makeResourceClasses(definitions, dispatch, dropResource, drops, state) 
  * @param {string} interfaceName
  * @param {string} functionName
  * @param {unknown[]} args
+ * @param {StreamFunctions} streams
  * @returns {Promise<unknown>}
  */
-function callImport(state, dispatch, classes, interfaceName, functionName, args) {
-  return dispatch(interfaceName, functionName, args).then(
+function callImport(state, dispatch, classes, interfaceName, functionName, args, streams) {
+  return dispatch(
+    interfaceName,
+    functionName,
+    args.map(value => dematerialize(value, streams.open)),
+  ).then(
     value => {
       if (value && typeof value === "object" && IMPORT_FAILURE in value) {
         state.poisoned = true;
-        return materialize(value[IMPORT_FAILURE], classes);
+        return materialize(value[IMPORT_FAILURE], classes, state, streams.read, streams.close);
       }
-      return materialize(value, classes);
+      return materialize(value, classes, state, streams.read, streams.close);
     },
-    error => Promise.reject(materialize(error, classes)),
+    error => Promise.reject(materialize(error, classes, state, streams.read, streams.close)),
   );
 }
 
@@ -229,11 +271,25 @@ function resourceClasses(classes, interfaceName) {
   }
 }
 
-/** @param {unknown} value @param {Map<string, Map<string, Function>>} classes @returns {any} */
-function materialize(value, classes) {
+/**
+ * @param {unknown} value
+ * @param {Map<string, Map<string, Function>>} classes
+ * @param {ImportState} state
+ * @param {ReadStream} readStream
+ * @param {CloseStream} closeStream
+ * @returns {any}
+ */
+function materialize(value, classes, state, readStream, closeStream) {
   if (!value || typeof value !== "object" || value instanceof Uint8Array) return value;
-  if (Array.isArray(value)) return value.map(item => materialize(item, classes));
+  if (Array.isArray(value)) {
+    return value.map(item => materialize(item, classes, state, readStream, closeStream));
+  }
   const object = /** @type {Record<string, any>} */ (value);
+  if (STREAM_MARKER in object) {
+    const [kind, id] = object[STREAM_MARKER];
+    if (kind !== "host") throw new TypeError(`unexpected ${kind} stream from Rust`);
+    return hostStream(id, state, readStream, closeStream);
+  }
   if (RESOURCE_MARKER in object) {
     const [interfaceName, resourceName, id] = object[RESOURCE_MARKER];
     const Resource = resourceClasses(classes, interfaceName)?.get(resourceName);
@@ -242,6 +298,81 @@ function materialize(value, classes) {
     resource.id = id;
     return resource;
   }
-  for (const key of Object.keys(object)) object[key] = materialize(object[key], classes);
+  for (const key of Object.keys(object)) {
+    object[key] = materialize(object[key], classes, state, readStream, closeStream);
+  }
   return object;
+}
+
+/**
+ * @param {bigint} id
+ * @param {ImportState} state
+ * @param {ReadStream} readStream
+ * @param {CloseStream} closeStream
+ * @returns {any}
+ */
+function hostStream(id, state, readStream, closeStream) {
+  /** @type {number[]} */
+  let pending = [];
+  let ended = false;
+  const iterator = {
+    async next() {
+      if (pending.length > 0) return { done: false, value: pending.shift() };
+      if (state.poisoned) throw new WebAssembly.RuntimeError("stream read after import failure");
+      const chunk = await readStream(id);
+      if (chunk === null) {
+        ended = true;
+        return { done: true, value: undefined };
+      }
+      pending = [...chunk];
+      return { done: false, value: pending.shift() };
+    },
+    async return() {
+      if (!ended) {
+        ended = true;
+        pending = [];
+        await closeStream(id);
+      }
+      return { done: true, value: undefined };
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    },
+  };
+  return {
+    [STREAM_ID]: id,
+    [Symbol.asyncIterator]() {
+      return iterator;
+    },
+  };
+}
+
+/** @param {any} value @param {OpenGuestStream} openGuestStream @returns {any} */
+function dematerialize(value, openGuestStream) {
+  if (!value || typeof value !== "object" || value instanceof Uint8Array) return value;
+  if (Symbol.asyncIterator in value) {
+    const id = value[STREAM_ID];
+    return id === undefined ? openGuestStream(value) : { [STREAM_MARKER]: ["host", id] };
+  }
+  if (Array.isArray(value)) return value.map(item => dematerialize(item, openGuestStream));
+  for (const key of Object.keys(value)) value[key] = dematerialize(value[key], openGuestStream);
+  return value;
+}
+
+/** @param {any} stream @returns {Promise<Uint8Array | null>} */
+export async function readGuestStream(stream) {
+  const item =
+    typeof stream.read === "function"
+      ? await stream.read({ count: 65536 })
+      : await stream[Symbol.asyncIterator]().next();
+  if (item.done) return null;
+  if (item.value instanceof Uint8Array) return item.value;
+  if (typeof item.value === "number") return Uint8Array.of(item.value);
+  return Uint8Array.from(item.value);
+}
+
+/** @param {any} stream @returns {Promise<void>} */
+export async function closeGuestStream(stream) {
+  if (typeof stream.return === "function") await stream.return();
+  else stream[Symbol.dispose]?.();
 }
