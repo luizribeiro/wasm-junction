@@ -32,7 +32,8 @@ The files are intentionally self-contained:
   WASI.
 - `src/bindings.rs` generates typed host bindings from the WIT package.
 - `src/trace.rs` contains the example's tracing middleware.
-- `src/main.rs` loads, links, calls, and checks the components.
+- `src/lib.rs` loads, links, calls, and checks the components.
+- `src/main.rs` uses Tokio to run that target-neutral workflow and print its output.
 - `tests/` runs the executable and checks its complete output.
 
 The fake dictionary recognizes `hello` translated to Portuguese. Other inputs return an ordinary
