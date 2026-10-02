@@ -1,28 +1,44 @@
-use std::cell::RefCell;
-use std::collections::HashSet;
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use js_sys::{Array, BigInt, Object, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_junction_core::{
-    CallError, Resource, ResourceOwnership, Val, Vals, validate_resource_lowering,
+    CallError, ChannelDirection, ImportDispatcher, InputStream, Resource, ResourceOwnership,
+    StreamHandle, Val, Vals, validate_resource_lowering,
 };
 
 use crate::types::{FunctionType, ResourceType, ValueType};
 
 const RESOURCE_MARKER: &str = "$wasm-junction-resource";
+const STREAM_MARKER: &str = "$wasm-junction-stream";
 
 #[derive(Clone, Default)]
-pub(crate) struct ResourceTracker(Rc<RefCell<HashSet<Resource>>>);
+pub(crate) struct ResourceTracker {
+    resources: Rc<RefCell<HashSet<Resource>>>,
+    host_streams: Rc<RefCell<HashMap<u64, InputStream>>>,
+    guest_streams: Rc<RefCell<HashMap<u64, StreamHandle>>>,
+    refuse_guest_streams: Rc<Cell<bool>>,
+    imports: Option<Arc<dyn ImportDispatcher>>,
+}
 
 impl ResourceTracker {
+    pub(crate) fn with_imports(imports: Arc<dyn ImportDispatcher>) -> Self {
+        Self {
+            imports: Some(imports),
+            ..Self::default()
+        }
+    }
+
     fn retain(&self, resource: Resource) {
-        self.0.borrow_mut().insert(resource);
+        self.resources.borrow_mut().insert(resource);
     }
 
     pub(crate) fn take(&self, interface: &str, name: &str, id: u32) -> Result<Resource, CallError> {
         let resource = Resource::owned(interface, name, id);
-        self.0.borrow_mut().take(&resource).ok_or_else(|| {
+        self.resources.borrow_mut().take(&resource).ok_or_else(|| {
             CallError::refused(format!(
                 "resource `{interface}/{name}#{id}` is no longer owned"
             ))
@@ -30,7 +46,58 @@ impl ResourceTracker {
     }
 
     pub(crate) fn drain(&self) -> Vec<Resource> {
-        self.0.borrow_mut().drain().collect()
+        self.resources.borrow_mut().drain().collect()
+    }
+
+    pub(crate) fn register_guest(&self, handle: StreamHandle) -> JsValue {
+        let id = handle.id();
+        self.guest_streams.borrow_mut().insert(id, handle);
+        self.channel_open(id, ChannelDirection::GuestToHost);
+        stream_marker("guest", id)
+    }
+
+    pub(crate) fn take_host(&self, id: u64) -> Option<InputStream> {
+        let input = self.host_streams.borrow_mut().remove(&id);
+        if input.is_some() {
+            self.channel_close(id, ChannelDirection::HostToGuest);
+        }
+        input
+    }
+
+    pub(crate) fn checkout_host(&self, id: u64) -> Option<InputStream> {
+        self.host_streams.borrow_mut().remove(&id)
+    }
+
+    pub(crate) fn restore_host(&self, id: u64, input: InputStream) {
+        self.host_streams.borrow_mut().insert(id, input);
+    }
+
+    pub(crate) fn finish_host(&self, id: u64) {
+        self.channel_close(id, ChannelDirection::HostToGuest);
+    }
+
+    pub(crate) fn take_guest(&self, id: u64) -> Option<StreamHandle> {
+        self.guest_streams.borrow_mut().remove(&id)
+    }
+
+    pub(crate) fn host_ids(&self) -> Vec<u64> {
+        self.host_streams.borrow().keys().copied().collect()
+    }
+
+    pub(crate) fn close_guest(&self, id: u64) {
+        self.channel_close(id, ChannelDirection::GuestToHost);
+    }
+
+    fn channel_open(&self, id: u64, direction: ChannelDirection) {
+        if let Some(imports) = &self.imports {
+            imports.channel_open(id, direction);
+        }
+    }
+
+    fn channel_close(&self, id: u64, direction: ChannelDirection) {
+        if let Some(imports) = &self.imports {
+            imports.channel_close(id, direction);
+        }
     }
 }
 
@@ -208,14 +275,17 @@ pub(crate) fn lift_result_tracked(
     signature: &FunctionType,
     resources: &ResourceTracker,
 ) -> Result<Vals, CallError> {
-    signature.result.as_ref().map_or_else(
+    resources.refuse_guest_streams.set(true);
+    let result = signature.result.as_ref().map_or_else(
         || Ok(Vec::new()),
         |ty| match ty {
             ValueType::Result { ok, .. } => lift_optional_payload(value, ok.as_deref(), resources)
                 .map(|value| vec![Val::Result(Ok(value))]),
             _ => lift(value, ty, resources).map(|value| vec![value]),
         },
-    )
+    );
+    resources.refuse_guest_streams.set(false);
+    result
 }
 
 #[cfg(test)]
@@ -333,6 +403,17 @@ fn lower(
         (Val::Resource(resource), ValueType::Resource(expected)) => {
             lower_resource(resource, expected, resources)?
         }
+        (Val::Stream(handle), ValueType::Stream) => {
+            let ResourceRetention::Track(resources) = resources else {
+                return Err(CallError::trap("cannot synthesize a byte stream"));
+            };
+            let id = handle.id();
+            let input = InputStream::try_from(handle)
+                .map_err(|error| CallError::trap(error.to_string()))?;
+            resources.host_streams.borrow_mut().insert(id, input);
+            resources.channel_open(id, ChannelDirection::HostToGuest);
+            stream_marker("host", id)
+        }
         (_, ValueType::Stream) => return Err(unsupported(expected.name())),
         (_, ValueType::Unsupported(name)) => return Err(unsupported(name)),
         (value, expected) => {
@@ -408,9 +489,40 @@ fn lift(
             lift_nested_result(value, ok.as_deref(), err.as_deref(), expected, resources)
         }
         ValueType::Resource(expected) => lift_resource(value, expected, resources),
-        ValueType::Stream => Err(unsupported(expected.name())),
+        ValueType::Stream => lift_stream(value, resources),
         ValueType::Unsupported(name) => Err(unsupported(name)),
     }
+}
+
+fn stream_marker(kind: &str, id: u64) -> JsValue {
+    let marker = Object::new();
+    let description = Array::of2(&kind.into(), &BigInt::from(id).into());
+    let _ = Reflect::set(&marker, &STREAM_MARKER.into(), &description);
+    marker.into()
+}
+
+fn lift_stream(value: JsValue, resources: &ResourceTracker) -> Result<Val, CallError> {
+    let marker = Reflect::get(&value, &STREAM_MARKER.into())
+        .map_err(|error| mismatch(&ValueType::Stream, &error, "could not read stream marker"))?;
+    let marker = js_array(marker, &ValueType::Stream)?;
+    let kind = marker
+        .get(0)
+        .as_string()
+        .ok_or_else(|| mismatch(&ValueType::Stream, &value, "missing stream direction"))?;
+    let id = bigint::<u64>(marker.get(1), &ValueType::U64)?;
+    let handle = match kind.as_str() {
+        "host" => resources.take_host(id).map(InputStream::into_handle),
+        "guest" if resources.refuse_guest_streams.get() => {
+            return Err(CallError::refused(
+                "guest-created streams cannot be returned because the component store ends with each call",
+            ));
+        }
+        "guest" => resources.take_guest(id),
+        _ => None,
+    };
+    handle
+        .map(Val::Stream)
+        .ok_or_else(|| CallError::trap(format!("stream `{kind}#{id}` is no longer available")))
 }
 
 fn lower_sequence(
@@ -925,6 +1037,37 @@ mod tests {
         let lowered = lower_args(values.clone(), &signature).unwrap();
         assert!(lowered.get(1).is_instance_of::<Uint8Array>());
         assert_eq!(lift_args(&lowered, &signature).unwrap(), values);
+    }
+
+    #[wasm_bindgen_test]
+    async fn recovers_host_streams_and_refuses_guest_stream_results() {
+        let tracker = ResourceTracker::default();
+        let signature = FunctionType {
+            params: vec![ValueType::Stream],
+            result: None,
+        };
+        let lowered = lower_args_tracked(
+            vec![wasm_junction_core::OutputStream::from_bytes(b"host").into()],
+            &signature,
+            &tracker,
+        )
+        .unwrap();
+        let mut values = lift_args_tracked(&lowered, &signature, &tracker).unwrap();
+        let input = InputStream::try_from(values.remove(0)).unwrap();
+        assert_eq!(input.read_all().await.unwrap(), b"host");
+
+        let (_, output) = wasm_junction_core::OutputStream::channel();
+        let marker = tracker.register_guest(StreamHandle::from(output));
+        let error = lift_result_tracked(
+            marker,
+            &FunctionType {
+                params: Vec::new(),
+                result: Some(ValueType::Stream),
+            },
+            &tracker,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("store ends with each call"));
     }
 
     #[wasm_bindgen_test]
