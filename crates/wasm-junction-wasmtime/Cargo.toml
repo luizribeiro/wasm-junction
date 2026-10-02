@@ -14,10 +14,11 @@ workspace = true
 [features]
 default = ["parallel-compilation", "wasi"]
 parallel-compilation = ["wasmtime/parallel-compilation"]
-wasi = ["dep:wasmtime-wasi"]
+wasi = ["dep:tokio", "dep:wasmtime-wasi"]
 
 [dependencies]
 wasm-junction-core = { path = "../wasm-junction-core", version = "=0.0.0" }
+tokio = { version = "1", features = ["macros", "sync"], optional = true }
 wasmtime = { version = "=49.0.1", default-features = false, features = ["component-model-async", "cranelift", "runtime", "std"] }
 wasmtime-wasi = { version = "=49.0.1", default-features = false, features = ["p2"], optional = true }
 

@@ -12,6 +12,7 @@ use crate::engine::StoreData;
 
 mod clocks;
 mod linker;
+mod trampoline;
 
 pub(crate) use linker::add_ungated_interfaces;
 
@@ -44,7 +45,6 @@ impl WasiView for WasiState {
 enum EnvironmentOperation {
     Variables,
     Arguments,
-    InitialCwd,
 }
 
 struct EnvironmentTarget(Arc<Mutex<WasiState>>, EnvironmentOperation);
@@ -76,10 +76,6 @@ impl ImportTarget for EnvironmentTarget {
                 EnvironmentOperation::Arguments => {
                     cli::environment::Host::get_arguments(&mut state.cli())
                         .map(|values| Val::List(values.into_iter().map(Val::from).collect()))
-                }
-                EnvironmentOperation::InitialCwd => {
-                    cli::environment::Host::initial_cwd(&mut state.cli())
-                        .map(|value| Val::Option(value.map(|value| Box::new(Val::from(value)))))
                 }
             }
             .map(|value| vec![value])
@@ -116,11 +112,31 @@ fn add_environment_gate(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> 
     })?;
     instance.func_wrap_async("initial-cwd", |mut store, (): ()| {
         Box::new(async move {
-            let values =
-                call_environment(&mut store, "initial-cwd", EnvironmentOperation::InitialCwd)
-                    .await?;
+            let values = trampoline::gate(
+                &mut store,
+                INTERFACE,
+                "initial-cwd",
+                Vec::new(),
+                real_initial_cwd,
+            )
+            .await
+            .map_err(wasmtime::Error::new)?;
             Ok((decode_initial_cwd(&values)?,))
         })
+    })
+}
+
+fn real_initial_cwd(
+    mut store: StoreContextMut<'_, StoreData>,
+    args: Vals,
+) -> BoxFuture<'_, Result<Vals, CallError>> {
+    Box::pin(async move {
+        if !args.is_empty() {
+            return Err(CallError::trap("WASI initial-cwd takes no arguments"));
+        }
+        cli::environment::Host::initial_cwd(&mut store.data_mut().cli())
+            .map(|value| vec![Val::Option(value.map(|value| Box::new(Val::from(value))))])
+            .map_err(|error| CallError::trap(error.to_string()))
     })
 }
 
