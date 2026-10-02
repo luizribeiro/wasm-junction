@@ -10,7 +10,7 @@ use std::time::Duration;
 use wasm_junction::{
     App, BoxFuture, Call, CallContext, CallError, CallErrorKind, CompiledComponent, Component,
     Engine, EngineError, ImportDispatcher, InvocationContext, Middleware, Next, Provided, Provider,
-    Resource, Val, Vals, WasiConfig, WasiSettings,
+    Resource, Val, Vals, WasiSettings,
 };
 #[cfg(feature = "wasi")]
 use wasm_junction::{Caller, LoadError};
@@ -196,10 +196,9 @@ impl Engine for TrackingEngine {
     fn compile(
         &self,
         bytes: Arc<[u8]>,
-        wasi: WasiConfig,
     ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
         Box::pin(async move {
-            let compiled = self.inner.compile(bytes, wasi).await?;
+            let compiled = self.inner.compile(bytes).await?;
             self.compiled
                 .lock()
                 .unwrap()
@@ -647,8 +646,7 @@ fn repeatedly_importing_after_a_refusal_terminates_at_the_next_import() {
 #[test]
 fn malformed_component_has_a_typed_compilation_error() {
     let engine = WasmtimeEngine::new().unwrap();
-    let result =
-        block_on(engine.compile(Arc::from(&b"not a component"[..]), WasiConfig::default()));
+    let result = block_on(engine.compile(Arc::from(&b"not a component"[..])));
     let Err(error) = result else {
         panic!("malformed bytes compiled");
     };

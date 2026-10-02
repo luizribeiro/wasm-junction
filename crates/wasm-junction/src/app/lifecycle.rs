@@ -149,7 +149,7 @@ impl App {
             compiled.push(
                 self.0
                     .engine
-                    .compile(replacement.bytes.clone(), self.0.wasi.clone())
+                    .compile(replacement.bytes.clone())
                     .await
                     .map_err(ReloadError::Compile)?,
             );

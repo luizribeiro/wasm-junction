@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use wasm_junction_core::{
     BoxFuture, CallError, CompiledComponent, Engine, EngineError, ImportDispatcher,
-    InvocationContext, Vals, WasiConfig,
+    InvocationContext, Vals,
 };
 
 use crate::{TranspiledComponent, transpile_component};
@@ -29,7 +29,6 @@ impl Engine for JcoEngine {
     fn compile(
         &self,
         bytes: Arc<[u8]>,
-        _wasi: WasiConfig,
     ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
         let result = transpile_component(&bytes).map(|plan| {
             let _ = (&plan.source, &plan.modules);

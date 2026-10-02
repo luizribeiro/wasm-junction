@@ -2,15 +2,14 @@
 
 mod support;
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 #[cfg(all(feature = "wasi", feature = "wasmtime", not(target_family = "wasm")))]
 use support::component_bytes_from;
-use support::{NOTES, block_on, component_bytes};
+use support::{NOTES, block_on};
 use wasm_junction::{
     App, BoxFuture, Call, CallContext, CallError, CompiledComponent, Component, ConfigureError,
-    Engine, EngineError, ImportDispatcher, LoadError, Provided, Provider, Vals, WasiConfig,
-    WasiSettings,
+    Engine, EngineError, ImportDispatcher, LoadError, Provided, Provider, Vals, WasiSettings,
 };
 
 struct UnusedProvider;
@@ -31,7 +30,6 @@ impl Engine for FakeEngine {
     fn compile(
         &self,
         _bytes: Arc<[u8]>,
-        _wasi: WasiConfig,
     ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
         Box::pin(async { Err(EngineError::new("unused engine")) })
     }
@@ -54,44 +52,6 @@ fn wasi_settings_require_the_wasi_provider() {
         app.configure("guest", WasiSettings::new().env("TOKEN", "secret")),
         Err(ConfigureError::ProviderNotRegistered { provider: "WASI" })
     );
-}
-
-struct ConfigEngine(Arc<Mutex<Option<WasiConfig>>>);
-
-impl Engine for ConfigEngine {
-    fn compile(
-        &self,
-        _bytes: Arc<[u8]>,
-        wasi: WasiConfig,
-    ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
-        *self.0.lock().unwrap() = Some(wasi);
-        Box::pin(async { Err(EngineError::new("configuration captured")) })
-    }
-}
-
-#[test]
-fn wasi_configuration_reaches_the_engine_contract() {
-    let captured = Arc::new(Mutex::new(None));
-    let wasi = WasiConfig::new()
-        .env("LANG", "first")
-        .env("LANG", "en_US.UTF-8");
-    let app = App::builder()
-        .engine(ConfigEngine(captured.clone()))
-        .wasi(wasi)
-        .build()
-        .unwrap();
-    let bytes = component_bytes("package example:empty@0.1.0; world plugin {}", "plugin");
-
-    let error =
-        block_on(app.load(Component::from_bytes(bytes).unwrap().named("empty"))).unwrap_err();
-
-    assert!(matches!(error, LoadError::Compile(_)));
-    let configuration = captured.lock().unwrap().take().unwrap();
-    assert_eq!(
-        configuration.environment().collect::<Vec<_>>(),
-        [("LANG", "en_US.UTF-8")]
-    );
-    assert_eq!(WasiConfig::default().environment().count(), 0);
 }
 
 #[cfg(not(any(

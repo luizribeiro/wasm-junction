@@ -17,7 +17,7 @@ use wasm_encoder::{ImportSection, Instruction, Module, TypeSection, ValType};
 use wasm_junction::{
     App, BoxFuture, Call, CallContext, CallError, CallErrorKind, CompiledComponent, Component,
     Engine, EngineError, ImportDispatcher, InputStream, InvocationContext, Middleware, Next,
-    OutputStream, Provided, Provider, Resource, Val, Vals, WasiConfig,
+    OutputStream, Provided, Provider, Resource, Val, Vals,
 };
 use wasm_junction_conformance::{
     CYCLE_A, DECORATION, DISPATCH_PINGER, DISPATCH_RUNNER, Fixture, FixtureHost, PoisonHost,
@@ -66,10 +66,9 @@ impl Engine for TrackingEngine {
     fn compile(
         &self,
         bytes: Arc<[u8]>,
-        wasi: WasiConfig,
     ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
         Box::pin(async move {
-            let compiled = self.inner.compile(bytes, wasi).await?;
+            let compiled = self.inner.compile(bytes).await?;
             self.compiled.borrow_mut().push(Arc::downgrade(&compiled));
             Ok(compiled)
         })
@@ -839,7 +838,7 @@ async fn routed_calls_use_fresh_callee_instances() {
 #[wasm_bindgen_test]
 async fn malformed_component_has_a_typed_compilation_error() {
     let result = JcoEngine::new()
-        .compile(Arc::from(&b"not a component"[..]), WasiConfig::default())
+        .compile(Arc::from(&b"not a component"[..]))
         .await;
     let Err(error) = result else {
         panic!("malformed bytes compiled")

@@ -13,8 +13,7 @@ use crate::provider::ProvidedKind;
 use crate::{
     BoxFuture, Call, CallContext, CallError, Caller, CompiledComponent, Component, Engine,
     EngineError, Event, Extensions, HostBound, ImportDispatcher, ImportTarget, InvocationContext,
-    Middleware, Provided, Provider, Resource, Val, Vals, WASI_PROVIDER_NAME, WasiConfig,
-    WasiSettings,
+    Middleware, Provided, Provider, Resource, Val, Vals, WASI_PROVIDER_NAME, WasiSettings,
 };
 
 mod lifecycle;
@@ -30,7 +29,6 @@ pub(crate) struct AppInner {
     wasi_provider: bool,
     #[allow(dead_code, reason = "export dispatch runs the middleware chain")]
     middleware: Arc<[Arc<dyn ErasedMiddleware>]>,
-    wasi: WasiConfig,
     max_call_depth: usize,
     components: Mutex<BTreeMap<String, LoadedComponent>>,
     settings: Mutex<BTreeMap<String, Extensions>>,
@@ -171,7 +169,7 @@ impl App {
         let compiled = self
             .0
             .engine
-            .compile(bytes, self.0.wasi.clone())
+            .compile(bytes)
             .await
             .map_err(LoadError::Compile)?;
         let mut components = self.lock_components();
@@ -235,7 +233,7 @@ impl App {
             compiled.push(
                 self.0
                     .engine
-                    .compile(component.bytes.clone(), self.0.wasi.clone())
+                    .compile(component.bytes.clone())
                     .await
                     .map_err(LoadError::Compile)?,
             );
@@ -1493,7 +1491,6 @@ pub struct AppBuilder {
     engine: Option<Arc<dyn Engine>>,
     providers: Vec<ProviderRegistration>,
     middleware: Vec<Arc<dyn ErasedMiddleware>>,
-    wasi: WasiConfig,
     max_call_depth: Option<usize>,
 }
 
@@ -1520,13 +1517,6 @@ impl AppBuilder {
     #[must_use]
     pub fn middleware(mut self, middleware: impl Middleware + 'static) -> Self {
         self.middleware.push(Arc::new(middleware));
-        self
-    }
-
-    /// Sets the WASI capabilities available to component invocations.
-    #[must_use]
-    pub fn wasi(mut self, wasi: WasiConfig) -> Self {
-        self.wasi = wasi;
         self
     }
 
@@ -1591,7 +1581,6 @@ impl AppBuilder {
             engine_interfaces,
             wasi_provider,
             middleware: self.middleware.into(),
-            wasi: self.wasi,
             max_call_depth: self.max_call_depth.unwrap_or(64),
             components: Mutex::new(BTreeMap::new()),
             settings: Mutex::new(BTreeMap::new()),
@@ -1935,7 +1924,6 @@ mod tests {
         fn compile(
             &self,
             _bytes: Arc<[u8]>,
-            _wasi: WasiConfig,
         ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
             Box::pin(async { Err(EngineError::new("unused engine")) })
         }

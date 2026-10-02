@@ -10,8 +10,7 @@ use std::task::{Context, Poll, Waker};
 use wasm_junction_core::WASI_PROVIDER_NAME;
 use wasm_junction_core::{
     BoxFuture, CallError, CompiledComponent, Engine, EngineError, ImportDispatcher,
-    InvocationContext, Resource, StreamHandle, Val, Vals, WasiConfig, WasiSettings,
-    validate_resource_lowering,
+    InvocationContext, Resource, StreamHandle, Val, Vals, WasiSettings, validate_resource_lowering,
 };
 use wasmtime::component::{
     Component, InstancePre, Linker, ResourceAny, ResourceDynamic, ResourceType, Val as WasmtimeVal,
@@ -109,7 +108,6 @@ impl Engine for WasmtimeEngine {
     fn compile(
         &self,
         bytes: Arc<[u8]>,
-        _wasi: WasiConfig,
     ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
         let engine = self.engine.clone();
         let linker = self.linker.clone();
@@ -544,18 +542,15 @@ mod tests {
     #[test]
     fn compiles_component_once_without_instantiating_it() {
         let engine = WasmtimeEngine::new().unwrap();
-        block_on(engine.compile(Arc::from(component()), WasiConfig::default())).unwrap();
+        block_on(engine.compile(Arc::from(component()))).unwrap();
         assert_eq!(engine.instantiations(), 0);
     }
 
     #[test]
     fn compiles_imported_host_resources() {
         let engine = WasmtimeEngine::new().unwrap();
-        block_on(engine.compile(
-            Arc::from(wasm_junction_conformance::resource_component()),
-            WasiConfig::default(),
-        ))
-        .unwrap();
+        block_on(engine.compile(Arc::from(wasm_junction_conformance::resource_component())))
+            .unwrap();
     }
 
     #[test]

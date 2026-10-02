@@ -154,41 +154,7 @@ pub trait Engine: HostBound {
     fn compile(
         &self,
         bytes: Arc<[u8]>,
-        wasi: WasiConfig,
     ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>>;
-}
-
-/// Engine-neutral WASI settings applied to every component invocation.
-///
-/// No host environment variables are visible unless they are added explicitly.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct WasiConfig {
-    environment: BTreeMap<String, String>,
-}
-
-impl WasiConfig {
-    /// Creates a configuration with no environment variables.
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            environment: BTreeMap::new(),
-        }
-    }
-
-    /// Makes one environment variable visible, replacing an earlier value for its name.
-    #[must_use]
-    pub fn env(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
-        self.environment.insert(name.into(), value.into());
-        self
-    }
-
-    /// Returns the configured environment variables in name order.
-    #[must_use]
-    pub fn environment(&self) -> impl ExactSizeIterator<Item = (&str, &str)> {
-        self.environment
-            .iter()
-            .map(|(name, value)| (name.as_str(), value.as_str()))
-    }
 }
 
 /// A failure to compile component bytes for an engine.

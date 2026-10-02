@@ -10,7 +10,7 @@ use wasm_bindgen::{JsCast, prelude::*};
 use wasm_bindgen_futures::{future_to_promise, spawn_local};
 use wasm_junction_core::{
     BoxFuture, CallError, CompiledComponent, Engine, EngineError, ImportDispatcher,
-    InvocationContext, OutputStream, OutputStreamWriter, StreamHandle, Vals, WasiConfig,
+    InvocationContext, OutputStream, OutputStreamWriter, StreamHandle, Vals,
 };
 
 use crate::types::Signatures;
@@ -76,7 +76,6 @@ impl Engine for JcoEngine {
     fn compile(
         &self,
         bytes: Arc<[u8]>,
-        _wasi: WasiConfig,
     ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
         let plan = transpile_component(&bytes);
         let instantiations = self.instantiations.clone();

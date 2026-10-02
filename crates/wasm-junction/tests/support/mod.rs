@@ -12,7 +12,7 @@ use std::task::{Context, Poll, Waker};
 
 use wasm_junction::{
     BoxFuture, Call, CallContext, CallError, Caller, CompiledComponent, Engine, EngineError,
-    ImportDispatcher, InvocationContext, Provider, TypeError, TypedCall, Val, Vals, WasiConfig,
+    ImportDispatcher, InvocationContext, Provider, TypeError, TypedCall, Val, Vals,
 };
 use wit_component::{ComponentEncoder, StringEncoding, dummy_module, embed_component_metadata};
 use wit_parser::{ManglingAndAbi, Resolve};
@@ -97,7 +97,6 @@ impl Engine for FakeEngine {
     fn compile(
         &self,
         _bytes: Arc<[u8]>,
-        _wasi: WasiConfig,
     ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
         Box::pin(async { Ok(Arc::new(UnusedComponent) as Arc<dyn CompiledComponent>) })
     }
@@ -123,7 +122,6 @@ impl Engine for FailingEngine {
     fn compile(
         &self,
         bytes: Arc<[u8]>,
-        wasi: WasiConfig,
     ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
         if self
             .successes
@@ -132,7 +130,7 @@ impl Engine for FailingEngine {
             })
             .is_ok()
         {
-            self.fallback.compile(bytes, wasi)
+            self.fallback.compile(bytes)
         } else {
             Box::pin(async { Err(EngineError::new("invalid adapter")) })
         }
@@ -171,7 +169,6 @@ impl Engine for GenerationEngine {
     fn compile(
         &self,
         _bytes: Arc<[u8]>,
-        _wasi: WasiConfig,
     ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
         let version = self.0.compilations.fetch_add(1, Ordering::SeqCst);
         let component = Arc::new(GenerationComponent {
@@ -194,7 +191,6 @@ impl Engine for RoutingGenerationEngine {
     fn compile(
         &self,
         bytes: Arc<[u8]>,
-        _wasi: WasiConfig,
     ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
         if bytes
             .windows(b"example:writer/article".len())
@@ -242,7 +238,6 @@ impl Engine for GatedCompileEngine {
     fn compile(
         &self,
         _bytes: Arc<[u8]>,
-        _wasi: WasiConfig,
     ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
         let replacement = self.0.compilations.fetch_add(1, Ordering::SeqCst) > 0;
         let gate = self.0.gate.clone();
@@ -277,7 +272,6 @@ impl Engine for ConcurrentCompileEngine {
     fn compile(
         &self,
         _bytes: Arc<[u8]>,
-        _wasi: WasiConfig,
     ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
         let replacement = self.compilations.fetch_add(1, Ordering::SeqCst) > 0;
         Box::pin(async move {
