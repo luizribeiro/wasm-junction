@@ -97,6 +97,10 @@ impl host::Host for StreamHost {
         state.write_error = error.map(|error| error.to_string());
         Ok(())
     }
+
+    fn checkpoint(&self, _cx: &CallContext) -> impl Future<Output = Result<(), CallError>> {
+        std::future::ready(Ok(()))
+    }
 }
 
 fn ready<F: Future>(future: F) -> F::Output {

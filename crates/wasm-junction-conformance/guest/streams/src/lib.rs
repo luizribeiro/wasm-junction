@@ -43,7 +43,9 @@ impl bindings::exports::example::streams::probe::Guest for Component {
         let (mut writer, reader) = bindings::wit_stream::new();
         wit_bindgen::spawn_local(async move {
             let _ = writer.write_all(b"written".to_vec()).await;
+            host::checkpoint().await;
             let _ = writer.write_all(b"in flight".to_vec()).await;
+            host::checkpoint().await;
             core::mem::forget(writer);
         });
         host::audit(reader).await;

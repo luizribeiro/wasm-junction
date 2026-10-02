@@ -1,7 +1,9 @@
 //! End-to-end byte-stream checks for the native engine.
 
+use std::future::poll_fn;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
+use std::task::{Poll, Waker};
 use std::time::Duration;
 
 use wasm_junction::{
@@ -17,6 +19,10 @@ use wasm_junction_wasmtime::WasmtimeEngine;
 struct RetainedStream {
     first: Vec<u8>,
     input: Option<InputStream>,
+    checkpoint: Option<Waker>,
+    first_checkpoint: bool,
+    second_ready: bool,
+    audit: Option<Waker>,
 }
 
 #[derive(Clone, Default)]
@@ -29,6 +35,26 @@ impl Provider for RetainHost {
         call: Call,
     ) -> BoxFuture<'a, Result<Vals, CallError>> {
         Box::pin(async move {
+            if call.function.as_ref() == "checkpoint" {
+                poll_fn(|context| {
+                    let mut state = self.0.lock().unwrap();
+                    if state.first.is_empty() {
+                        state.checkpoint = Some(context.waker().clone());
+                        Poll::Pending
+                    } else if !state.first_checkpoint {
+                        state.first_checkpoint = true;
+                        Poll::Ready(())
+                    } else {
+                        state.second_ready = true;
+                        if let Some(audit) = state.audit.take() {
+                            audit.wake();
+                        }
+                        Poll::Ready(())
+                    }
+                })
+                .await;
+                return Ok(Vec::new());
+            }
             let [value] = <[_; 1]>::try_from(call.args)
                 .map_err(|_| CallError::trap("audit expects one stream"))?;
             let mut input = InputStream::try_from(value)?;
@@ -37,10 +63,25 @@ impl Provider for RetainHost {
                 .await
                 .map_err(|error| CallError::trap(error.to_string()))?
                 .ok_or_else(|| CallError::trap("guest stream closed before its first chunk"))?;
-            *self.0.lock().unwrap() = RetainedStream {
-                first,
-                input: Some(input),
+            let checkpoint = {
+                let mut state = self.0.lock().unwrap();
+                state.first = first;
+                state.input = Some(input);
+                state.checkpoint.take()
             };
+            if let Some(checkpoint) = checkpoint {
+                checkpoint.wake();
+            }
+            poll_fn(|context| {
+                let mut state = self.0.lock().unwrap();
+                if state.second_ready {
+                    Poll::Ready(())
+                } else {
+                    state.audit = Some(context.waker().clone());
+                    Poll::Pending
+                }
+            })
+            .await;
             Ok(Vec::new())
         })
     }

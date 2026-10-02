@@ -6,6 +6,7 @@ interface host {
   optional: async func(bytes: option<stream<u8>>) -> option<stream<u8>>;
   chunks: func() -> stream<u8>;
   advance: func();
+  checkpoint: async func();
 }
 
 interface probe {
