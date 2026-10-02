@@ -1,9 +1,9 @@
 import type { Buffer } from "node:buffer";
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import process from "node:process";
 import type { Browser } from "playwright-core";
 
@@ -18,11 +18,8 @@ const playwrightRoot = configuredPlaywrightRoot;
 const selectedBrowserName = browserName;
 
 const commandEnv = { ...process.env };
-if (cargoArgs[0] === "--package-tests") {
-  const packageName = cargoArgs[1];
-  if (!packageName || cargoArgs.length !== 2) {
-    throw new Error("--package-tests requires exactly one package name");
-  }
+if (cargoArgs[0] === "--workspace-tests") {
+  if (cargoArgs.length !== 1) throw new Error("--workspace-tests takes no arguments");
   const metadata = JSON.parse(
     execFileSync("cargo", ["metadata", "--format-version", "1", "--no-deps"], {
       encoding: "utf8",
@@ -31,24 +28,24 @@ if (cargoArgs[0] === "--package-tests") {
   ) as {
     packages: Array<{
       name: string;
-      targets: Array<{ kind: string[]; name: string; test: boolean }>;
+      dependencies: Array<{ name: string }>;
+      targets: Array<{ kind: string[]; name: string; src_path: string; test: boolean }>;
     }>;
   };
-  const packageMetadata = metadata.packages.find(pkg => pkg.name === packageName);
-  if (!packageMetadata) throw new Error(`Cargo package ${packageName} was not found`);
-  const targets = packageMetadata.targets.filter(target => target.test);
-  if (targets.length === 0) throw new Error(`Cargo package ${packageName} has no test targets`);
-  for (const target of targets) {
-    const selector = target.kind.includes("lib")
-      ? ["--lib"]
-      : target.kind.includes("test")
-        ? ["--test", target.name]
-        : target.kind.includes("bin")
-          ? ["--bin", target.name]
-          : [];
-    if (selector.length === 0) {
-      throw new Error(`unsupported test target ${target.name}: ${target.kind.join(", ")}`);
-    }
+
+  const browserTargets = metadata.packages.flatMap(pkg => {
+    if (!pkg.dependencies.some(dependency => dependency.name === "wasm-bindgen-test")) return [];
+    return pkg.targets
+      .filter(target => {
+        if (!target.test) return false;
+        if (target.kind.includes("lib")) return treeContainsBrowserTests(dirname(target.src_path));
+        return target.kind.includes("test") && fileContainsBrowserTests(target.src_path);
+      })
+      .map(target => ({ packageName: pkg.name, target }));
+  });
+  if (browserTargets.length === 0) throw new Error("the workspace has no browser test targets");
+  for (const { packageName, target } of browserTargets) {
+    const selector = target.kind.includes("lib") ? ["--lib"] : ["--test", target.name];
     execFileSync(
       process.execPath,
       [import.meta.filename, selectedBrowserName, "-p", packageName, ...selector],
@@ -59,6 +56,22 @@ if (cargoArgs[0] === "--package-tests") {
     );
   }
   process.exit(0);
+}
+
+function fileContainsBrowserTests(path: string): boolean {
+  return readFileSync(path, "utf8").includes("wasm_bindgen_test");
+}
+
+function treeContainsBrowserTests(directory: string): boolean {
+  for (const entry of readdirSync(directory)) {
+    const path = join(directory, entry);
+    if (statSync(path).isDirectory()) {
+      if (treeContainsBrowserTests(path)) return true;
+    } else if (path.endsWith(".rs") && fileContainsBrowserTests(path)) {
+      return true;
+    }
+  }
+  return false;
 }
 const diagnosticsDirectory = mkdtempSync(join(tmpdir(), "wasm-junction-browser-"));
 const diagnosticsPath = join(diagnosticsDirectory, `${selectedBrowserName}.log`);
