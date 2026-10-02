@@ -8,8 +8,8 @@ use support::{
     FakeEngine, SETTINGS_CALLER, SETTINGS_HOST, SETTINGS_TARGET, block_on, component_bytes,
 };
 use wasm_junction::{
-    App, BoxFuture, Call, CallContext, CallError, Component, InterfaceHandle, Provided, Provider,
-    Val, Vals,
+    App, BoxFuture, Call, CallContext, CallError, Component, InterfaceHandle, InvocationId,
+    Middleware, Next, Provided, Provider, Val, Vals,
 };
 
 const SETTINGS_WIT: &str = r"
@@ -23,6 +23,20 @@ const SETTINGS_WIT: &str = r"
 
 #[derive(Clone)]
 struct Label(&'static str);
+
+#[derive(Clone, Default)]
+struct InvocationCalls(Arc<Mutex<Vec<(String, String, InvocationId)>>>);
+
+impl Middleware for InvocationCalls {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        self.0.lock().unwrap().push((
+            call.caller.to_string(),
+            call.callee.to_string(),
+            call.invocation_id(),
+        ));
+        next.run(call).await
+    }
+}
 
 #[derive(Clone)]
 struct Target(wasm_junction::Handle);
@@ -73,18 +87,16 @@ fn component(world: &str, name: &str) -> Component {
         .named(name)
 }
 
-fn app(host: SettingsHost) -> App {
-    App::builder()
-        .engine(FakeEngine)
-        .provide(Provided::new(SETTINGS_HOST, host))
-        .build()
-        .unwrap()
-}
-
 #[test]
 fn routed_components_use_their_own_settings() {
     let host = SettingsHost::default();
-    let app = app(host.clone());
+    let calls = InvocationCalls::default();
+    let app = App::builder()
+        .engine(FakeEngine)
+        .provide(Provided::new(SETTINGS_HOST, host.clone()))
+        .middleware(calls.clone())
+        .build()
+        .unwrap();
     app.configure("caller", Label("A")).unwrap();
     app.configure("callee", Label("B")).unwrap();
     block_on(app.load_all([
@@ -95,12 +107,30 @@ fn routed_components_use_their_own_settings() {
 
     let result = block_on(app.call("caller", SETTINGS_CALLER, "run", Vec::new())).unwrap();
     assert_eq!(result, [Val::Tuple(vec![Val::from("A"), Val::from("B")])]);
+    let recorded = calls.0.lock().unwrap();
+    let [outer, own_import, routed, reached_import] = recorded.as_slice() else {
+        panic!("unexpected routed calls: {recorded:?}")
+    };
+    assert_eq!(outer.2, own_import.2);
+    assert_eq!(outer.2, routed.2);
+    assert_ne!(routed.2, reached_import.2);
+    let first = outer.2;
+    drop(recorded);
+
+    block_on(app.call("caller", SETTINGS_CALLER, "run", Vec::new())).unwrap();
+    assert_ne!(calls.0.lock().unwrap()[4].2, first);
 }
 
 #[test]
 fn within_uses_the_reached_components_settings() {
     let host = SettingsHost::default();
-    let app = app(host.clone());
+    let calls = InvocationCalls::default();
+    let app = App::builder()
+        .engine(FakeEngine)
+        .provide(Provided::new(SETTINGS_HOST, host.clone()))
+        .middleware(calls.clone())
+        .build()
+        .unwrap();
     for (name, label) in [("within-caller", "A"), ("callee", "B")] {
         app.configure(name, Label(label)).unwrap();
         block_on(app.load(component("target-component", name))).unwrap();
@@ -109,4 +139,11 @@ fn within_uses_the_reached_components_settings() {
 
     let result = block_on(app.call("within-caller", SETTINGS_TARGET, "run", Vec::new())).unwrap();
     assert_eq!(result, [Val::from("B")]);
+    let recorded = calls.0.lock().unwrap();
+    let [outer, import, nested, nested_import] = recorded.as_slice() else {
+        panic!("unexpected within calls: {recorded:?}")
+    };
+    assert_eq!(outer.2, import.2);
+    assert_ne!(import.2, nested.2);
+    assert_eq!(nested.2, nested_import.2);
 }

@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::{Caller, Extensions, HostBound, InvocationContext};
+use crate::{Caller, Extensions, HostBound, InvocationContext, InvocationId};
 
 /// Information propagated through a call to a host provider.
 pub struct CallContext {
@@ -45,6 +45,12 @@ impl CallContext {
     #[must_use]
     pub const fn caller(&self) -> &Caller {
         &self.caller
+    }
+
+    /// Returns the invocation that made this host call.
+    #[must_use]
+    pub fn invocation_id(&self) -> Option<InvocationId> {
+        self.invocation.invocation_id()
     }
 
     /// Returns the values attached to this call.

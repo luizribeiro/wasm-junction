@@ -1,7 +1,7 @@
 use std::fmt::{self, Display};
 use std::sync::Arc;
 
-use crate::{Extensions, TypeError, Val, Vals};
+use crate::{Extensions, InvocationId, TypeError, Val, Vals};
 
 /// The origin of an invocation.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -28,6 +28,7 @@ impl Display for Caller {
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct Call {
+    invocation: InvocationId,
     /// The host or component that initiated the call.
     pub caller: Caller,
     /// The application name of the component receiving the call.
@@ -56,6 +57,7 @@ impl Call {
         args: Vals,
     ) -> Self {
         Self {
+            invocation: InvocationId::__UNASSIGNED,
             caller,
             callee: callee.into(),
             interface: interface.into(),
@@ -63,6 +65,28 @@ impl Call {
             args,
             extensions: Extensions::default(),
         }
+    }
+
+    /// Returns the invocation this call is made from or creates.
+    ///
+    /// A host call to an export carries the invocation it creates. A guest import carries the
+    /// caller's invocation, including when the import is routed to another component.
+    ///
+    /// ```
+    /// use wasm_junction::{Call, InvocationId};
+    ///
+    /// fn routed_ids(import: &Call, callee_invocation: InvocationId) {
+    ///     let caller_invocation = import.invocation_id();
+    ///     assert_ne!(caller_invocation, callee_invocation);
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn invocation_id(&self) -> InvocationId {
+        self.invocation
+    }
+
+    pub(crate) const fn set_invocation_id(&mut self, invocation: InvocationId) {
+        self.invocation = invocation;
     }
 
     /// Returns the data attached to this call.

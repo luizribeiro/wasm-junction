@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{self, Display};
 use std::panic::Location;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use semver::Version;
@@ -13,7 +14,8 @@ use crate::provider::ProvidedKind;
 use crate::{
     BoxFuture, Call, CallContext, CallError, Caller, CompiledComponent, Component, Engine,
     EngineError, Event, Extensions, HostBound, ImportDispatcher, ImportTarget, InvocationContext,
-    Middleware, Provided, Provider, Resource, Val, Vals, WASI_PROVIDER_NAME, WasiSettings,
+    InvocationId, Middleware, Provided, Provider, Resource, Val, Vals, WASI_PROVIDER_NAME,
+    WasiSettings,
 };
 
 mod lifecycle;
@@ -34,6 +36,7 @@ pub(crate) struct AppInner {
     settings: Mutex<BTreeMap<String, Extensions>>,
     handle_counts: Mutex<HashMap<(String, &'static str), usize>>,
     unloaded: Mutex<BTreeMap<String, Vec<Arc<str>>>>,
+    next_invocation: AtomicU64,
 }
 
 #[derive(Clone)]
@@ -502,6 +505,7 @@ impl App {
         context: InvocationContext,
     ) -> Result<Vals, CallError> {
         self.check_call_depth(&context)?;
+        let context = context.with_invocation_id(self.next_invocation_id()?);
         let (compiled, component_name, interface) = {
             let components = self.lock_components();
             let loaded = components
@@ -550,6 +554,7 @@ impl App {
         function: Arc<str>,
         args: Vals,
     ) -> Result<Vals, CallError> {
+        let context = self.ensure_invocation_id(context)?;
         let (destination, resolved_interface, target): (_, _, Arc<dyn CallTarget>) =
             match self.resolve_import(&caller, &interface) {
                 Ok(ResolvedImport::Host {
@@ -568,7 +573,10 @@ impl App {
                     interface,
                     compiled,
                 }) => {
-                    let context = context.descend().with_settings(self.settings_for(&name));
+                    let context = context
+                        .descend()
+                        .with_settings(self.settings_for(&name))
+                        .with_invocation_id(self.next_invocation_id()?);
                     self.check_call_depth(&context)?;
                     (
                         name.clone(),
@@ -629,6 +637,7 @@ impl App {
         args: Vals,
         target: Arc<dyn ImportTarget>,
     ) -> Result<Vals, CallError> {
+        let context = self.ensure_invocation_id(context)?;
         let call = call_for_invocation(
             &context,
             Call::new(Caller::Component(caller), "host", interface, function, args),
@@ -687,6 +696,27 @@ impl App {
             .get(component)
             .cloned()
             .unwrap_or_default()
+    }
+
+    fn ensure_invocation_id(
+        &self,
+        context: InvocationContext,
+    ) -> Result<InvocationContext, CallError> {
+        if context.invocation_id().is_some() {
+            Ok(context)
+        } else {
+            Ok(context.with_invocation_id(self.next_invocation_id()?))
+        }
+    }
+
+    fn next_invocation_id(&self) -> Result<InvocationId, CallError> {
+        self.0
+            .next_invocation
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                next.checked_add(1)
+            })
+            .map(InvocationId::__from_counter)
+            .map_err(|_| CallError::trap("invocation id space is exhausted"))
     }
 
     fn emit(&self, event: &Event) {
@@ -994,6 +1024,9 @@ fn values_are_plain(values: &[Val]) -> bool {
 }
 
 fn call_for_invocation(context: &InvocationContext, mut call: Call) -> Call {
+    if let Some(invocation) = context.invocation_id() {
+        call.set_invocation_id(invocation);
+    }
     *call.extensions_mut() = context.extensions().clone();
     call
 }
@@ -1587,6 +1620,7 @@ impl AppBuilder {
             settings: Mutex::new(BTreeMap::new()),
             handle_counts: Mutex::new(HashMap::new()),
             unloaded: Mutex::new(BTreeMap::new()),
+            next_invocation: AtomicU64::new(InvocationId::__first_counter()),
         })))
     }
 }
