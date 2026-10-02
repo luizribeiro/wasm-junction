@@ -17,8 +17,9 @@ use wasm_junction::{
     Next, Provided, Provider, Val, Vals, WasiConfig,
 };
 use wasm_junction_conformance::{
-    DECORATION, Fixture, FixtureHost, SUMMARIZER, TRANSLATOR, component, run_default, sample_note,
-    sample_summary, translator_component,
+    CYCLE_A, DECORATION, Fixture, FixtureHost, RoutedFixture, RoutedHost, SUMMARIZER, TRANSLATOR,
+    WRITER, component, cycle_a_component, cycle_b_component, run_default, run_routed, sample_note,
+    sample_summary, translator_component, writer_component,
 };
 use wasm_junction_jco::JcoEngine;
 
@@ -140,6 +141,26 @@ async fn default_engine_matches_the_engine_neutral_trace() {
 }
 
 #[wasm_bindgen_test]
+async fn routed_scenario_matches_the_engine_neutral_trace() {
+    run_routed(JcoEngine::new()).await.unwrap();
+}
+
+#[wasm_bindgen_test]
+async fn routed_calls_use_fresh_callee_instances() {
+    let engine = JcoEngine::new();
+    let fixture = RoutedFixture::new(engine.clone()).await.unwrap();
+    assert_eq!(
+        fixture.write("write", "one").await.unwrap(),
+        "host[session=42, hop=writer-to-translator]: one #1"
+    );
+    assert_eq!(
+        fixture.write("write", "two").await.unwrap(),
+        "host[session=42, hop=writer-to-translator]: two #1"
+    );
+    assert_eq!(engine.instantiations(), 4);
+}
+
+#[wasm_bindgen_test]
 async fn malformed_component_has_a_typed_compilation_error() {
     let result = JcoEngine::new()
         .compile(Arc::from(&b"not a component"[..]), WasiConfig::default())
@@ -162,6 +183,103 @@ impl Middleware for AwaitTimer {
         }
         next.run(call).await
     }
+}
+
+struct AwaitRoutedCall(Rc<Cell<bool>>);
+
+impl Middleware for AwaitRoutedCall {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.callee.as_ref() == "translator" {
+            JsFuture::from(delay(10))
+                .await
+                .map_err(|error| CallError::trap(format!("timer failed: {error:?}")))?;
+            self.0.set(true);
+        }
+        next.run(call).await
+    }
+}
+
+struct CountCalls(Rc<Cell<usize>>);
+
+impl Middleware for CountCalls {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        self.0.set(self.0.get() + 1);
+        next.run(call).await
+    }
+}
+
+#[wasm_bindgen_test]
+async fn nested_routed_call_can_await_a_timer() {
+    let waited = Rc::new(Cell::new(false));
+    let app = App::builder()
+        .engine(JcoEngine::new())
+        .provide(RoutedHost::default().provided())
+        .middleware(AwaitRoutedCall(waited.clone()))
+        .build()
+        .unwrap();
+    app.load_all([
+        Component::from_bytes(translator_component())
+            .unwrap()
+            .named("translator"),
+        Component::from_bytes(writer_component())
+            .unwrap()
+            .named("writer"),
+    ])
+    .await
+    .unwrap();
+    let result = app
+        .call("writer", WRITER, "write-async", vec![Val::from("async")])
+        .await
+        .unwrap();
+    assert_eq!(result, [Val::from("host: async #1")]);
+    assert!(waited.get());
+}
+
+#[wasm_bindgen_test]
+async fn cyclic_routed_calls_stop_at_the_depth_limit_without_leaking_errors() {
+    let calls = Rc::new(Cell::new(0));
+    let app = App::builder()
+        .engine(JcoEngine::new())
+        .max_call_depth(3)
+        .provide(RoutedHost::default().provided())
+        .middleware(CountCalls(calls.clone()))
+        .build()
+        .unwrap();
+    app.load_all([
+        Component::from_bytes(cycle_a_component())
+            .unwrap()
+            .named("a"),
+        Component::from_bytes(cycle_b_component())
+            .unwrap()
+            .named("b"),
+        Component::from_bytes(translator_component())
+            .unwrap()
+            .named("translator"),
+        Component::from_bytes(writer_component())
+            .unwrap()
+            .named("writer"),
+    ])
+    .await
+    .unwrap();
+
+    let error = app
+        .call("a", CYCLE_A, "recurse", vec![Val::U32(0)])
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.kind(),
+        CallErrorKind::Refused,
+        "{error:?}; calls={}",
+        calls.get()
+    );
+    assert_eq!(error.to_string(), "maximum call depth of 3 exceeded");
+    assert_eq!(calls.get(), 4);
+
+    let result = app
+        .call("writer", WRITER, "write", vec![Val::from("after")])
+        .await
+        .unwrap();
+    assert_eq!(result, [Val::from("host: after #1")]);
 }
 
 #[wasm_bindgen_test]
