@@ -10,6 +10,7 @@ use crate::{ComponentSettings, SessionId, TranslatorHop, decoration, notes, type
 pub struct FixtureHost {
     reads: Arc<AtomicUsize>,
     normalizations: Arc<AtomicUsize>,
+    settings: Arc<Mutex<Vec<Option<&'static str>>>>,
 }
 
 impl FixtureHost {
@@ -30,15 +31,21 @@ impl FixtureHost {
     pub fn reads(&self) -> usize {
         self.reads.load(Ordering::Relaxed)
     }
+
+    pub(crate) fn settings(&self) -> Vec<Option<&'static str>> {
+        lock_or_recover(&self.settings).clone()
+    }
 }
 
 impl notes::Host for FixtureHost {
     fn read(
         &self,
-        _context: &CallContext,
+        context: &CallContext,
         name: String,
     ) -> impl std::future::Future<Output = Result<Result<types::Note, String>, CallError>> {
         self.reads.fetch_add(1, Ordering::Relaxed);
+        let setting = context.settings::<ComponentSettings>().map(|value| value.0);
+        lock_or_recover(&self.settings).push(setting);
         std::future::ready(if name == "provider-refusal" {
             Err(CallError::refused("notes provider refused the call"))
         } else {

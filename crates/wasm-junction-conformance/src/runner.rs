@@ -284,6 +284,10 @@ pub async fn run_default() -> Result<Fixture, FixtureError> {
 }
 
 async fn check_fixture(fixture: Fixture) -> Result<Fixture, FixtureError> {
+    fixture
+        .app
+        .configure("summarizer", ComponentSettings("summarizer"))
+        .map_err(FixtureError::source)?;
     let handle = fixture
         .app
         .get::<summarizer::Summarizer>("summarizer")
@@ -295,6 +299,12 @@ async fn check_fixture(fixture: Fixture) -> Result<Fixture, FixtureError> {
     if result != Ok(summary()) {
         return Err(FixtureError::new(format!(
             "unexpected summary result: {result:?}"
+        )));
+    }
+    if fixture.host.settings() != [Some("summarizer")] {
+        return Err(FixtureError::new(format!(
+            "unexpected settings: {:?}",
+            fixture.host.settings()
         )));
     }
     let expected = EXPECTED_TRACE
