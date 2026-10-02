@@ -497,6 +497,25 @@ pub async fn run_streams(engine: impl Engine + 'static) -> Result<StreamFixture,
             fixture.trace.entries()
         )));
     }
+    let bytes = vec![0, 1, 127, 255];
+    let output = fixture
+        .call("echo-bytes", vec![Val::Bytes(bytes.clone())])
+        .await
+        .map_err(FixtureError::source)?;
+    if output != [Val::Bytes(bytes)] {
+        return Err(FixtureError::new(format!(
+            "unexpected byte-list round trip: {output:?}"
+        )));
+    }
+    let output = fixture
+        .call("echo-bytes", vec![Val::Bytes(Vec::new())])
+        .await
+        .map_err(FixtureError::source)?;
+    if output != [Val::Bytes(Vec::new())] {
+        return Err(FixtureError::new(format!(
+            "unexpected empty byte-list round trip: {output:?}"
+        )));
+    }
     Ok(fixture)
 }
 

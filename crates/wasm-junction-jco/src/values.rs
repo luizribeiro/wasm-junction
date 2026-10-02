@@ -189,6 +189,7 @@ fn default_value(ty: &ValueType) -> Result<Val, CallError> {
         ValueType::F64 => Val::F64(0.0),
         ValueType::Char => Val::Char('\0'),
         ValueType::String => Val::String(String::new()),
+        ValueType::List(element) if **element == ValueType::U8 => Val::Bytes(Vec::new()),
         ValueType::List(_) => Val::List(Vec::new()),
         ValueType::Tuple(types) => {
             Val::Tuple(types.iter().map(default_value).collect::<Result<_, _>>()?)
@@ -356,15 +357,11 @@ fn lower(
         (Val::F64(value), ValueType::F64) => JsValue::from_f64(value),
         (Val::Char(value), ValueType::Char) => JsValue::from_str(&value.to_string()),
         (Val::String(value), ValueType::String) => JsValue::from_str(&value),
-        (Val::List(values), ValueType::List(element)) if **element == ValueType::U8 => {
-            let bytes = values
-                .into_iter()
-                .map(|value| match value {
-                    Val::U8(value) => Ok(value),
-                    value => Err(wrong_val_type(element, &value)),
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            Uint8Array::from(bytes.as_slice()).into()
+        (Val::Bytes(values), ValueType::List(element)) if **element == ValueType::U8 => {
+            Uint8Array::from(values.as_slice()).into()
+        }
+        (value, ValueType::List(element)) if **element == ValueType::U8 => {
+            return Err(wrong_val_type(expected, &value));
         }
         (Val::List(values), ValueType::List(element)) => {
             lower_sequence(values, element, resources)?
@@ -461,7 +458,7 @@ fn lift(
             .ok_or_else(|| wrong_js_type(expected, &value)),
         ValueType::List(element) if **element == ValueType::U8 => value
             .dyn_into::<Uint8Array>()
-            .map(|values| Val::List(values.to_vec().into_iter().map(Val::U8).collect()))
+            .map(|values| Val::Bytes(values.to_vec()))
             .map_err(|value| wrong_js_type(expected, &value)),
         ValueType::List(element) => lift_sequence(value, element, resources).map(Val::List),
         ValueType::Tuple(elements) => {
@@ -1023,7 +1020,7 @@ mod tests {
     fn round_trips_lists_byte_lists_and_tuples() {
         let values = vec![
             Val::List(vec![Val::from("rust"), Val::from("wasm")]),
-            Val::List(vec![Val::U8(1), Val::U8(2)]),
+            Val::Bytes(vec![1, 2]),
             Val::Tuple(vec![Val::S32(-71), Val::S32(42)]),
         ];
         let signature = FunctionType {
@@ -1037,6 +1034,16 @@ mod tests {
         let lowered = lower_args(values.clone(), &signature).unwrap();
         assert!(lowered.get(1).is_instance_of::<Uint8Array>());
         assert_eq!(lift_args(&lowered, &signature).unwrap(), values);
+
+        let error = lower_args(
+            vec![Val::List(vec![Val::U8(1)])],
+            &FunctionType {
+                params: vec![ValueType::List(Box::new(ValueType::U8))],
+                result: None,
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("WIT `list`"), "{error}");
     }
 
     #[wasm_bindgen_test]

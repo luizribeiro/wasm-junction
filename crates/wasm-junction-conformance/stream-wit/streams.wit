@@ -11,6 +11,7 @@ interface host {
 }
 
 interface probe {
+  echo-bytes: func(bytes: list<u8>) -> list<u8>;
   motd: async func() -> string;
   audit: async func();
   optional: async func() -> string;

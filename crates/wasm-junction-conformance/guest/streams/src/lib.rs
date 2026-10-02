@@ -14,6 +14,10 @@ use wit_bindgen::StreamReader;
 struct Component;
 
 impl bindings::exports::example::streams::probe::Guest for Component {
+    fn echo_bytes(bytes: Vec<u8>) -> Vec<u8> {
+        bytes
+    }
+
     async fn motd() -> String {
         text(host::motd().collect().await)
     }
