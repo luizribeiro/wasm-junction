@@ -10,6 +10,17 @@ Run it from the repository root:
 nix develop -c cargo run -p wasm-junction-example-translate
 ```
 
+## In the browser
+
+Run the dedicated-Worker browser test in Chromium, Firefox, and WebKit:
+
+```sh
+nix develop -c scripts/browser-test all -- -p wasm-junction-example-translate --lib
+```
+
+The native entry point and the browser test call the same `run` function. In a browser, loading
+each embedded component also transpiles it to JavaScript on the Worker's thread.
+
 The executable demonstrates resolution at call time:
 
 1. It loads `deepl`, then a `writer` that imports the translator interface. The first draft is
