@@ -7,6 +7,7 @@ interface host {
   chunks: func() -> stream<u8>;
   advance: func();
   checkpoint: async func();
+  poison: async func(lines: stream<u8>);
 }
 
 interface probe {
@@ -20,6 +21,7 @@ interface probe {
   accept: async func(bytes: stream<u8>) -> string;
   return-host: func() -> stream<u8>;
   return-guest: func() -> stream<u8>;
+  poison-streams: async func();
 }
 
 world streams {

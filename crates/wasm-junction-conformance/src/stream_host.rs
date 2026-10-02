@@ -203,6 +203,14 @@ impl host::Host for StreamHost {
     fn checkpoint(&self, _cx: &CallContext) -> impl Future<Output = Result<(), CallError>> {
         std::future::ready(Ok(()))
     }
+
+    fn poison(
+        &self,
+        _cx: &CallContext,
+        _lines: InputStream,
+    ) -> impl Future<Output = Result<(), CallError>> {
+        std::future::ready(Err(CallError::refused("stream refused")))
+    }
 }
 
 fn ready<F: Future>(future: F) -> F::Output {

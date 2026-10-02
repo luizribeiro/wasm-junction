@@ -79,6 +79,15 @@ impl bindings::exports::example::streams::probe::Guest for Component {
         });
         reader
     }
+
+    async fn poison_streams() {
+        let host_stream = host::chunks();
+        let (mut writer, reader) = bindings::wit_stream::new();
+        host::poison(reader).await;
+        let _ = writer.write_all(b"after refusal".to_vec()).await;
+        let _ = host_stream.collect().await;
+        host::advance();
+    }
 }
 
 fn text(bytes: Vec<u8>) -> String {
