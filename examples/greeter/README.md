@@ -19,8 +19,8 @@ The files are intentionally self-contained:
 - `src/bindings.rs` generates the host traits, providers, typed call views, and typed handles from
   the WIT package with `wasm_junction::bindgen!`.
 - `src/trace.rs` is the example's tracing middleware.
-- `src/main.rs` uses Tokio to provide users, build the app, load the component, and make typed
-  calls.
+- `src/lib.rs` provides users, builds the app, loads the component, and makes typed calls.
+- `src/main.rs` uses Tokio to run that target-neutral workflow and print its output.
 - `tests/` runs the executable and checks its complete output.
 
 Call `.engine(…)` on the builder to override the target's default engine.
