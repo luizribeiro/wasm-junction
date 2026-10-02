@@ -11,6 +11,7 @@ use crate::GATED_WASI_INTERFACES;
 use crate::engine::StoreData;
 
 mod clocks;
+mod gates;
 mod linker;
 mod trampoline;
 
@@ -43,7 +44,6 @@ impl WasiView for WasiState {
 
 #[derive(Clone, Copy)]
 enum EnvironmentOperation {
-    Variables,
     Arguments,
 }
 
@@ -63,16 +63,6 @@ impl ImportTarget for EnvironmentTarget {
             }
             let mut state = lock(&state);
             match operation {
-                EnvironmentOperation::Variables => {
-                    cli::environment::Host::get_environment(&mut state.cli()).map(|entries| {
-                        Val::List(
-                            entries
-                                .into_iter()
-                                .map(|(name, value)| Val::Tuple(vec![name.into(), value.into()]))
-                                .collect(),
-                        )
-                    })
-                }
                 EnvironmentOperation::Arguments => {
                     cli::environment::Host::get_arguments(&mut state.cli())
                         .map(|values| Val::List(values.into_iter().map(Val::from).collect()))
@@ -85,23 +75,13 @@ impl ImportTarget for EnvironmentTarget {
 }
 
 pub(crate) fn add_gates(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    gates::add_environment(linker)?;
     add_environment_gate(linker)?;
     clocks::add_wall_clock_gate(linker)
 }
 
 fn add_environment_gate(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let mut instance = linker.instance(INTERFACE)?;
-    instance.func_wrap_async("get-environment", |mut store, (): ()| {
-        Box::new(async move {
-            let values = call_environment(
-                &mut store,
-                "get-environment",
-                EnvironmentOperation::Variables,
-            )
-            .await?;
-            Ok((decode_environment(&values)?,))
-        })
-    })?;
     instance.func_wrap_async("get-arguments", |mut store, (): ()| {
         Box::new(async move {
             let values =
@@ -180,26 +160,6 @@ pub(super) async fn dispatch(
         )
         .await
         .map_err(wasmtime::Error::new)
-}
-
-fn decode_environment(values: &[Val]) -> wasmtime::Result<Vec<(String, String)>> {
-    let [Val::List(entries)] = values else {
-        return Err(wasmtime::Error::msg(
-            "get-environment returned the wrong shape",
-        ));
-    };
-    entries
-        .iter()
-        .map(|entry| match entry {
-            Val::Tuple(fields) => match fields.as_slice() {
-                [Val::String(name), Val::String(value)] => Ok((name.clone(), value.clone())),
-                _ => Err(wasmtime::Error::msg(
-                    "environment tuple has the wrong shape",
-                )),
-            },
-            _ => Err(wasmtime::Error::msg("environment entry is not a tuple")),
-        })
-        .collect()
 }
 
 fn decode_arguments(values: &[Val]) -> wasmtime::Result<Vec<String>> {
