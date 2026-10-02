@@ -67,6 +67,7 @@ impl App {
             .ok_or_else(|| UnloadError::UnknownComponent(name.to_owned()))?;
         lock_or_recover(&self.0.unloaded)
             .insert(name.to_owned(), removed.generation.exports.clone());
+        lock_or_recover(&self.0.settings).remove(name);
         drop(components);
         self.emit(&crate::Event::Unload {
             component: Arc::from(name),

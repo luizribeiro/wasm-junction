@@ -29,6 +29,15 @@ pub const RESERVED_HOST: &str = "test:keywords/host";
 /// The interface used to verify invocation context propagation.
 pub const CONTEXT_TARGET: &str = "example:context/target@1.0.0";
 
+/// The host interface used to inspect per-component settings.
+pub const SETTINGS_HOST: &str = "test:settings/host@1.0.0";
+
+/// The component interface used to inspect per-component settings.
+pub const SETTINGS_TARGET: &str = "test:settings/target@1.0.0";
+
+/// The routed caller used to inspect settings on both sides of a boundary.
+pub const SETTINGS_CALLER: &str = "test:settings/caller@1.0.0";
+
 /// The host-resource bindgen fixture's exported interface.
 pub const RESOURCE_BINDGEN_CLIENT: &str = "test:resource-plugin/client@1.0.0";
 
@@ -413,17 +422,13 @@ impl CompiledComponent for UnusedComponent {
                     };
                     Ok(vec![format!("translated: {text}").into()])
                 }
-                CONTEXT_TARGET => {
-                    let marker = context
-                        .extensions()
-                        .get::<ContextMarker>()
-                        .ok_or_else(|| CallError::trap("invocation context marker is missing"))?;
-                    let added = context
-                        .extensions()
-                        .get::<MiddlewareMarker>()
-                        .map_or(0, |marker| marker.0);
-                    Ok(vec![Val::U32(marker.0), Val::U32(added)])
+                CONTEXT_TARGET => context_values(&context),
+                SETTINGS_TARGET => {
+                    imports
+                        .call(context, component, Arc::from(SETTINGS_HOST), function, args)
+                        .await
                 }
+                SETTINGS_CALLER => settings_route(imports, context, component).await,
                 RESOURCE_BINDGEN_CLIENT => {
                     let import = resource_import(&function)?;
                     imports
@@ -473,6 +478,44 @@ impl CompiledComponent for UnusedComponent {
             }
         })
     }
+}
+
+fn context_values(context: &InvocationContext) -> Result<Vals, CallError> {
+    let marker = context
+        .extensions()
+        .get::<ContextMarker>()
+        .ok_or_else(|| CallError::trap("invocation context marker is missing"))?;
+    let added = context
+        .extensions()
+        .get::<MiddlewareMarker>()
+        .map_or(0, |marker| marker.0);
+    Ok(vec![Val::U32(marker.0), Val::U32(added)])
+}
+
+async fn settings_route(
+    imports: Arc<dyn ImportDispatcher>,
+    context: InvocationContext,
+    component: Arc<str>,
+) -> Result<Vals, CallError> {
+    let own = imports
+        .call(
+            context.clone(),
+            component.clone(),
+            Arc::from(SETTINGS_HOST),
+            Arc::from("read"),
+            Vec::new(),
+        )
+        .await?;
+    let reached = imports
+        .call(
+            context,
+            component,
+            Arc::from(SETTINGS_TARGET),
+            Arc::from("run"),
+            Vec::new(),
+        )
+        .await?;
+    Ok(vec![Val::Tuple(vec![own[0].clone(), reached[0].clone()])])
 }
 
 async fn stream_import(
