@@ -21,6 +21,17 @@ Run it from the repository root:
 nix develop -c cargo run -p wasm-junction-example-audit
 ```
 
+## In the browser
+
+Run the dedicated-Worker browser test in Chromium, Firefox, and WebKit:
+
+```sh
+nix develop -c scripts/browser-test all -- -p wasm-junction-example-audit --lib
+```
+
+The native entry point and the browser test call the same `run` function. In a browser, loading
+the embedded component also transpiles it to JavaScript on the Worker's thread.
+
 Everything used by the example lives here: `wit/` defines the interfaces and world, `guest/` is
 the isolated component workspace, `build.rs` builds and componentizes it without WASI,
 `src/bindings.rs` generates host bindings, `src/trace.rs` contains the middleware, `src/lib.rs`
