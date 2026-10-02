@@ -91,8 +91,8 @@ fn lower(value: Val, expected: &ValueType) -> Result<JsValue, CallError> {
         (Val::Enum(case), ValueType::Enum(cases)) if cases.contains(&case) => {
             JsValue::from_str(&case)
         }
+        (Val::Flags(names), ValueType::Flags(flags)) => lower_flags(names, flags, expected)?,
         (_, ValueType::Unsupported(name)) => return Err(unsupported(name)),
-        (_, ValueType::Flags(_)) => return Err(unsupported("flags")),
         (_, ValueType::Option(_)) => return Err(unsupported("option")),
         (_, ValueType::Result { .. }) => return Err(unsupported("result")),
         (value, expected) => {
@@ -158,7 +158,7 @@ fn lift(value: JsValue, expected: &ValueType) -> Result<Val, CallError> {
             .filter(|case| cases.contains(case))
             .map(Val::Enum)
             .ok_or_else(|| mismatch(expected, &value, "unknown enum case")),
-        ValueType::Flags(_) => Err(unsupported("flags")),
+        ValueType::Flags(flags) => lift_flags(value, flags, expected),
         ValueType::Option(_) => Err(unsupported("option")),
         ValueType::Result { .. } => Err(unsupported("result")),
         ValueType::Unsupported(name) => Err(unsupported(name)),
@@ -336,6 +336,57 @@ fn lift_variant(
         case: tag,
         value: payload,
     })
+}
+
+fn lower_flags(
+    names: Vec<String>,
+    flags: &[String],
+    expected: &ValueType,
+) -> Result<JsValue, CallError> {
+    if names.iter().any(|name| !flags.contains(name)) {
+        return Err(mismatch(expected, &Val::Flags(names), "unknown flag"));
+    }
+    let object = Object::new();
+    for flag in flags {
+        Reflect::set(
+            &object,
+            &JsValue::from_str(&crate::types::js_name(flag)),
+            &JsValue::from_bool(names.contains(flag)),
+        )
+        .map_err(|error| mismatch(expected, &error, "could not set flag"))?;
+    }
+    Ok(object.into())
+}
+
+fn lift_flags(value: JsValue, flags: &[String], expected: &ValueType) -> Result<Val, CallError> {
+    if !value.is_object() || Array::is_array(&value) {
+        return Err(wrong_js_type(expected, &value));
+    }
+    let object = Object::from(value.clone());
+    for key in Object::keys(&object)
+        .iter()
+        .filter_map(|key| key.as_string())
+    {
+        if !flags.iter().any(|flag| crate::types::js_name(flag) == key) {
+            return Err(mismatch(expected, &value, &format!("unknown flag `{key}`")));
+        }
+    }
+    let mut names = Vec::new();
+    for flag in flags {
+        let key = JsValue::from_str(&crate::types::js_name(flag));
+        if Reflect::has(&object, &key)
+            .map_err(|error| mismatch(expected, &error, "could not inspect flag"))?
+        {
+            let active = Reflect::get(&object, &key)
+                .map_err(|error| mismatch(expected, &error, "could not read flag"))?
+                .as_bool()
+                .ok_or_else(|| mismatch(expected, &value, "flag was not a boolean"))?;
+            if active {
+                names.push(flag.clone());
+            }
+        }
+    }
+    Ok(Val::Flags(names))
 }
 
 fn one_char(value: String) -> Option<char> {
@@ -555,6 +606,45 @@ mod tests {
         assert!(error.contains("WIT `variant`"), "{error}");
         assert!(error.contains("missing"), "{error}");
         assert!(error.contains("unknown variant case"), "{error}");
+    }
+
+    #[wasm_bindgen_test]
+    fn round_trips_flags() {
+        let values = vec![Val::Flags(vec![
+            "short-form".to_owned(),
+            "detailed".to_owned(),
+        ])];
+        let signature = FunctionType {
+            params: vec![ValueType::Flags(vec![
+                "short-form".to_owned(),
+                "detailed".to_owned(),
+            ])],
+            result: None,
+        };
+        let lowered = lower_args(values.clone(), &signature).unwrap();
+        assert_eq!(
+            Reflect::get(&lowered.get(0), &"shortForm".into())
+                .unwrap()
+                .as_bool(),
+            Some(true)
+        );
+        assert_eq!(lift_args(&lowered, &signature).unwrap(), values);
+    }
+
+    #[wasm_bindgen_test]
+    fn refuses_an_unknown_flag() {
+        let error = lower_args(
+            vec![Val::Flags(vec!["missing".to_owned()])],
+            &FunctionType {
+                params: vec![ValueType::Flags(vec!["known".to_owned()])],
+                result: None,
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("WIT `flags`"), "{error}");
+        assert!(error.contains("missing"), "{error}");
+        assert!(error.contains("unknown flag"), "{error}");
     }
 
     #[wasm_bindgen_test]

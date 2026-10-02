@@ -252,7 +252,7 @@ fn value_type(resolve: &Resolve, ty: Type) -> ValueType {
     }
 }
 
-fn js_name(name: &str) -> String {
+pub(crate) fn js_name(name: &str) -> String {
     let mut uppercase = false;
     name.chars()
         .filter_map(|character| {
