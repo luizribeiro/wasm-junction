@@ -16,5 +16,5 @@ esac
 
 repo_dir=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 "$repo_dir/scripts/browser-test" "$browser" -- \
-  --release -p wasm-junction-jco --test browser browser_reload_benchmark -- \
+  --release -p wasm-junction-jco --test browser benchmark -- \
   --include-ignored --nocapture

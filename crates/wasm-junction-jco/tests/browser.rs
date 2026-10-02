@@ -20,12 +20,13 @@ use wasm_junction::{
     OutputStream, Provided, Provider, Resource, Val, Vals, WasiConfig,
 };
 use wasm_junction_conformance::{
-    CYCLE_A, DECORATION, Fixture, FixtureHost, PoisonHost, RELOAD_GATE, RESOURCE_CLIENT,
-    ReloadGreeter, ReloadHost, ResourceHost, RetainHost, RoutedFixture, RoutedHost, STREAM_PROBE,
-    SUMMARIZER, StreamHost, TRANSLATOR, WRITER, component, cycle_a_component, cycle_b_component,
-    reload_v1_component, reload_v2_component, resource_component, run_default, run_reload,
-    run_resource_refusal, run_resources, run_routed, run_streams, sample_note, sample_summary,
-    stream_component, translator_component, writer_component,
+    CYCLE_A, DECORATION, DISPATCH_PINGER, DISPATCH_RUNNER, Fixture, FixtureHost, PoisonHost,
+    RELOAD_GATE, RESOURCE_CLIENT, ReloadGreeter, ReloadHost, ResourceHost, RetainHost,
+    RoutedFixture, RoutedHost, STREAM_PROBE, SUMMARIZER, StreamHost, TRANSLATOR, WRITER, component,
+    cycle_a_component, cycle_b_component, dispatch_component, reload_v1_component,
+    reload_v2_component, resource_component, run_default, run_reload, run_resource_refusal,
+    run_resources, run_routed, run_streams, sample_note, sample_summary, stream_component,
+    translator_component, writer_component,
 };
 use wasm_junction_jco::JcoEngine;
 
@@ -258,6 +259,90 @@ async fn bidirectional_streams_match_the_engine_neutral_trace() {
 #[wasm_bindgen_test]
 async fn reload_scenario_matches_the_engine_neutral_trace() {
     run_reload(JcoEngine::new()).await.unwrap();
+}
+
+#[wasm_bindgen_test]
+#[ignore = "run through scripts/browser-bench"]
+async fn browser_dispatch_benchmark() {
+    const CALLS: u32 = 100_000;
+    const INSTANTIATIONS: u32 = 1_000;
+    const SAMPLES: usize = 5;
+
+    let app = App::builder()
+        .engine(JcoEngine::new())
+        .provide(Provided::new(DISPATCH_PINGER, DispatchHost))
+        .build()
+        .unwrap();
+    app.load(
+        Component::from_bytes(dispatch_component())
+            .unwrap()
+            .named("dispatch"),
+    )
+    .await
+    .unwrap();
+    dispatch_imports(&app, 1).await;
+    dispatch_noop(&app).await;
+
+    let mut imports = Vec::with_capacity(SAMPLES);
+    let mut instances = Vec::with_capacity(SAMPLES);
+    for _ in 0..SAMPLES {
+        let start = benchmark_now();
+        dispatch_imports(&app, CALLS).await;
+        imports.push((benchmark_now() - start) * 1_000.0 / f64::from(CALLS));
+
+        let start = benchmark_now();
+        for _ in 0..INSTANTIATIONS {
+            dispatch_noop(&app).await;
+        }
+        instances.push((benchmark_now() - start) * 1_000.0 / f64::from(INSTANTIATIONS));
+    }
+
+    benchmark_report(&format!(
+        "host import: {:.1} us/call; samples {imports:.1?}",
+        median(&imports)
+    ));
+    benchmark_report(&format!(
+        "fresh instance + noop export: {:.1} us/call; samples {instances:.1?}",
+        median(&instances)
+    ));
+}
+
+struct DispatchHost;
+
+impl Provider for DispatchHost {
+    fn call<'a>(
+        &'a self,
+        _context: &'a CallContext,
+        call: Call,
+    ) -> BoxFuture<'a, Result<Vals, CallError>> {
+        Box::pin(async move {
+            let [Val::U32(value)] = call.args.as_slice() else {
+                return Err(CallError::trap("ping expected one u32"));
+            };
+            Ok(vec![Val::U32(value + 1)])
+        })
+    }
+}
+
+async fn dispatch_imports(app: &App, iterations: u32) {
+    let values = app
+        .call(
+            "dispatch",
+            DISPATCH_RUNNER,
+            "imports",
+            vec![Val::U32(iterations)],
+        )
+        .await
+        .unwrap();
+    assert_eq!(values, [Val::U32(iterations)]);
+}
+
+async fn dispatch_noop(app: &App) {
+    let values = app
+        .call("dispatch", DISPATCH_RUNNER, "noop", Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(values, [Val::U32(0)]);
 }
 
 #[wasm_bindgen_test]
