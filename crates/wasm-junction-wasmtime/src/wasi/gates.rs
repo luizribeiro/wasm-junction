@@ -128,8 +128,16 @@ fn finish<T: FromVal>(outcome: Result<Vals, CallError>) -> wasmtime::Result<T> {
 }
 
 macro_rules! gate {
-    ($linker:ident, $iface:literal, $name:literal, $view:ident, $method:path,
-     ($($arg:ident: $ty:ty),*) -> $ok:ty) => {
+    ($linker:ident, $iface:literal, $name:literal, $view:ident, $method:path, plain,
+     $signature:tt -> $ok:ty) => {
+        gate!(@define $linker, $iface, $name, $view, $method, , $signature -> $ok);
+    };
+    ($linker:ident, $iface:literal, $name:literal, $view:ident, $method:path, resource,
+     $signature:tt -> $ok:ty) => {
+        gate!(@define $linker, $iface, $name, $view, $method, , $signature -> $ok);
+    };
+    (@define $linker:ident, $iface:literal, $name:literal, $view:ident, $method:path,
+     $($await:ident)?, ($($arg:ident: $ty:ty),*) -> $ok:ty) => {
         $linker.instance($iface)?.func_wrap_async(
             $name,
             |mut store, ($($arg,)*): ($($ty,)*)| Box::new(async move {
@@ -140,7 +148,7 @@ macro_rules! gate {
                     $(let $arg = <$ty>::from_val(
                         args.next().ok_or_else(|| shape("another argument"))?
                     )?;)*
-                    let value = $method(&mut views::$view(store.data_mut()) $(, $arg)*)
+                    let value = $method(&mut views::$view(store.data_mut()) $(, $arg)*) $(.$await)?
                         .map_err(|error| CallError::trap(error.to_string()))?;
                     Ok(vec![value.to_val()])
                 });
@@ -154,33 +162,33 @@ macro_rules! gate {
 pub(super) fn add_environment(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     gate!(linker, "wasi:cli/environment@0.2.12", "get-environment", cli,
         wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment,
-        () -> Vec<(String, String)>);
+        plain, () -> Vec<(String, String)>);
     gate!(linker, "wasi:cli/environment@0.2.12", "get-arguments", cli,
         wasmtime_wasi::p2::bindings::cli::environment::Host::get_arguments,
-        () -> Vec<String>);
+        plain, () -> Vec<String>);
     gate!(linker, "wasi:cli/environment@0.2.12", "initial-cwd", cli,
         wasmtime_wasi::p2::bindings::cli::environment::Host::initial_cwd,
-        () -> Option<String>);
+        plain, () -> Option<String>);
     Ok(())
 }
 
 pub(super) fn add_wall_clock(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     gate!(linker, "wasi:clocks/wall-clock@0.2.12", "now", clocks,
         wasmtime_wasi::p2::bindings::clocks::wall_clock::Host::now,
-        () -> Datetime);
+        plain, () -> Datetime);
     gate!(linker, "wasi:clocks/wall-clock@0.2.12", "resolution", clocks,
         wasmtime_wasi::p2::bindings::clocks::wall_clock::Host::resolution,
-        () -> Datetime);
+        plain, () -> Datetime);
     Ok(())
 }
 
 pub(super) fn add_monotonic_reads(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     gate!(linker, "wasi:clocks/monotonic-clock@0.2.12", "now", clocks,
         wasmtime_wasi::p2::bindings::clocks::monotonic_clock::Host::now,
-        () -> u64);
+        plain, () -> u64);
     gate!(linker, "wasi:clocks/monotonic-clock@0.2.12", "resolution", clocks,
         wasmtime_wasi::p2::bindings::clocks::monotonic_clock::Host::resolution,
-        () -> u64);
+        plain, () -> u64);
     Ok(())
 }
 
