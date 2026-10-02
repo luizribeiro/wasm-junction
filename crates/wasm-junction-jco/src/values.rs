@@ -93,8 +93,10 @@ fn lower(value: Val, expected: &ValueType) -> Result<JsValue, CallError> {
         }
         (Val::Flags(names), ValueType::Flags(flags)) => lower_flags(names, flags, expected)?,
         (Val::Option(value), ValueType::Option(payload)) => lower_option(value, payload, expected)?,
+        (Val::Result(value), ValueType::Result { ok, err }) => {
+            lower_nested_result(value, ok.as_deref(), err.as_deref(), expected)?
+        }
         (_, ValueType::Unsupported(name)) => return Err(unsupported(name)),
-        (_, ValueType::Result { .. }) => return Err(unsupported("result")),
         (value, expected) => {
             return Err(wrong_val_type(expected, &value));
         }
@@ -160,7 +162,9 @@ fn lift(value: JsValue, expected: &ValueType) -> Result<Val, CallError> {
             .ok_or_else(|| mismatch(expected, &value, "unknown enum case")),
         ValueType::Flags(flags) => lift_flags(value, flags, expected),
         ValueType::Option(payload) => lift_option(value, payload, expected),
-        ValueType::Result { .. } => Err(unsupported("result")),
+        ValueType::Result { ok, err } => {
+            lift_nested_result(value, ok.as_deref(), err.as_deref(), expected)
+        }
         ValueType::Unsupported(name) => Err(unsupported(name)),
     }
 }
@@ -450,6 +454,44 @@ fn tagged_parts(value: &JsValue, expected: &ValueType) -> Result<(String, JsValu
     Ok((tag, payload))
 }
 
+fn lower_nested_result(
+    value: Result<Option<Box<Val>>, Option<Box<Val>>>,
+    ok: Option<&ValueType>,
+    err: Option<&ValueType>,
+    expected: &ValueType,
+) -> Result<JsValue, CallError> {
+    let (tag, value, ty) = match value {
+        Ok(value) => ("ok", value, ok),
+        Err(value) => ("err", value, err),
+    };
+    let payload = match (value, ty) {
+        (Some(value), Some(ty)) => lower(*value, ty)?,
+        (None, None) => JsValue::UNDEFINED,
+        (value, _) => {
+            return Err(mismatch(expected, &value, "wrong payload for result case"));
+        }
+    };
+    tagged(tag, Some(payload), expected)
+}
+
+fn lift_nested_result(
+    value: JsValue,
+    ok: Option<&ValueType>,
+    err: Option<&ValueType>,
+    expected: &ValueType,
+) -> Result<Val, CallError> {
+    let (tag, payload) = tagged_parts(&value, expected)?;
+    let lift_payload = |ty: Option<&ValueType>| {
+        ty.map(|ty| lift(payload.clone(), ty).map(Box::new))
+            .transpose()
+    };
+    match tag.as_str() {
+        "ok" => lift_payload(ok).map(|value| Val::Result(Ok(value))),
+        "err" => lift_payload(err).map(|value| Val::Result(Err(value))),
+        _ => Err(mismatch(expected, &value, "unknown result case")),
+    }
+}
+
 fn one_char(value: String) -> Option<char> {
     let mut characters = value.chars();
     let character = characters.next()?;
@@ -729,6 +771,40 @@ mod tests {
                 .unwrap()
                 .as_string(),
             Some("some".to_owned())
+        );
+        assert_eq!(lift_args(&lowered, &signature).unwrap(), values);
+    }
+
+    #[wasm_bindgen_test]
+    fn round_trips_nested_results() {
+        let values = vec![
+            Val::Result(Ok(Some(Box::new(Val::Option(None))))),
+            Val::Result(Err(Some(Box::new(Val::from("denied"))))),
+            Val::Result(Ok(None)),
+        ];
+        let signature = FunctionType {
+            params: vec![
+                ValueType::Result {
+                    ok: Some(Box::new(ValueType::Option(Box::new(ValueType::U64)))),
+                    err: Some(Box::new(ValueType::String)),
+                },
+                ValueType::Result {
+                    ok: Some(Box::new(ValueType::Option(Box::new(ValueType::U64)))),
+                    err: Some(Box::new(ValueType::String)),
+                },
+                ValueType::Result {
+                    ok: None,
+                    err: None,
+                },
+            ],
+            result: None,
+        };
+        let lowered = lower_args(values.clone(), &signature).unwrap();
+        assert_eq!(
+            Reflect::get(&lowered.get(1), &"tag".into())
+                .unwrap()
+                .as_string(),
+            Some("err".to_owned())
         );
         assert_eq!(lift_args(&lowered, &signature).unwrap(), values);
     }
