@@ -1,91 +1,13 @@
 //! End-to-end byte-stream checks for the native engine.
 
-use std::future::poll_fn;
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
-use std::task::{Poll, Waker};
 use std::time::Duration;
 
-use wasm_junction::{
-    App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Component, InputStream,
-    OutputStream, Provided, Provider, Val, Vals,
-};
+use wasm_junction::{App, CallErrorKind, Component, InputStream, OutputStream, Val};
 use wasm_junction_conformance::{
-    STREAM_HOST, STREAM_PROBE, StreamHost, run_streams, stream_component,
+    RetainHost, STREAM_PROBE, StreamHost, run_streams, stream_component,
 };
 use wasm_junction_wasmtime::WasmtimeEngine;
-
-#[derive(Default)]
-struct RetainedStream {
-    first: Vec<u8>,
-    input: Option<InputStream>,
-    checkpoint: Option<Waker>,
-    first_checkpoint: bool,
-    second_ready: bool,
-    audit: Option<Waker>,
-}
-
-#[derive(Clone, Default)]
-struct RetainHost(Arc<Mutex<RetainedStream>>);
-
-impl Provider for RetainHost {
-    fn call<'a>(
-        &'a self,
-        _context: &'a CallContext,
-        call: Call,
-    ) -> BoxFuture<'a, Result<Vals, CallError>> {
-        Box::pin(async move {
-            if call.function.as_ref() == "checkpoint" {
-                poll_fn(|context| {
-                    let mut state = self.0.lock().unwrap();
-                    if state.first.is_empty() {
-                        state.checkpoint = Some(context.waker().clone());
-                        Poll::Pending
-                    } else if !state.first_checkpoint {
-                        state.first_checkpoint = true;
-                        Poll::Ready(())
-                    } else {
-                        state.second_ready = true;
-                        if let Some(audit) = state.audit.take() {
-                            audit.wake();
-                        }
-                        Poll::Ready(())
-                    }
-                })
-                .await;
-                return Ok(Vec::new());
-            }
-            let [value] = <[_; 1]>::try_from(call.args)
-                .map_err(|_| CallError::trap("audit expects one stream"))?;
-            let mut input = InputStream::try_from(value)?;
-            let first = input
-                .read()
-                .await
-                .map_err(|error| CallError::trap(error.to_string()))?
-                .ok_or_else(|| CallError::trap("guest stream closed before its first chunk"))?;
-            let checkpoint = {
-                let mut state = self.0.lock().unwrap();
-                state.first = first;
-                state.input = Some(input);
-                state.checkpoint.take()
-            };
-            if let Some(checkpoint) = checkpoint {
-                checkpoint.wake();
-            }
-            poll_fn(|context| {
-                let mut state = self.0.lock().unwrap();
-                if state.second_ready {
-                    Poll::Ready(())
-                } else {
-                    state.audit = Some(context.waker().clone());
-                    Poll::Pending
-                }
-            })
-            .await;
-            Ok(Vec::new())
-        })
-    }
-}
 
 #[test]
 fn bidirectional_streams_match_the_engine_neutral_trace() {
@@ -194,7 +116,7 @@ fn open_guest_stream_is_aborted_when_its_store_ends() {
             let host = RetainHost::default();
             let app = App::builder()
                 .engine(WasmtimeEngine::new().unwrap())
-                .provide(Provided::new(STREAM_HOST, host.clone()))
+                .provide(host.clone().provided())
                 .build()
                 .unwrap();
             app.load(
@@ -208,11 +130,8 @@ fn open_guest_stream_is_aborted_when_its_store_ends() {
                 .await
                 .unwrap();
 
-            let mut input = {
-                let mut retained = host.0.lock().unwrap();
-                assert_eq!(retained.first, b"written");
-                retained.input.take().unwrap()
-            };
+            assert_eq!(host.first(), b"written");
+            let mut input = host.take_input().unwrap();
             assert_eq!(input.read().await.unwrap(), Some(b"in flight".to_vec()));
             let error = input.read().await.unwrap_err();
             assert_eq!(
