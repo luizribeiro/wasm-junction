@@ -4,6 +4,7 @@ use wasm_junction_guest_build::build;
 
 fn main() -> std::io::Result<()> {
     println!("cargo::rerun-if-changed=guest");
+    println!("cargo::rerun-if-changed=dispatch-wit");
     println!("cargo::rerun-if-changed=resource-wit");
     println!("cargo::rerun-if-changed=reload-wit");
     println!("cargo::rerun-if-changed=stream-wit");
@@ -13,6 +14,7 @@ fn main() -> std::io::Result<()> {
         "notes_summary_guest.wasm",
         "notes-summary.wasm",
     )?;
+    build("guest/Cargo.toml", "dispatch_guest.wasm", "dispatch.wasm")?;
     build(
         "guest/Cargo.toml",
         "translator_guest.wasm",

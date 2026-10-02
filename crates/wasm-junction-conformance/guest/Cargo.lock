@@ -29,6 +29,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "dispatch-guest"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

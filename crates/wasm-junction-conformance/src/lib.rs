@@ -59,6 +59,10 @@ pub const RELOAD_GATE: &str = "example:reload/gate@0.1.0";
 pub const RELOAD_GREETER: &str = "example:reload/greeter@0.1.0";
 /// The reload fixture's routed caller interface.
 pub const RELOAD_WRITER: &str = "example:reload/writer@0.1.0";
+/// The dispatch fixture's imported host interface.
+pub const DISPATCH_PINGER: &str = "example:dispatch/pinger@0.1.0";
+/// The dispatch fixture's exported loop interface.
+pub const DISPATCH_RUNNER: &str = "example:dispatch/runner@0.1.0";
 
 pub(crate) struct SessionId(pub u32);
 pub(crate) struct TranslatorHop;
@@ -67,6 +71,12 @@ pub(crate) struct TranslatorHop;
 #[must_use]
 pub fn component() -> &'static [u8] {
     include_bytes!(concat!(env!("OUT_DIR"), "/notes-summary.wasm"))
+}
+
+/// Returns the fixture that repeatedly calls a plain host import.
+#[must_use]
+pub fn dispatch_component() -> &'static [u8] {
+    include_bytes!(concat!(env!("OUT_DIR"), "/dispatch.wasm"))
 }
 
 /// Returns the routed fixture's translator component.
@@ -151,6 +161,13 @@ mod tests {
         let writer = Component::from_bytes(writer_component()).unwrap();
         assert_eq!(writer.imports(), [TRANSLATOR]);
         assert_eq!(writer.exports(), [WRITER]);
+    }
+
+    #[test]
+    fn dispatch_component_has_one_import_and_one_export() {
+        let component = Component::from_bytes(dispatch_component()).unwrap();
+        assert_eq!(component.imports(), [DISPATCH_PINGER]);
+        assert_eq!(component.exports(), [DISPATCH_RUNNER]);
     }
 
     #[test]
