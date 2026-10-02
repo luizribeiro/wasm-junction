@@ -46,6 +46,12 @@ fn scope(value: Val, invocation: InvocationId) -> Val {
     }
 }
 
+fn scope_values(values: Vals, invocation: InvocationId) -> Vals {
+    values
+        .into_iter()
+        .map(|value| scope(value, invocation))
+        .collect()
+}
 impl ToVal for String {
     fn to_val(self) -> Val {
         Val::String(self)
@@ -72,6 +78,36 @@ impl FromVal for u64 {
         match value {
             Val::U64(value) => Ok(value),
             _ => Err(shape("u64")),
+        }
+    }
+}
+
+impl ToVal for bool {
+    fn to_val(self) -> Val {
+        Val::Bool(self)
+    }
+}
+
+impl FromVal for bool {
+    fn from_val(value: Val) -> Result<Self, CallError> {
+        match value {
+            Val::Bool(value) => Ok(value),
+            _ => Err(shape("bool")),
+        }
+    }
+}
+
+impl ToVal for u32 {
+    fn to_val(self) -> Val {
+        Val::U32(self)
+    }
+}
+
+impl FromVal for u32 {
+    fn from_val(value: Val) -> Result<Self, CallError> {
+        match value {
+            Val::U32(value) => Ok(value),
+            _ => Err(shape("u32")),
         }
     }
 }
@@ -185,24 +221,42 @@ fn finish<T: FromVal>(outcome: Result<Vals, CallError>) -> wasmtime::Result<T> {
     T::from_val(value).map_err(wasmtime::Error::new)
 }
 
+fn finish_unit(outcome: Result<Vals, CallError>) -> wasmtime::Result<()> {
+    let values = outcome.map_err(wasmtime::Error::new)?;
+    if values.is_empty() {
+        Ok(())
+    } else {
+        Err(wasmtime::Error::new(shape("no results")))
+    }
+}
+
 macro_rules! gate {
     ($linker:ident, $iface:literal, $name:literal, $view:ident, $method:path, plain,
      $signature:tt -> $ok:ty) => {
-        gate!(@define $linker, $iface, $name, $view, $method, , $signature -> $ok);
+        gate!(@define $linker, $iface, $name, $view, $method, , $signature -> $ok, one);
     };
     ($linker:ident, $iface:literal, $name:literal, $view:ident, $method:path, resource,
      $signature:tt -> $ok:ty) => {
-        gate!(@define $linker, $iface, $name, $view, $method, , $signature -> $ok);
+        gate!(@define $linker, $iface, $name, $view, $method, , $signature -> $ok, one);
+    };
+    ($linker:ident, $iface:literal, $name:literal, $view:ident, $method:path, borrowed,
+     ($($arg:ident: $ty:ty),*) -> ()) => {
+        gate!(@define $linker, $iface, $name, $view, $method, await,
+            ($($arg: $ty),*) -> (), unit);
+    };
+    ($linker:ident, $iface:literal, $name:literal, $view:ident, $method:path, borrowed,
+     $signature:tt -> $ok:ty) => {
+        gate!(@define $linker, $iface, $name, $view, $method, await,
+            $signature -> $ok, one);
     };
     (@define $linker:ident, $iface:literal, $name:literal, $view:ident, $method:path,
-     $($await:ident)?, ($($arg:ident: $ty:ty),*) -> $ok:ty) => {
+     $($await:ident)?, ($($arg:ident: $ty:ty),*) -> $ok:ty, $shape:ident) => {
         $linker.instance($iface)?.func_wrap_async(
             $name,
             |mut store, ($($arg,)*): ($($ty,)*)| Box::new(async move {
                 let invocation = store.data().context.invocation_id()
                     .ok_or_else(|| wasmtime::Error::msg("WASI call has no invocation id"))?;
-                let args = vec![$(scope($arg.to_val(), invocation)),*];
-                let _ = invocation;
+                let args = scope_values(vec![$($arg.to_val()),*], invocation);
                 let real: Real = |mut store, args| Box::pin(async move {
                     #[allow(unused_mut, unused_variables)]
                     let mut args = args.into_iter();
@@ -213,13 +267,17 @@ macro_rules! gate {
                         .map_err(|error| CallError::trap(error.to_string()))?;
                     let invocation = store.data().context.invocation_id()
                         .ok_or_else(|| CallError::trap("WASI call has no invocation id"))?;
-                    Ok(vec![scope(value.to_val(), invocation)])
+                    Ok(scope_values(gate!(@values value, $shape), invocation))
                 });
                 let outcome = trampoline::gate(&mut store, $iface, $name, args, real).await;
-                Ok((finish::<$ok>(outcome)?,))
+                gate!(@return outcome, $ok, $shape)
             }),
         )?;
     };
+    (@values $value:ident, one) => { vec![$value.to_val()] };
+    (@values $value:ident, unit) => {{ let _ = $value; Vec::new() }};
+    (@return $outcome:ident, $ok:ty, one) => { Ok((finish::<$ok>($outcome)?,)) };
+    (@return $outcome:ident, $ok:ty, unit) => {{ finish_unit($outcome)?; Ok(()) }};
 }
 
 pub(super) fn add_environment(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
@@ -261,6 +319,32 @@ pub(super) fn add_monotonic_clock(linker: &mut Linker<StoreData>) -> wasmtime::R
     Ok(())
 }
 
+pub(super) fn add_poll(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    linker.instance(POLLABLE_INTERFACE)?.resource_async(
+        POLLABLE,
+        wasmtime::component::ResourceType::host::<DynPollable>(),
+        |mut store, id| {
+            Box::new(async move {
+                store
+                    .data_mut()
+                    .wasi_table()
+                    .delete(Resource::<DynPollable>::new_own(id))?;
+                Ok(())
+            })
+        },
+    )?;
+    gate!(linker, "wasi:io/poll@0.2.12", "[method]pollable.ready", io,
+        wasmtime_wasi::p2::bindings::io::poll::HostPollable::ready,
+        borrowed, (pollable: Resource<DynPollable>) -> bool);
+    gate!(linker, "wasi:io/poll@0.2.12", "[method]pollable.block", io,
+        wasmtime_wasi::p2::bindings::io::poll::HostPollable::block,
+        borrowed, (pollable: Resource<DynPollable>) -> ());
+    gate!(linker, "wasi:io/poll@0.2.12", "poll", io,
+        wasmtime_wasi::p2::bindings::io::poll::Host::poll,
+        borrowed, (pollables: Vec<Resource<DynPollable>>) -> Vec<u32>);
+    Ok(())
+}
+
 mod views {
     use wasmtime_wasi::cli::WasiCliView;
     use wasmtime_wasi::clocks::WasiClocksView;
@@ -273,5 +357,9 @@ mod views {
 
     pub(super) fn clocks(store: &mut StoreData) -> wasmtime_wasi::clocks::WasiClocksCtxView<'_> {
         store.clocks()
+    }
+
+    pub(super) fn io(store: &mut StoreData) -> &mut wasmtime::component::ResourceTable {
+        store.wasi_table()
     }
 }

@@ -48,6 +48,13 @@ impl WasiView for StoreData {
     }
 }
 
+#[cfg(feature = "wasi")]
+impl StoreData {
+    pub(crate) fn wasi_table(&mut self) -> &mut wasmtime::component::ResourceTable {
+        &mut self.wasi.table
+    }
+}
+
 /// A native component engine backed by Wasmtime.
 #[derive(Clone)]
 pub struct WasmtimeEngine {

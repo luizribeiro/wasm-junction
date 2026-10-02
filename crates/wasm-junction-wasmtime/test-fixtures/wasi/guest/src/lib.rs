@@ -47,6 +47,10 @@ impl exports::test::wasi::environment::Guest for Component {
         let _ = wasi::clocks::monotonic_clock::resolution();
         drop(wasi::clocks::monotonic_clock::subscribe_instant(0));
         drop(wasi::clocks::monotonic_clock::subscribe_duration(0));
+        let pollable = wasi::clocks::monotonic_clock::subscribe_duration(0);
+        let _ = pollable.ready();
+        pollable.block();
+        let _ = wasi::io::poll::poll(&[&pollable]);
     }
 
     fn differential() -> String {

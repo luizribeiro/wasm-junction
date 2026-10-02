@@ -50,4 +50,5 @@ pub const GATED_WASI_INTERFACES: &[&str] = &[
     "wasi:cli/environment@0.2.12",
     "wasi:clocks/monotonic-clock@0.2.12",
     "wasi:clocks/wall-clock@0.2.12",
+    "wasi:io/poll@0.2.12",
 ];
