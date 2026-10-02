@@ -26,3 +26,20 @@ fn test_context_carries_attached_data() {
         Some(42)
     );
 }
+
+#[test]
+fn test_context_has_optional_type_indexed_settings() {
+    #[derive(Clone)]
+    struct Notebook(&'static str);
+
+    let empty = CallContext::for_test("writer");
+    assert!(empty.settings::<Notebook>().is_none());
+
+    let configured = empty
+        .with_setting(Notebook("drafts"))
+        .with_setting(Notebook("research"));
+    assert_eq!(
+        configured.settings::<Notebook>().map(|value| value.0),
+        Some("research")
+    );
+}

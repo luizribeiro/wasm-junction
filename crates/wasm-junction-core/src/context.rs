@@ -42,6 +42,7 @@ impl fmt::Debug for Extensions {
 #[derive(Clone, Default)]
 pub struct InvocationContext {
     extensions: Extensions,
+    settings: Extensions,
     call_depth: usize,
 }
 
@@ -53,6 +54,7 @@ impl InvocationContext {
         extensions.insert(value);
         Self {
             extensions,
+            settings: Extensions::default(),
             call_depth: 0,
         }
     }
@@ -63,12 +65,31 @@ impl InvocationContext {
         &self.extensions
     }
 
+    /// Returns the component settings captured for this invocation.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn settings(&self) -> &Extensions {
+        &self.settings
+    }
+
     /// Replaces the attached data while preserving the invocation depth.
     #[doc(hidden)]
     #[must_use]
     pub fn with_extensions(&self, extensions: Extensions) -> Self {
         Self {
             extensions,
+            settings: self.settings.clone(),
+            call_depth: self.call_depth,
+        }
+    }
+
+    /// Replaces the component settings while preserving per-call data and invocation depth.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_settings(&self, settings: Extensions) -> Self {
+        Self {
+            extensions: self.extensions.clone(),
+            settings,
             call_depth: self.call_depth,
         }
     }
@@ -82,6 +103,7 @@ impl InvocationContext {
     pub fn descend(&self) -> Self {
         Self {
             extensions: self.extensions.clone(),
+            settings: self.settings.clone(),
             call_depth: self.call_depth.saturating_add(1),
         }
     }

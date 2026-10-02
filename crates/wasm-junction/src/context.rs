@@ -32,6 +32,15 @@ impl CallContext {
         self
     }
 
+    /// Returns this test context with one component setting.
+    #[must_use]
+    pub fn with_setting<T: Any + HostBound>(mut self, value: T) -> Self {
+        let mut settings = self.invocation.settings().clone();
+        settings.insert(value);
+        self.invocation = self.invocation.with_settings(settings);
+        self
+    }
+
     /// Returns the host or named component that made the call.
     #[must_use]
     pub const fn caller(&self) -> &Caller {
@@ -52,6 +61,28 @@ impl CallContext {
     #[must_use]
     pub fn extensions(&self) -> &Extensions {
         self.invocation.extensions()
+    }
+
+    /// Returns the setting of type `T` captured for the current component invocation.
+    ///
+    /// Settings are optional and selected by their concrete type.
+    ///
+    /// ```
+    /// use wasm_junction::CallContext;
+    ///
+    /// #[derive(Clone, Debug, PartialEq)]
+    /// struct NotesSettings { notebook: String }
+    ///
+    /// let context = CallContext::for_test("writer")
+    ///     .with_setting(NotesSettings { notebook: "research".into() });
+    /// assert_eq!(
+    ///     context.settings::<NotesSettings>().map(|settings| settings.notebook.as_str()),
+    ///     Some("research"),
+    /// );
+    /// ```
+    #[must_use]
+    pub fn settings<T: Any + HostBound>(&self) -> Option<&T> {
+        self.invocation.settings().get()
     }
 
     pub(crate) const fn invocation(&self) -> &InvocationContext {
