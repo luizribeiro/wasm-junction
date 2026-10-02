@@ -36,6 +36,17 @@ struct RetainedState {
 #[derive(Clone, Default)]
 pub struct RetainHost(Arc<Mutex<RetainedState>>);
 
+#[derive(Default)]
+struct PoisonState {
+    source: Option<OutputStreamWriter>,
+    guest: Option<InputStream>,
+    advances: usize,
+}
+
+/// A host that refuses one import and records any later stream effects.
+#[derive(Clone, Default)]
+pub struct PoisonHost(Arc<Mutex<PoisonState>>);
+
 impl StreamHost {
     /// Wraps this host as the fixture's stream provider.
     #[must_use]
@@ -99,6 +110,71 @@ impl RetainHost {
             Ok(state) => state,
             Err(poisoned) => poisoned.into_inner(),
         }
+    }
+}
+
+impl PoisonHost {
+    /// Wraps this host as the fixture's stream provider.
+    #[must_use]
+    pub fn provided(self) -> Provided {
+        Provided::new(crate::STREAM_HOST, self)
+    }
+
+    /// Takes the guest stream retained by the refused import.
+    #[must_use]
+    pub fn take_guest(&self) -> Option<InputStream> {
+        self.lock().guest.take()
+    }
+
+    /// Takes the writer for the unread host stream.
+    #[must_use]
+    pub fn take_source(&self) -> Option<OutputStreamWriter> {
+        self.lock().source.take()
+    }
+
+    /// Returns how many later `advance` calls reached the host.
+    #[must_use]
+    pub fn advances(&self) -> usize {
+        self.lock().advances
+    }
+
+    fn lock(&self) -> MutexGuard<'_, PoisonState> {
+        match self.0.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+}
+
+impl Provider for PoisonHost {
+    fn call<'a>(
+        &'a self,
+        _context: &'a CallContext,
+        call: Call,
+    ) -> BoxFuture<'a, Result<Vals, CallError>> {
+        Box::pin(async move {
+            match call.function.as_ref() {
+                "chunks" => {
+                    let (writer, stream) = OutputStream::channel();
+                    writer.write(b"unread").await?;
+                    self.lock().source = Some(writer);
+                    Ok(vec![stream.into()])
+                }
+                "poison" => {
+                    let [value] = <[_; 1]>::try_from(call.args)
+                        .map_err(|_| CallError::trap("poison expects one stream"))?;
+                    self.lock().guest = Some(InputStream::try_from(value)?);
+                    Err(CallError::refused("stream refused"))
+                }
+                "advance" => {
+                    self.lock().advances += 1;
+                    Ok(Vec::new())
+                }
+                function => Err(CallError::unavailable(format!(
+                    "poison host has no `{function}` function"
+                ))),
+            }
+        })
     }
 }
 
