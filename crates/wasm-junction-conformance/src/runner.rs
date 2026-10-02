@@ -503,13 +503,13 @@ pub async fn run_reload(engine: impl Engine + 'static) -> Result<(), FixtureErro
     let slow = greeter.greet_slow("Ada");
     let mut slow = std::pin::pin!(slow);
     poll_fn(|context| match slow.as_mut().poll(context) {
-        Poll::Pending if host.entered() => Poll::Ready(Ok(())),
-        Poll::Pending => Poll::Pending,
+        Poll::Pending => Poll::Ready(Ok(())),
         Poll::Ready(result) => Poll::Ready(Err(FixtureError::new(format!(
             "slow call completed before reload: {result:?}"
         )))),
     })
     .await?;
+    host.wait_until_entered().await;
 
     app.reload(
         "greeter",

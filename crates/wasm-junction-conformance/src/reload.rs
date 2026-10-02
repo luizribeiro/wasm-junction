@@ -13,7 +13,9 @@ use crate::RELOAD_GATE;
 struct GateState {
     entered: bool,
     released: bool,
+    waiting: bool,
     waker: Option<Waker>,
+    entered_waker: Option<Waker>,
 }
 
 /// A host import that can suspend a reload fixture call.
@@ -31,6 +33,36 @@ impl ReloadHost {
     #[must_use]
     pub fn entered(&self) -> bool {
         self.lock().entered
+    }
+
+    /// Waits until a guest call has entered the gate provider.
+    pub async fn wait_until_entered(&self) {
+        poll_fn(|context| {
+            let mut state = self.lock();
+            if state.entered {
+                Poll::Ready(())
+            } else {
+                state.entered_waker = Some(context.waker().clone());
+                Poll::Pending
+            }
+        })
+        .await;
+    }
+
+    /// Prepares the gate for another suspended call.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the previous guest call is still waiting at the gate.
+    pub fn reset(&self) -> Result<(), CallError> {
+        let mut state = self.lock();
+        if state.waiting {
+            return Err(CallError::refused(
+                "cannot reset the reload gate while a call is waiting",
+            ));
+        }
+        *state = GateState::default();
+        Ok(())
     }
 
     /// Lets a suspended guest call continue.
@@ -61,12 +93,22 @@ impl Provider for ReloadHost {
                 return Err(CallError::unavailable("reload gate has no such function"));
             }
             poll_fn(|context| {
-                let mut state = self.lock();
-                state.entered = true;
-                if state.released {
+                let (released, entered_waker) = {
+                    let mut state = self.lock();
+                    state.entered = true;
+                    state.waiting = true;
+                    state.waker = Some(context.waker().clone());
+                    (state.released, state.entered_waker.take())
+                };
+                if let Some(waker) = entered_waker {
+                    waker.wake();
+                }
+                if released {
+                    let mut state = self.lock();
+                    state.waiting = false;
+                    state.waker = None;
                     Poll::Ready(Ok(Vec::new()))
                 } else {
-                    state.waker = Some(context.waker().clone());
                     Poll::Pending
                 }
             })
