@@ -6,7 +6,7 @@ use std::cell::RefCell;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Mutex;
 
-use crate::{CallError, HostBound};
+use crate::{CallError, HostBound, InvocationId};
 
 /// A host resource handle represented independently of any component engine.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -15,19 +15,56 @@ pub struct Resource {
     name: Arc<str>,
     id: u32,
     ownership: ResourceOwnership,
+    invocation: Option<InvocationId>,
 }
 
 impl Resource {
     /// Creates a handle for a resource owned by the recipient.
     #[must_use]
     pub fn owned(interface: impl Into<Arc<str>>, name: impl Into<Arc<str>>, id: u32) -> Self {
-        Self::new(interface, name, id, ResourceOwnership::Own)
+        Self::new(interface, name, id, ResourceOwnership::Own, None)
     }
 
     /// Creates a handle borrowed for the duration of a call.
     #[must_use]
     pub fn borrowed(interface: impl Into<Arc<str>>, name: impl Into<Arc<str>>, id: u32) -> Self {
-        Self::new(interface, name, id, ResourceOwnership::Borrow)
+        Self::new(interface, name, id, ResourceOwnership::Borrow, None)
+    }
+
+    /// Creates an invocation-owned handle for an engine-provided resource.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn __owned_for_invocation(
+        interface: impl Into<Arc<str>>,
+        name: impl Into<Arc<str>>,
+        id: u32,
+        invocation: InvocationId,
+    ) -> Self {
+        Self::new(
+            interface,
+            name,
+            id,
+            ResourceOwnership::Own,
+            Some(invocation),
+        )
+    }
+
+    /// Creates an invocation-borrowed handle for an engine-provided resource.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn __borrowed_for_invocation(
+        interface: impl Into<Arc<str>>,
+        name: impl Into<Arc<str>>,
+        id: u32,
+        invocation: InvocationId,
+    ) -> Self {
+        Self::new(
+            interface,
+            name,
+            id,
+            ResourceOwnership::Borrow,
+            Some(invocation),
+        )
     }
 
     fn new(
@@ -35,12 +72,14 @@ impl Resource {
         name: impl Into<Arc<str>>,
         id: u32,
         ownership: ResourceOwnership,
+        invocation: Option<InvocationId>,
     ) -> Self {
         Self {
             interface: interface.into(),
             name: name.into(),
             id,
             ownership,
+            invocation,
         }
     }
 
@@ -66,6 +105,13 @@ impl Resource {
     #[must_use]
     pub const fn ownership(&self) -> ResourceOwnership {
         self.ownership
+    }
+
+    /// Returns the invocation provenance attached by an engine.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn invocation_id(&self) -> Option<InvocationId> {
+        self.invocation
     }
 }
 
@@ -107,6 +153,30 @@ pub fn validate_resource_lowering(
         )));
     }
     Ok(expected_ownership == ResourceOwnership::Own)
+}
+
+/// Validates an engine resource's declared type, ownership, and invocation provenance.
+#[doc(hidden)]
+pub fn validate_resource_for_invocation(
+    resource: &Resource,
+    expected_interface: &str,
+    expected_name: &str,
+    expected_ownership: ResourceOwnership,
+    invocation: InvocationId,
+) -> Result<(), CallError> {
+    validate_resource_lowering(
+        resource,
+        expected_interface,
+        expected_name,
+        expected_ownership,
+    )?;
+    if resource.invocation_id() != Some(invocation) {
+        return Err(CallError::refused(format!(
+            "resource `{expected_interface}/{expected_name}#{}` does not belong to this invocation",
+            resource.id()
+        )));
+    }
+    Ok(())
 }
 
 /// A provider-owned table that keeps host resource values alive across calls.
@@ -300,8 +370,8 @@ impl<T> TableState<T> {
 mod tests {
     use std::sync::Arc;
 
-    use super::{TableState, validate_resource_lowering};
-    use crate::{Resource, ResourceOwnership, ResourceTable, Val};
+    use super::{TableState, validate_resource_for_invocation, validate_resource_lowering};
+    use crate::{InvocationId, Resource, ResourceOwnership, ResourceTable, Val};
 
     #[test]
     fn resource_value_preserves_identity_and_ownership() {
@@ -333,6 +403,31 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("resource type"));
+    }
+
+    #[test]
+    fn invocation_validation_rejects_foreign_and_unscoped_handles() {
+        let current = InvocationId::__from_counter(1);
+        let foreign = Resource::__borrowed_for_invocation(
+            "wasi:io/poll@0.2.12",
+            "pollable",
+            3,
+            InvocationId::__from_counter(2),
+        );
+        for resource in [
+            foreign,
+            Resource::borrowed("wasi:io/poll@0.2.12", "pollable", 3),
+        ] {
+            let error = validate_resource_for_invocation(
+                &resource,
+                "wasi:io/poll@0.2.12",
+                "pollable",
+                ResourceOwnership::Borrow,
+                current,
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("does not belong"));
+        }
     }
 
     #[test]

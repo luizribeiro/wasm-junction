@@ -20,6 +20,9 @@ pub use engine::{
 pub use error::{CallError, CallErrorKind};
 pub use future::{BoxFuture, HostBound, MaybeSend};
 pub use invocation::InvocationId;
-pub use resource::{Resource, ResourceOwnership, ResourceTable, validate_resource_lowering};
+pub use resource::{
+    Resource, ResourceOwnership, ResourceTable, validate_resource_for_invocation,
+    validate_resource_lowering,
+};
 pub use stream::{InputStream, OutputStream, OutputStreamWriter, StreamError, StreamHandle};
 pub use values::{TypeError, Val, Vals};
