@@ -17,7 +17,7 @@ use wasm_junction::{
     Next, Provided, Provider, Val, Vals, WasiConfig,
 };
 use wasm_junction_conformance::{
-    DECORATION, Fixture, FixtureHost, SUMMARIZER, TRANSLATOR, component, sample_note,
+    DECORATION, Fixture, FixtureHost, SUMMARIZER, TRANSLATOR, component, run_default, sample_note,
     sample_summary, translator_component,
 };
 use wasm_junction_jco::JcoEngine;
@@ -132,6 +132,11 @@ async fn full_note_matches_the_native_echo_result() {
     let fixture = Fixture::new(JcoEngine::new()).await.unwrap();
     let result = fixture.call("echo", vec![sample_note()]).await.unwrap();
     assert_eq!(result, [sample_note()]);
+}
+
+#[wasm_bindgen_test]
+async fn default_engine_matches_the_engine_neutral_trace() {
+    run_default().await.unwrap();
 }
 
 #[wasm_bindgen_test]

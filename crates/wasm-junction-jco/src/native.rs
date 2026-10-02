@@ -31,14 +31,12 @@ impl Engine for JcoEngine {
         bytes: Arc<[u8]>,
         _wasi: WasiConfig,
     ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
-        let result = transpile_component(&bytes)
-            .map(|plan| {
-                let _ = (&plan.source, &plan.modules);
-                #[cfg(test)]
-                let _ = &plan.signatures;
-                Arc::new(NativeCompiled { _plan: plan }) as Arc<dyn CompiledComponent>
-            })
-            .map_err(EngineError::new);
+        let result = transpile_component(&bytes).map(|plan| {
+            let _ = (&plan.source, &plan.modules);
+            #[cfg(test)]
+            let _ = &plan.signatures;
+            Arc::new(NativeCompiled { _plan: plan }) as Arc<dyn CompiledComponent>
+        });
         Box::pin(std::future::ready(result))
     }
 }

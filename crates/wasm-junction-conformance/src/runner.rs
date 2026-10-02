@@ -208,10 +208,22 @@ impl Fixture {
     /// Returns [`FixtureError`] if application construction, component inspection, or loading
     /// fails.
     pub async fn new(engine: impl Engine + 'static) -> Result<Self, FixtureError> {
+        Self::build(App::builder().engine(engine)).await
+    }
+
+    /// Builds and loads the notes-summary component with the target's default engine.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FixtureError`] if no default engine is enabled or setup and loading fail.
+    pub async fn with_default_engine() -> Result<Self, FixtureError> {
+        Self::build(App::builder()).await
+    }
+
+    async fn build(builder: wasm_junction::AppBuilder) -> Result<Self, FixtureError> {
         let host = FixtureHost::default();
         let trace = Trace::default();
-        let app = App::builder()
-            .engine(engine)
+        let app = builder
             .provide(host.clone().provided())
             .middleware(trace.clone())
             .build()
@@ -256,7 +268,19 @@ impl Fixture {
 ///
 /// Returns [`FixtureError`] if setup, invocation, output, or tracing differs from the contract.
 pub async fn run(engine: impl Engine + 'static) -> Result<Fixture, FixtureError> {
-    let fixture = Fixture::new(engine).await?;
+    check_fixture(Fixture::new(engine).await?).await
+}
+
+/// Runs the notes-summary scenario with the target's default engine.
+///
+/// # Errors
+///
+/// Returns [`FixtureError`] if setup, invocation, output, or tracing differs from the contract.
+pub async fn run_default() -> Result<Fixture, FixtureError> {
+    check_fixture(Fixture::with_default_engine().await?).await
+}
+
+async fn check_fixture(fixture: Fixture) -> Result<Fixture, FixtureError> {
     let handle = fixture
         .app
         .get::<summarizer::Summarizer>("summarizer")

@@ -61,7 +61,7 @@ impl Engine for JcoEngine {
         bytes: Arc<[u8]>,
         _wasi: WasiConfig,
     ) -> BoxFuture<'_, Result<Arc<dyn CompiledComponent>, EngineError>> {
-        let plan = transpile_component(&bytes).map_err(EngineError::new);
+        let plan = transpile_component(&bytes);
         let instantiations = self.instantiations.clone();
         Box::pin(async move {
             let plan = plan?;

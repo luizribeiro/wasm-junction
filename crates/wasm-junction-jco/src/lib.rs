@@ -4,6 +4,7 @@
 #![warn(missing_docs)]
 
 use js_component_bindgen::{AsyncMode, InstantiationMode, TranspileOpts, transpile};
+use wasm_junction_core::EngineError;
 
 #[cfg(any(test, target_family = "wasm"))]
 mod types;
@@ -18,10 +19,13 @@ struct TranspiledComponent {
     signatures: types::Signatures,
 }
 
-fn transpile_component(bytes: &[u8]) -> Result<TranspiledComponent, String> {
+fn transpile_component(bytes: &[u8]) -> Result<TranspiledComponent, EngineError> {
     #[cfg(any(test, target_family = "wasm"))]
-    let signatures = types::Signatures::from_component(bytes)
-        .map_err(|error| format!("could not transpile WebAssembly component: {error}"))?;
+    let signatures = types::Signatures::from_component(bytes).map_err(|error| {
+        EngineError::new(format!(
+            "could not transpile WebAssembly component: {error}"
+        ))
+    })?;
     let output = transpile(
         bytes,
         TranspileOpts {
@@ -36,17 +40,21 @@ fn transpile_component(bytes: &[u8]) -> Result<TranspiledComponent, String> {
             ..TranspileOpts::default()
         },
     )
-    .map_err(|error| format!("could not transpile WebAssembly component: {error:#}"))?;
+    .map_err(|error| {
+        EngineError::new(format!(
+            "could not transpile WebAssembly component: {error:#}"
+        ))
+    })?;
 
     let mut source = None;
     let mut modules = Vec::new();
     for (name, bytes) in output.files {
         let extension = std::path::Path::new(&name).extension();
         if extension.is_some_and(|extension| extension.eq_ignore_ascii_case("js")) {
-            source = Some(
-                String::from_utf8(bytes)
-                    .map_err(|error| format!("jco generated invalid UTF-8 JavaScript: {error}"))?,
-            );
+            let generated_source = String::from_utf8(bytes).map_err(|error| {
+                EngineError::new(format!("jco generated invalid UTF-8 JavaScript: {error}"))
+            })?;
+            source = Some(repair_char_lowering(&generated_source)?);
         } else if extension.is_some_and(|extension| extension.eq_ignore_ascii_case("wasm")) {
             modules.push((name, bytes));
         }
@@ -58,7 +66,34 @@ fn transpile_component(bytes: &[u8]) -> Result<TranspiledComponent, String> {
             #[cfg(any(test, target_family = "wasm"))]
             signatures,
         })
-        .ok_or_else(|| "jco did not generate a JavaScript module".to_owned())
+        .ok_or_else(|| EngineError::new("jco did not generate a JavaScript module"))
+}
+
+fn repair_char_lowering(source: &str) -> Result<String, EngineError> {
+    const INTRINSIC: &str = "_lowerFlatChar";
+    const BROKEN_LOWERING: &str =
+        "new DataView(ctx.memory.buffer).setUint32(ctx.storagePtr, i32ToChar(ctx.vals[0]), true);";
+    if !source.contains(INTRINSIC) {
+        return Ok(source.to_owned());
+    }
+    if !source.contains(BROKEN_LOWERING) {
+        return Err(EngineError::new(
+            "jco generated an unrecognized `_lowerFlatChar` implementation",
+        ));
+    }
+    // js-component-bindgen 2.13's lowering path calls the lifting helper `i32ToChar` on a string.
+    Ok(source.replace(
+        BROKEN_LOWERING,
+        "const value = ctx.vals[0];\n\
+         if (typeof value !== 'string' || [...value].length !== 1) {\n\
+           throw new TypeError('invalid WIT char');\n\
+         }\n\
+         const codePoint = value.codePointAt(0);\n\
+         if (codePoint >= 0xD800 && codePoint <= 0xDFFF) {\n\
+           throw new TypeError('invalid WIT char');\n\
+         }\n\
+         new DataView(ctx.memory.buffer).setUint32(ctx.storagePtr, codePoint, true);",
+    ))
 }
 
 #[cfg(target_family = "wasm")]
@@ -116,6 +151,9 @@ mod tests {
             .source;
         assert!(source.contains("WebAssembly.Suspending"));
         assert!(source.contains("WebAssembly.promising"));
+        assert!(source.contains("invalid WIT char"));
+        assert!(source.contains("codePoint >= 0xD800 && codePoint <= 0xDFFF"));
+        assert!(!source.contains("i32ToChar(ctx.vals[0])"));
         let output = transpile_component(wasm_junction_conformance::component()).unwrap();
         let signature = output
             .signatures
@@ -129,7 +167,26 @@ mod tests {
     #[test]
     fn refuses_non_component_bytes_with_context() {
         let error = transpile_component(b"not a component").unwrap_err();
-        assert!(error.starts_with("could not transpile WebAssembly component:"));
+        assert!(
+            error
+                .to_string()
+                .starts_with("could not transpile WebAssembly component:")
+        );
+    }
+
+    #[test]
+    fn refuses_an_unrecognized_char_lowerer() {
+        let error = repair_char_lowering("function _lowerFlatChar() { return 0; }").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "jco generated an unrecognized `_lowerFlatChar` implementation"
+        );
+    }
+
+    #[test]
+    fn leaves_source_without_a_char_lowerer_untouched() {
+        let source = "export const answer = 42;";
+        assert_eq!(repair_char_lowering(source).unwrap(), source);
     }
 
     fn is_static_import(line: &str) -> bool {
