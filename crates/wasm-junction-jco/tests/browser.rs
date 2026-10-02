@@ -14,14 +14,15 @@ use wasm_encoder::{CodeSection, EntityType, ExportKind, ExportSection, Function,
 use wasm_encoder::{ImportSection, Instruction, Module, TypeSection, ValType};
 use wasm_junction::{
     App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Component, Engine,
-    ImportDispatcher, InvocationContext, Middleware, Next, Provided, Provider, Resource, Val, Vals,
-    WasiConfig,
+    ImportDispatcher, InputStream, InvocationContext, Middleware, Next, OutputStream, Provided,
+    Provider, Resource, Val, Vals, WasiConfig,
 };
 use wasm_junction_conformance::{
     CYCLE_A, DECORATION, Fixture, FixtureHost, RESOURCE_CLIENT, ResourceHost, RoutedFixture,
-    RoutedHost, SUMMARIZER, TRANSLATOR, WRITER, component, cycle_a_component, cycle_b_component,
-    resource_component, run_default, run_resource_refusal, run_resources, run_routed, run_streams,
-    sample_note, sample_summary, translator_component, writer_component,
+    RoutedHost, STREAM_PROBE, SUMMARIZER, StreamHost, TRANSLATOR, WRITER, component,
+    cycle_a_component, cycle_b_component, resource_component, run_default, run_resource_refusal,
+    run_resources, run_routed, run_streams, sample_note, sample_summary, stream_component,
+    translator_component, writer_component,
 };
 use wasm_junction_jco::JcoEngine;
 
@@ -197,6 +198,85 @@ async fn refused_resource_call_defers_the_drop_to_cleanup() {
 #[wasm_bindgen_test]
 async fn bidirectional_streams_match_the_engine_neutral_trace() {
     run_streams(JcoEngine::new()).await.unwrap();
+}
+
+#[wasm_bindgen_test]
+async fn host_streams_reach_the_guest_and_close_on_early_drop() {
+    let host = StreamHost::default();
+    let app = App::builder()
+        .engine(JcoEngine::new())
+        .provide(host.clone().provided())
+        .build()
+        .unwrap();
+    app.load(
+        Component::from_bytes(stream_component())
+            .unwrap()
+            .named("streams"),
+    )
+    .await
+    .unwrap();
+
+    let mut nested = app
+        .call(
+            "streams",
+            STREAM_PROBE,
+            "echo-optional",
+            vec![Val::Option(Some(Box::new(
+                OutputStream::from_bytes(b"nested export").into(),
+            )))],
+        )
+        .await
+        .unwrap();
+    let Val::Option(Some(stream)) = nested.remove(0) else {
+        panic!("echo-optional did not return a stream option");
+    };
+    assert_eq!(
+        InputStream::try_from(*stream)
+            .unwrap()
+            .read_all()
+            .await
+            .unwrap(),
+        b"nested export"
+    );
+
+    app.call("streams", STREAM_PROBE, "drop-early", Vec::new())
+        .await
+        .unwrap();
+    assert!(host.reader_closed());
+    assert_eq!(
+        host.write_error().as_deref(),
+        Some("stream reader is closed")
+    );
+
+    let error = app
+        .call("streams", STREAM_PROBE, "return-guest", Vec::new())
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert!(error.to_string().contains("store ends with each call"));
+}
+
+#[wasm_bindgen_test]
+async fn guest_reads_the_first_chunk_before_requesting_the_second() {
+    let host = StreamHost::default();
+    let app = App::builder()
+        .engine(JcoEngine::new())
+        .provide(host.clone().provided())
+        .build()
+        .unwrap();
+    app.load(
+        Component::from_bytes(stream_component())
+            .unwrap()
+            .named("streams"),
+    )
+    .await
+    .unwrap();
+    let result = app
+        .call("streams", STREAM_PROBE, "incremental", Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(result, [Val::from("first second")]);
+    assert!(host.advanced());
 }
 
 #[wasm_bindgen_test]
