@@ -1,5 +1,6 @@
-use wasm_junction_core::{CallError, Val, Vals};
-use wasmtime::component::Linker;
+use wasm_junction_core::{CallError, Resource as JunctionResource, ResourceOwnership, Val, Vals};
+use wasmtime::component::{Linker, Resource};
+use wasmtime_wasi::p2::DynPollable;
 use wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime;
 
 use super::trampoline::{self, Real};
@@ -43,6 +44,35 @@ impl FromVal for u64 {
         match value {
             Val::U64(value) => Ok(value),
             _ => Err(shape("u64")),
+        }
+    }
+}
+
+const POLLABLE_INTERFACE: &str = "wasi:io/poll@0.2.12";
+const POLLABLE: &str = "pollable";
+
+impl ToVal for Resource<DynPollable> {
+    fn to_val(self) -> Val {
+        Val::Resource(if self.owned() {
+            JunctionResource::owned(POLLABLE_INTERFACE, POLLABLE, self.rep())
+        } else {
+            JunctionResource::borrowed(POLLABLE_INTERFACE, POLLABLE, self.rep())
+        })
+    }
+}
+
+impl FromVal for Resource<DynPollable> {
+    fn from_val(value: Val) -> Result<Self, CallError> {
+        match value {
+            Val::Resource(resource)
+                if resource.interface() == POLLABLE_INTERFACE && resource.name() == POLLABLE =>
+            {
+                Ok(match resource.ownership() {
+                    ResourceOwnership::Own => Self::new_own(resource.id()),
+                    ResourceOwnership::Borrow => Self::new_borrow(resource.id()),
+                })
+            }
+            _ => Err(shape(POLLABLE)),
         }
     }
 }
