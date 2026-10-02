@@ -14,7 +14,7 @@ mod values;
 pub use context::{Extensions, InvocationContext};
 pub use engine::{
     ChannelDirection, CompiledComponent, Engine, EngineError, ImportDispatcher, ImportTarget,
-    WasiConfig,
+    WASI_PROVIDER_NAME, WasiConfig,
 };
 pub use error::{CallError, CallErrorKind};
 pub use future::{BoxFuture, HostBound, MaybeSend};

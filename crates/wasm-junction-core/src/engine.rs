@@ -4,6 +4,9 @@ use std::{error::Error, fmt};
 
 use crate::{BoxFuture, CallError, HostBound, InvocationContext, Resource, Vals};
 
+/// Name shared by applications and engines for the built-in WASI provider.
+pub const WASI_PROVIDER_NAME: &str = "WASI";
+
 /// The direction bytes travel across a component boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChannelDirection {
@@ -84,6 +87,16 @@ pub trait Engine: HostBound {
     /// Reports whether this engine supplies an imported interface directly.
     fn supports_import(&self, _interface: &str) -> bool {
         false
+    }
+
+    /// Returns the interfaces supplied by a named engine-provided provider.
+    ///
+    /// Engine and facade crates must use a shared provider-name constant, such as
+    /// [`WASI_PROVIDER_NAME`]. The application matches the returned versioned interface names
+    /// semver-compatibly against guest imports. Return `None` when the engine does not implement
+    /// the named provider so registration fails during application construction.
+    fn provider_interfaces(&self, _provider: &str) -> Option<&'static [&'static str]> {
+        None
     }
 
     /// Compiles component bytes into a reusable execution plan.

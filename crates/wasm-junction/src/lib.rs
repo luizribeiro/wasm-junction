@@ -15,6 +15,8 @@ mod component;
 mod context;
 mod middleware;
 mod provider;
+#[cfg(feature = "wasi")]
+pub mod wasi;
 
 pub use app::{
     App, AppBuilder, BuildError, Candidate, CheckError, ConfigureError, GetError, Handle,
@@ -30,7 +32,7 @@ pub use wasm_junction_core::{
     BoxFuture, CallError, CallErrorKind, ChannelDirection, CompiledComponent, Engine, EngineError,
     Extensions, HostBound, ImportDispatcher, ImportTarget, InputStream, InvocationContext,
     MaybeSend, OutputStream, OutputStreamWriter, Resource, ResourceOwnership, ResourceTable,
-    StreamError, StreamHandle, TypeError, Val, Vals, WasiConfig,
+    StreamError, StreamHandle, TypeError, Val, Vals, WASI_PROVIDER_NAME, WasiConfig,
 };
 /// Generates bindings for every interface in a local WIT package.
 ///

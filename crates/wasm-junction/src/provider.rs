@@ -34,8 +34,15 @@ pub trait Provider: HostBound {
 
 /// A provider paired with the fully qualified interface it implements.
 pub struct Provided {
-    interface: &'static str,
-    provider: Arc<dyn Provider>,
+    kind: ProvidedKind,
+}
+
+pub(crate) enum ProvidedKind {
+    Interface {
+        interface: &'static str,
+        provider: Arc<dyn Provider>,
+    },
+    Engine(&'static str),
 }
 
 impl Provided {
@@ -43,22 +50,36 @@ impl Provided {
     #[must_use]
     pub fn new(interface: &'static str, provider: impl Provider + 'static) -> Self {
         Self {
-            interface,
-            provider: Arc::new(provider),
+            kind: ProvidedKind::Interface {
+                interface,
+                provider: Arc::new(provider),
+            },
         }
     }
 
-    pub(crate) fn into_parts(self) -> (&'static str, Arc<dyn Provider>) {
-        (self.interface, self.provider)
+    pub(crate) const fn engine(name: &'static str) -> Self {
+        Self {
+            kind: ProvidedKind::Engine(name),
+        }
+    }
+
+    pub(crate) fn into_kind(self) -> ProvidedKind {
+        self.kind
     }
 }
 
 impl std::fmt::Debug for Provided {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("Provided")
-            .field("interface", &self.interface)
-            .field("provider", &Arc::as_ptr(&self.provider))
-            .finish()
+        let mut debug = formatter.debug_struct("Provided");
+        match &self.kind {
+            ProvidedKind::Interface {
+                interface,
+                provider,
+            } => debug
+                .field("interface", interface)
+                .field("provider", &Arc::as_ptr(provider)),
+            ProvidedKind::Engine(name) => debug.field("engine_provider", name),
+        }
+        .finish()
     }
 }

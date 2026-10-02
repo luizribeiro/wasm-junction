@@ -9,6 +9,7 @@ use semver::Version;
 
 use crate::component::ComponentParts;
 use crate::middleware::{CallTarget, ErasedMiddleware};
+use crate::provider::ProvidedKind;
 use crate::{
     BoxFuture, Call, CallContext, CallError, Caller, CompiledComponent, Component, Engine,
     EngineError, Event, Extensions, HostBound, ImportDispatcher, ImportTarget, InvocationContext,
@@ -24,6 +25,7 @@ pub struct App(pub(crate) Arc<AppInner>);
 pub(crate) struct AppInner {
     engine: Arc<dyn Engine>,
     providers: HashMap<&'static str, Arc<dyn Provider>>,
+    engine_interfaces: Vec<&'static str>,
     #[allow(dead_code, reason = "export dispatch runs the middleware chain")]
     middleware: Arc<[Arc<dyn ErasedMiddleware>]>,
     wasi: WasiConfig,
@@ -96,6 +98,15 @@ impl App {
     #[must_use]
     pub fn builder() -> AppBuilder {
         AppBuilder::default()
+    }
+
+    fn engine_provides(&self, requested: &str) -> bool {
+        self.0.engine.supports_import(requested)
+            || self
+                .0
+                .engine_interfaces
+                .iter()
+                .any(|provided| interfaces_compatible(requested, provided))
     }
 
     /// Configures one component with a setting selected by its concrete type.
@@ -307,7 +318,7 @@ impl App {
         let mut ambiguous = Vec::new();
         for (consumer, component) in components {
             for import in &component.imports {
-                let candidates = if self.0.engine.supports_import(import) {
+                let candidates = if self.engine_provides(import) {
                     vec![Candidate::Host]
                 } else {
                     prospective_candidates(&self.0.providers, components, consumer, import)
@@ -428,7 +439,7 @@ impl App {
         let mut issues = imports
             .into_iter()
             .filter_map(|(component, interface)| {
-                if self.0.engine.supports_import(&interface) {
+                if self.engine_provides(&interface) {
                     return None;
                 }
                 match self.resolve_import(&component, &interface) {
@@ -1542,21 +1553,32 @@ impl AppBuilder {
     ) -> Result<App, BuildError> {
         let engine = self.engine.map_or_else(default, Ok)?;
         let mut providers = HashMap::new();
+        let mut engine_interfaces = Vec::new();
         let mut locations = HashMap::new();
         for registration in self.providers {
-            let (interface, provider) = registration.provided.into_parts();
-            if let Some(first) = locations.insert(interface, registration.location) {
-                return Err(BuildError::DuplicateProvider {
+            match registration.provided.into_kind() {
+                ProvidedKind::Interface {
                     interface,
-                    first,
-                    second: registration.location,
-                });
+                    provider,
+                } => {
+                    register_location(&mut locations, interface, registration.location)?;
+                    providers.insert(interface, provider);
+                }
+                ProvidedKind::Engine(name) => {
+                    let interfaces = engine
+                        .provider_interfaces(name)
+                        .ok_or(BuildError::UnsupportedEngineProvider { provider: name })?;
+                    for &interface in interfaces {
+                        register_location(&mut locations, interface, registration.location)?;
+                        engine_interfaces.push(interface);
+                    }
+                }
             }
-            providers.insert(interface, provider);
         }
         Ok(App(Arc::new(AppInner {
             engine,
             providers,
+            engine_interfaces,
             middleware: self.middleware.into(),
             wasi: self.wasi,
             max_call_depth: self.max_call_depth.unwrap_or(64),
@@ -1576,6 +1598,11 @@ pub enum BuildError {
     MissingEngine,
     /// The target's default engine could not be initialized.
     DefaultEngine(EngineError),
+    /// The selected engine does not implement a registered built-in provider.
+    UnsupportedEngineProvider {
+        /// The provider requested by the application.
+        provider: &'static str,
+    },
     /// More than one provider was registered for an interface.
     DuplicateProvider {
         /// The duplicated interface.
@@ -1596,6 +1623,9 @@ impl Display for BuildError {
                 env!("WASM_JUNCTION_TARGET")
             ),
             Self::DefaultEngine(error) => write!(formatter, "default engine failed: {error}"),
+            Self::UnsupportedEngineProvider { provider } => {
+                write!(formatter, "selected engine does not provide {provider} yet")
+            }
             Self::DuplicateProvider {
                 interface,
                 first,
@@ -1612,8 +1642,26 @@ impl Error for BuildError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::DefaultEngine(error) => Some(error),
-            Self::MissingEngine | Self::DuplicateProvider { .. } => None,
+            Self::MissingEngine
+            | Self::UnsupportedEngineProvider { .. }
+            | Self::DuplicateProvider { .. } => None,
         }
+    }
+}
+
+fn register_location(
+    locations: &mut HashMap<&'static str, &'static Location<'static>>,
+    interface: &'static str,
+    location: &'static Location<'static>,
+) -> Result<(), BuildError> {
+    if let Some(first) = locations.insert(interface, location) {
+        Err(BuildError::DuplicateProvider {
+            interface,
+            first,
+            second: location,
+        })
+    } else {
+        Ok(())
     }
 }
 
@@ -1857,6 +1905,10 @@ mod tests {
     }
 
     impl Engine for ExplicitEngine {
+        fn provider_interfaces(&self, provider: &str) -> Option<&'static [&'static str]> {
+            (provider == "settings").then_some(&["system:settings/config@1.0.0"])
+        }
+
         fn compile(
             &self,
             _bytes: Arc<[u8]>,
@@ -1878,6 +1930,42 @@ mod tests {
             .unwrap();
 
         assert_eq!(default_calls.get(), 0);
+    }
+
+    #[test]
+    fn duplicate_engine_providers_name_both_registration_sites() {
+        let first = Provided::engine("settings");
+        let first_line = line!() + 1;
+        let builder = App::builder().engine(ExplicitEngine).provide(first);
+        let second = Provided::engine("settings");
+        let second_line = line!() + 1;
+        let error = builder.provide(second).build().err().unwrap();
+        let text = error.to_string();
+        assert!(text.contains("system:settings/config@1.0.0"));
+        assert!(text.contains(&format!("{}:{first_line}", file!())));
+        assert!(text.contains(&format!("{}:{second_line}", file!())));
+    }
+
+    #[test]
+    #[cfg(feature = "wasi")]
+    fn unsupported_engine_provider_fails_during_build() {
+        let error = App::builder()
+            .engine(ExplicitEngine)
+            .provide(Provided::engine(crate::WASI_PROVIDER_NAME))
+            .build()
+            .err()
+            .unwrap();
+
+        assert_eq!(
+            error,
+            BuildError::UnsupportedEngineProvider {
+                provider: crate::WASI_PROVIDER_NAME,
+            }
+        );
+        assert_eq!(
+            error.to_string(),
+            "selected engine does not provide WASI yet"
+        );
     }
 
     #[test]

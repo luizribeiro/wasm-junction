@@ -1,0 +1,25 @@
+//! WASI providers implemented by the selected component engine.
+
+use crate::{Provided, WASI_PROVIDER_NAME};
+
+/// Registers the selected engine's WASI Preview 2 implementation.
+///
+/// Use this when components import WASI. Without it, loading such a component reports
+/// [`MissingImports`](crate::MissingImports). Registering it twice, or alongside an application
+/// provider for the same interface, returns [`BuildError::DuplicateProvider`](crate::BuildError::DuplicateProvider).
+/// An engine without WASI returns
+/// [`BuildError::UnsupportedEngineProvider`](crate::BuildError::UnsupportedEngineProvider).
+///
+/// ```
+/// use wasm_junction::{App, BuildError, wasi};
+///
+/// # fn build() -> Result<(), BuildError> {
+/// let app = App::builder().provide(wasi::provider()).build()?;
+/// # let _ = app;
+/// # Ok(())
+/// # }
+/// ```
+#[must_use]
+pub const fn provider() -> Provided {
+    Provided::engine(WASI_PROVIDER_NAME)
+}

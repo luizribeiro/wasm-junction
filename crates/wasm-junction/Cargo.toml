@@ -16,8 +16,9 @@ targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
 workspace = true
 
 [features]
-default = ["wasmtime", "jco"]
+default = ["wasmtime", "jco", "wasi"]
 jco = ["dep:wasm-junction-jco"]
+wasi = []
 wasmtime = ["dep:wasm-junction-wasmtime"]
 
 [dependencies]
