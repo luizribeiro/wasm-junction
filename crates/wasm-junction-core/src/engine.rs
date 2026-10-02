@@ -159,13 +159,6 @@ pub trait ImportDispatcher: HostBound {
         resource: Resource,
     ) -> BoxFuture<'_, Result<(), CallError>>;
 
-    /// Reports that an engine began bridging a stream across its boundary.
-    fn channel_open(&self, _invocation: InvocationId, _stream: u64, _direction: ChannelDirection) {}
-
-    /// Reports that an engine finished bridging a stream across its boundary.
-    fn channel_close(&self, _invocation: InvocationId, _stream: u64, _direction: ChannelDirection) {
-    }
-
     /// Reports an engine lifecycle event to the application.
     fn emit(&self, _event: EngineEvent) {}
 }

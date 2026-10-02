@@ -6,8 +6,8 @@ use std::sync::Arc;
 use js_sys::{Array, BigInt, Object, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_junction_core::{
-    CallError, ChannelDirection, ImportDispatcher, InputStream, InvocationId, Resource,
-    ResourceOwnership, StreamHandle, Val, Vals, validate_resource_lowering,
+    CallError, ChannelDirection, EngineEvent, ImportDispatcher, InputStream, InvocationId,
+    Resource, ResourceOwnership, StreamHandle, Val, Vals, validate_resource_lowering,
 };
 
 use crate::types::{FunctionType, ResourceType, ValueType};
@@ -95,13 +95,21 @@ impl ResourceTracker {
 
     fn channel_open(&self, id: u64, direction: ChannelDirection) {
         if let (Some(imports), Some(invocation)) = (&self.imports, self.invocation) {
-            imports.channel_open(invocation, id, direction);
+            imports.emit(EngineEvent::ChannelOpen {
+                invocation,
+                stream: id,
+                direction,
+            });
         }
     }
 
     fn channel_close(&self, id: u64, direction: ChannelDirection) {
         if let (Some(imports), Some(invocation)) = (&self.imports, self.invocation) {
-            imports.channel_close(invocation, id, direction);
+            imports.emit(EngineEvent::ChannelClose {
+                invocation,
+                stream: id,
+                direction,
+            });
         }
     }
 }

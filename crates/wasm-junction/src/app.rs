@@ -906,38 +906,6 @@ impl ImportDispatcher for App {
         })
     }
 
-    fn channel_open(
-        &self,
-        invocation: InvocationId,
-        stream: u64,
-        direction: crate::ChannelDirection,
-    ) {
-        App::emit(
-            self,
-            &Event::ChannelOpen {
-                invocation,
-                stream,
-                direction,
-            },
-        );
-    }
-
-    fn channel_close(
-        &self,
-        invocation: InvocationId,
-        stream: u64,
-        direction: crate::ChannelDirection,
-    ) {
-        App::emit(
-            self,
-            &Event::ChannelClose {
-                invocation,
-                stream,
-                direction,
-            },
-        );
-    }
-
     fn emit(&self, event: EngineEvent) {
         match event {
             EngineEvent::ResourceDrop {

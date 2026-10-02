@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll};
 
 use wasm_junction_core::{
-    ChannelDirection, ImportDispatcher, InputStream, InvocationId, OutputStream,
+    ChannelDirection, EngineEvent, ImportDispatcher, InputStream, InvocationId, OutputStream,
     OutputStreamWriter, StreamHandle,
 };
 use wasmtime::component::{
@@ -25,9 +25,11 @@ pub(crate) fn abort_streams(store: &StoreData) {
     for (id, writer) in streams {
         writer.abort();
         if let Some(invocation) = store.context.invocation_id() {
-            store
-                .imports
-                .channel_close(invocation, id, ChannelDirection::GuestToHost);
+            store.imports.emit(EngineEvent::ChannelClose {
+                invocation,
+                stream: id,
+                direction: ChannelDirection::GuestToHost,
+            });
         }
     }
 }
@@ -42,7 +44,11 @@ pub(crate) fn lift_stream(
     let id = handle.id();
     let imports = store.as_context().data().imports.clone();
     let invocation = invocation_id(store.as_context().data())?;
-    imports.channel_open(invocation, id, ChannelDirection::GuestToHost);
+    imports.emit(EngineEvent::ChannelOpen {
+        invocation,
+        stream: id,
+        direction: ChannelDirection::GuestToHost,
+    });
     let active = store.as_context().data().active_streams.clone();
     lock_active(&active).insert(id, writer.clone());
     reader.pipe(
@@ -68,7 +74,11 @@ pub(crate) fn lower_stream(
         InputStream::try_from(handle).map_err(|error| wasmtime::Error::msg(error.to_string()))?;
     let imports = store.as_context().data().imports.clone();
     let invocation = invocation_id(store.as_context().data())?;
-    imports.channel_open(invocation, id, ChannelDirection::HostToGuest);
+    imports.emit(EngineEvent::ChannelOpen {
+        invocation,
+        stream: id,
+        direction: ChannelDirection::HostToGuest,
+    });
     let reader = StreamReader::new(
         store.as_context_mut(),
         CoreProducer {
@@ -97,8 +107,11 @@ impl CoreProducer {
         }
         if !self.closed {
             self.closed = true;
-            self.imports
-                .channel_close(self.invocation, self.id, ChannelDirection::HostToGuest);
+            self.imports.emit(EngineEvent::ChannelClose {
+                invocation: self.invocation,
+                stream: self.id,
+                direction: ChannelDirection::HostToGuest,
+            });
         }
     }
 }
@@ -182,8 +195,11 @@ impl CoreConsumer {
         if !self.closed {
             self.closed = true;
             if was_active {
-                self.imports
-                    .channel_close(self.invocation, self.id, ChannelDirection::GuestToHost);
+                self.imports.emit(EngineEvent::ChannelClose {
+                    invocation: self.invocation,
+                    stream: self.id,
+                    direction: ChannelDirection::GuestToHost,
+                });
             }
         }
     }
