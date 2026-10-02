@@ -1,8 +1,10 @@
+use std::future::poll_fn;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
 
 use wasm_junction::{
-    CallContext, CallError, InputStream, OutputStream, OutputStreamWriter, Provided,
+    BoxFuture, Call, CallContext, CallError, InputStream, OutputStream, OutputStreamWriter,
+    Provided, Provider, Vals,
 };
 
 use crate::stream_bindings::host;
@@ -19,6 +21,20 @@ struct State {
 /// The host used by byte-stream conformance scenarios.
 #[derive(Clone, Default)]
 pub struct StreamHost(Arc<Mutex<State>>);
+
+#[derive(Default)]
+struct RetainedState {
+    first: Vec<u8>,
+    input: Option<InputStream>,
+    checkpoint: Option<Waker>,
+    first_checkpoint: bool,
+    second_ready: bool,
+    audit: Option<Waker>,
+}
+
+/// A host that retains a guest stream beyond its imported call.
+#[derive(Clone, Default)]
+pub struct RetainHost(Arc<Mutex<RetainedState>>);
 
 impl StreamHost {
     /// Wraps this host as the fixture's stream provider.
@@ -56,6 +72,92 @@ impl StreamHost {
             Ok(state) => state,
             Err(poisoned) => poisoned.into_inner(),
         }
+    }
+}
+
+impl RetainHost {
+    /// Wraps this host as the fixture's stream provider.
+    #[must_use]
+    pub fn provided(self) -> Provided {
+        Provided::new(crate::STREAM_HOST, self)
+    }
+
+    /// Returns the first chunk read before the guest reaches its checkpoint.
+    #[must_use]
+    pub fn first(&self) -> Vec<u8> {
+        self.lock().first.clone()
+    }
+
+    /// Takes the retained stream reader after the fixture call completes.
+    #[must_use]
+    pub fn take_input(&self) -> Option<InputStream> {
+        self.lock().input.take()
+    }
+
+    fn lock(&self) -> MutexGuard<'_, RetainedState> {
+        match self.0.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+}
+
+impl Provider for RetainHost {
+    fn call<'a>(
+        &'a self,
+        _context: &'a CallContext,
+        call: Call,
+    ) -> BoxFuture<'a, Result<Vals, CallError>> {
+        Box::pin(async move {
+            if call.function.as_ref() == "checkpoint" {
+                poll_fn(|context| {
+                    let mut state = self.lock();
+                    if state.first.is_empty() {
+                        state.checkpoint = Some(context.waker().clone());
+                        Poll::Pending
+                    } else if !state.first_checkpoint {
+                        state.first_checkpoint = true;
+                        Poll::Ready(())
+                    } else {
+                        state.second_ready = true;
+                        if let Some(audit) = state.audit.take() {
+                            audit.wake();
+                        }
+                        Poll::Ready(())
+                    }
+                })
+                .await;
+                return Ok(Vec::new());
+            }
+            let [value] = <[_; 1]>::try_from(call.args)
+                .map_err(|_| CallError::trap("audit expects one stream"))?;
+            let mut input = InputStream::try_from(value)?;
+            let first = input
+                .read()
+                .await
+                .map_err(|error| CallError::trap(error.to_string()))?
+                .ok_or_else(|| CallError::trap("guest stream closed before its first chunk"))?;
+            let checkpoint = {
+                let mut state = self.lock();
+                state.first = first;
+                state.input = Some(input);
+                state.checkpoint.take()
+            };
+            if let Some(checkpoint) = checkpoint {
+                checkpoint.wake();
+            }
+            poll_fn(|context| {
+                let mut state = self.lock();
+                if state.second_ready {
+                    Poll::Ready(())
+                } else {
+                    state.audit = Some(context.waker().clone());
+                    Poll::Pending
+                }
+            })
+            .await;
+            Ok(Vec::new())
+        })
     }
 }
 
