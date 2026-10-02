@@ -1,7 +1,9 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::future::{Future, poll_fn};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::task::{Poll, Waker};
 
 use js_sys::{Array, Uint8Array};
 use wasm_bindgen::{JsCast, prelude::*};
@@ -258,6 +260,77 @@ struct Bridge {
 struct ActiveGuestStream {
     writer: OutputStreamWriter,
     stream: JsValue,
+    pump: PumpControl,
+}
+
+#[derive(Clone, Default)]
+struct PumpControl(Rc<RefCell<PumpState>>);
+
+#[derive(Default)]
+struct PumpState {
+    cancelled: bool,
+    finished: bool,
+    reading: bool,
+    pump_waker: Option<Waker>,
+    finish_waker: Option<Waker>,
+}
+
+impl PumpControl {
+    async fn read(&self, stream: &JsValue) -> Option<Result<JsValue, JsValue>> {
+        let mut read = std::pin::pin!(read_guest_stream(stream));
+        poll_fn(|context| {
+            let mut state = self.0.borrow_mut();
+            if state.cancelled {
+                return Poll::Ready(None);
+            }
+            state.reading = true;
+            state.pump_waker = Some(context.waker().clone());
+            drop(state);
+            read.as_mut().poll(context).map(Some)
+        })
+        .await
+    }
+
+    fn cancel(&self) {
+        let waker = {
+            let mut state = self.0.borrow_mut();
+            state.cancelled = true;
+            state.pump_waker.take()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+
+    fn finish(&self) {
+        let waker = {
+            let mut state = self.0.borrow_mut();
+            state.finished = true;
+            state.reading = false;
+            state.finish_waker.take()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+
+    async fn wait(&self) {
+        poll_fn(|context| {
+            let mut state = self.0.borrow_mut();
+            if state.finished {
+                Poll::Ready(())
+            } else {
+                state.finish_waker = Some(context.waker().clone());
+                Poll::Pending
+            }
+        })
+        .await;
+    }
+
+    #[cfg(test)]
+    fn is_reading(&self) -> bool {
+        self.0.borrow().reading
+    }
 }
 
 impl Bridge {
@@ -310,17 +383,19 @@ impl Bridge {
         let handle = StreamHandle::from(output);
         let id = handle.id();
         let marker = self.resources.register_guest(handle);
+        let pump = PumpControl::default();
         self.guest_streams.borrow_mut().insert(
             id,
             ActiveGuestStream {
                 writer: writer.clone(),
                 stream: stream.clone(),
+                pump: pump.clone(),
             },
         );
         let active = self.guest_streams.clone();
         let resources = self.resources.clone();
         spawn_local(async move {
-            while let Ok(value) = read_guest_stream(&stream).await {
+            while let Some(Ok(value)) = pump.read(&stream).await {
                 if value.is_null() {
                     break;
                 }
@@ -333,6 +408,7 @@ impl Bridge {
             if active.borrow_mut().remove(&id).is_some() {
                 resources.close_guest(id);
             }
+            pump.finish();
         });
         marker
     }
@@ -343,6 +419,7 @@ impl Bridge {
         }
         for stream in self.guest_streams.borrow().values() {
             stream.writer.abort();
+            stream.pump.cancel();
         }
     }
 
@@ -354,6 +431,7 @@ impl Bridge {
             if let Err(error) = close_guest_stream(&stream.stream).await {
                 failures.push(js_error(&error));
             }
+            stream.pump.wait().await;
             self.resources.close_guest(id);
         }
         if let Err(error) = self.cleanup_resources().await {
@@ -507,6 +585,8 @@ fn js_error(value: &JsValue) -> String {
 mod tests {
     use std::cell::Cell;
 
+    use js_sys::{Object, Promise, Reflect};
+    use wasm_bindgen_futures::JsFuture;
     use wasm_bindgen_test::wasm_bindgen_test;
     use wasm_junction_core::ImportTarget;
 
@@ -583,5 +663,65 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(dispatcher.0.get(), 0);
+    }
+
+    #[wasm_bindgen_test]
+    async fn cleanup_ends_a_pump_blocked_in_a_guest_read() {
+        let dispatcher = Arc::new(CountingDispatcher::default());
+        let bridge = Bridge {
+            imports: dispatcher,
+            context: InvocationContext::default(),
+            component: Arc::from("streams"),
+            signatures: Signatures::for_test_import(
+                HOST,
+                "read",
+                FunctionType {
+                    params: Vec::new(),
+                    result: None,
+                },
+            ),
+            import_error: Rc::default(),
+            resources: ResourceTracker::default(),
+            guest_streams: Rc::default(),
+        };
+        let stream = Object::new();
+        let read =
+            Closure::wrap(
+                Box::new(|_options: JsValue| Promise::new(&mut |_resolve, _reject| {}))
+                    as Box<dyn FnMut(JsValue) -> Promise>,
+            );
+        Reflect::set(&stream, &"read".into(), read.as_ref()).unwrap();
+        let closed = Rc::new(Cell::new(false));
+        let close_state = closed.clone();
+        let close = Closure::wrap(Box::new(move || {
+            close_state.set(true);
+            Promise::resolve(&JsValue::UNDEFINED)
+        }) as Box<dyn FnMut() -> Promise>);
+        Reflect::set(&stream, &"return".into(), close.as_ref()).unwrap();
+
+        bridge.open_guest_stream(stream.into());
+        let pump = bridge
+            .guest_streams
+            .borrow()
+            .values()
+            .next()
+            .unwrap()
+            .pump
+            .clone();
+        for _ in 0..10 {
+            if pump.is_reading() {
+                break;
+            }
+            JsFuture::from(Promise::resolve(&JsValue::UNDEFINED))
+                .await
+                .unwrap();
+        }
+        assert!(pump.is_reading());
+        let active = Rc::downgrade(&bridge.guest_streams);
+
+        bridge.cleanup().await.unwrap();
+        assert!(closed.get());
+        drop(bridge);
+        assert!(active.upgrade().is_none());
     }
 }
