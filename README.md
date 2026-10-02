@@ -1,7 +1,9 @@
 # wasm-junction
 
 `wasm-junction` is an ergonomic Rust framework for building applications from WebAssembly
-components. It is early in development and its API is not yet stable.
+components. It runs natively with Wasmtime and in Chromium, Firefox, and Safari 27 or newer with
+JSPI. The default engine is selected automatically: jco on `wasm32-unknown-unknown`, and Wasmtime
+on native targets. The project is early in development and its API is not yet stable.
 
 ## Examples
 
