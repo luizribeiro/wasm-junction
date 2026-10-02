@@ -1,13 +1,8 @@
-use std::sync::Arc;
-
-use wasm_junction_core::{ImportTarget, Vals};
 use wasmtime::component::{Linker, ResourceTable};
-use wasmtime::{AsContextMut, StoreContextMut};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 use crate::engine::StoreData;
 
-mod clocks;
 mod gates;
 mod linker;
 mod trampoline;
@@ -40,35 +35,5 @@ impl WasiView for WasiState {
 pub(crate) fn add_gates(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     gates::add_environment(linker)?;
     gates::add_wall_clock(linker)?;
-    gates::add_monotonic_reads(linker)?;
-    clocks::add_subscriptions(linker)
-}
-
-pub(super) async fn dispatch(
-    store: &mut StoreContextMut<'_, StoreData>,
-    interface: &'static str,
-    function: &'static str,
-    args: Vals,
-    target: Arc<dyn ImportTarget>,
-) -> wasmtime::Result<Vals> {
-    let (imports, context, component) = {
-        let mut store = store.as_context_mut();
-        let data = store.data_mut();
-        (
-            data.imports.clone(),
-            data.context.clone(),
-            data.component.clone(),
-        )
-    };
-    imports
-        .call_engine(
-            context,
-            component,
-            Arc::from(interface),
-            Arc::from(function),
-            args,
-            target,
-        )
-        .await
-        .map_err(wasmtime::Error::new)
+    gates::add_monotonic_clock(linker)
 }

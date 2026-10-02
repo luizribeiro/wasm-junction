@@ -212,10 +212,16 @@ pub(super) fn add_wall_clock(linker: &mut Linker<StoreData>) -> wasmtime::Result
     Ok(())
 }
 
-pub(super) fn add_monotonic_reads(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+pub(super) fn add_monotonic_clock(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     gate!(linker, "wasi:clocks/monotonic-clock@0.2.12", "now", clocks,
         wasmtime_wasi::p2::bindings::clocks::monotonic_clock::Host::now,
         plain, () -> u64);
+    gate!(linker, "wasi:clocks/monotonic-clock@0.2.12", "subscribe-instant", clocks,
+        wasmtime_wasi::p2::bindings::clocks::monotonic_clock::Host::subscribe_instant,
+        resource, (when: u64) -> Resource<DynPollable>);
+    gate!(linker, "wasi:clocks/monotonic-clock@0.2.12", "subscribe-duration", clocks,
+        wasmtime_wasi::p2::bindings::clocks::monotonic_clock::Host::subscribe_duration,
+        resource, (duration: u64) -> Resource<DynPollable>);
     gate!(linker, "wasi:clocks/monotonic-clock@0.2.12", "resolution", clocks,
         wasmtime_wasi::p2::bindings::clocks::monotonic_clock::Host::resolution,
         plain, () -> u64);

@@ -666,7 +666,7 @@ impl Middleware for AwaitTimer {
 }
 
 #[cfg(feature = "wasi")]
-struct AwaitTokioTimer;
+struct AwaitTokioTimer(Arc<AtomicUsize>);
 
 #[cfg(feature = "wasi")]
 impl Middleware for AwaitTokioTimer {
@@ -674,8 +674,11 @@ impl Middleware for AwaitTokioTimer {
         if (call.interface.as_ref() == WALL_CLOCK && call.function.as_ref() == "now")
             || (call.interface.as_ref() == WASI_ENVIRONMENT
                 && call.function.as_ref() == "initial-cwd")
+            || (call.interface.as_ref() == MONOTONIC_CLOCK
+                && call.function.as_ref() == "subscribe-duration")
         {
             tokio::time::sleep(Duration::from_millis(10)).await;
+            self.0.fetch_add(1, Ordering::Relaxed);
         }
         next.run(call).await
     }
@@ -810,10 +813,11 @@ fn wasi_gate_can_await_on_a_current_thread_tokio_runtime() {
         .enable_time()
         .build()
         .unwrap();
+    let awaits = Arc::new(AtomicUsize::new(0));
     let app = App::builder()
         .engine(WasmtimeEngine::new().unwrap())
         .provide(wasm_junction::wasi::provider())
-        .middleware(AwaitTokioTimer)
+        .middleware(AwaitTokioTimer(awaits.clone()))
         .build()
         .unwrap();
     runtime
@@ -825,6 +829,8 @@ fn wasi_gate_can_await_on_a_current_thread_tokio_runtime() {
         let result = runtime.block_on(async {
             app.call("wasi", ENVIRONMENT, "current-directory", Vec::new())
                 .await?;
+            app.call("wasi", ENVIRONMENT, "start-timer", Vec::new())
+                .await?;
             app.call("wasi", ENVIRONMENT, "wall-time", Vec::new()).await
         });
         sender.send(result).unwrap();
@@ -834,6 +840,27 @@ fn wasi_gate_can_await_on_a_current_thread_tokio_runtime() {
         .recv_timeout(Duration::from_secs(30))
         .expect("WASI middleware deadlocked the current-thread Tokio runtime");
     assert!(result.is_ok(), "{result:?}");
+    assert_eq!(awaits.load(Ordering::Relaxed), 3);
+}
+
+#[test]
+#[cfg(feature = "wasi")]
+fn guest_thread_sleep_uses_a_gated_pollable() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    let app = App::builder()
+        .engine(WasmtimeEngine::new().unwrap())
+        .provide(wasm_junction::wasi::provider())
+        .build()
+        .unwrap();
+    runtime
+        .block_on(app.load(Component::from_bytes(WASI_COMPONENT).unwrap().named("wasi")))
+        .unwrap();
+
+    let result = runtime.block_on(app.call("wasi", ENVIRONMENT, "sleep", Vec::new()));
+    assert_eq!(result.unwrap(), []);
 }
 
 async fn timer(duration: Duration) {

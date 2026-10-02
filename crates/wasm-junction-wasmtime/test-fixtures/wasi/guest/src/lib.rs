@@ -32,6 +32,10 @@ impl exports::test::wasi::environment::Guest for Component {
     fn start_timer() {
         drop(wasi::clocks::monotonic_clock::subscribe_duration(0));
     }
+
+    fn sleep() {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
 }
 
 export!(Component);

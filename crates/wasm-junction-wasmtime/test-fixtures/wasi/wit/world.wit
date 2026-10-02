@@ -7,6 +7,7 @@ interface environment {
   wall-time: func() -> tuple<u64, u32>;
   monotonic-time: func() -> u64;
   start-timer: func();
+  sleep: func();
 }
 
 world fixture {
