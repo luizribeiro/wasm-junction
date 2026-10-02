@@ -1,7 +1,9 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::{BoxFuture, Call, CallError, ChannelDirection, HostBound, MaybeSend, Vals};
+use crate::{
+    BoxFuture, Call, CallError, ChannelDirection, HostBound, InvocationId, MaybeSend, Vals,
+};
 
 /// A lifecycle notification observed by middleware.
 #[non_exhaustive]
@@ -30,11 +32,15 @@ pub enum Event {
     },
     /// An invocation of the named component is beginning.
     InvocationStart {
+        /// The application-local invocation identifier.
+        invocation: InvocationId,
         /// The application name of the invoked component.
         component: Arc<str>,
     },
     /// An invocation of the named component has ended.
     InvocationEnd {
+        /// The application-local invocation identifier.
+        invocation: InvocationId,
         /// The application name of the invoked component.
         component: Arc<str>,
     },

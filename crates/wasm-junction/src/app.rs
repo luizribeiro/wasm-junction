@@ -533,6 +533,7 @@ impl App {
                 args,
             ),
         );
+        let invocation = context.invocation_id();
         self.dispatch(
             Arc::new(ComponentTarget {
                 compiled,
@@ -542,6 +543,7 @@ impl App {
                 component_boundary: false,
             }),
             call,
+            invocation,
         )
         .await
     }
@@ -555,7 +557,7 @@ impl App {
         args: Vals,
     ) -> Result<Vals, CallError> {
         let context = self.ensure_invocation_id(context)?;
-        let (destination, resolved_interface, target): (_, _, Arc<dyn CallTarget>) =
+        let (destination, resolved_interface, target, invocation): (_, _, Arc<dyn CallTarget>, _) =
             match self.resolve_import(&caller, &interface) {
                 Ok(ResolvedImport::Host {
                     interface,
@@ -567,6 +569,7 @@ impl App {
                         provider,
                         context: context.clone(),
                     }),
+                    None,
                 ),
                 Ok(ResolvedImport::Component {
                     name,
@@ -578,6 +581,7 @@ impl App {
                         .with_settings(self.settings_for(&name))
                         .with_invocation_id(self.next_invocation_id()?);
                     self.check_call_depth(&context)?;
+                    let invocation = context.invocation_id();
                     (
                         name.clone(),
                         interface,
@@ -588,6 +592,7 @@ impl App {
                             component: name,
                             component_boundary: true,
                         }),
+                        invocation,
                     )
                 }
                 Err(ResolveError::Missing) => {
@@ -625,7 +630,7 @@ impl App {
                 args,
             ),
         );
-        self.dispatch(target, call).await
+        self.dispatch(target, call, invocation).await
     }
 
     async fn call_engine_import(
@@ -642,7 +647,7 @@ impl App {
             &context,
             Call::new(Caller::Component(caller), "host", interface, function, args),
         );
-        self.dispatch(Arc::new(EngineTarget { target, context }), call)
+        self.dispatch(Arc::new(EngineTarget { target, context }), call, None)
             .await
     }
 
@@ -667,16 +672,27 @@ impl App {
         provider.drop_resource(cx, resource)
     }
 
-    async fn dispatch(&self, target: Arc<dyn CallTarget>, call: Call) -> Result<Vals, CallError> {
-        self.emit(&Event::InvocationStart {
-            component: call.callee.clone(),
-        });
+    async fn dispatch(
+        &self,
+        target: Arc<dyn CallTarget>,
+        call: Call,
+        invocation: Option<InvocationId>,
+    ) -> Result<Vals, CallError> {
+        if let Some(invocation) = invocation {
+            self.emit(&Event::InvocationStart {
+                invocation,
+                component: call.callee.clone(),
+            });
+        }
         let result = crate::Next::new(self.0.middleware.clone(), target)
             .run(call.clone())
             .await;
-        self.emit(&Event::InvocationEnd {
-            component: call.callee,
-        });
+        if let Some(invocation) = invocation {
+            self.emit(&Event::InvocationEnd {
+                invocation,
+                component: call.callee,
+            });
+        }
         result
     }
 
@@ -875,6 +891,7 @@ impl ImportDispatcher for App {
         resource: Resource,
     ) -> BoxFuture<'_, Result<(), CallError>> {
         Box::pin(async move {
+            let context = self.ensure_invocation_id(context)?;
             let context = CallContext::new(Caller::Component(caller), context);
             self.drop_host_resource(&context, resource)
         })

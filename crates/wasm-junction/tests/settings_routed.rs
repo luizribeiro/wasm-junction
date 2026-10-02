@@ -8,7 +8,7 @@ use support::{
     FakeEngine, SETTINGS_CALLER, SETTINGS_HOST, SETTINGS_TARGET, block_on, component_bytes,
 };
 use wasm_junction::{
-    App, BoxFuture, Call, CallContext, CallError, Component, InterfaceHandle, InvocationId,
+    App, BoxFuture, Call, CallContext, CallError, Component, Event, InterfaceHandle, InvocationId,
     Middleware, Next, Provided, Provider, Val, Vals,
 };
 
@@ -27,6 +27,9 @@ struct Label(&'static str);
 #[derive(Clone, Default)]
 struct InvocationCalls(Arc<Mutex<Vec<(String, String, InvocationId)>>>);
 
+#[derive(Clone, Default)]
+struct InvocationEvents(Arc<Mutex<Vec<(bool, String, InvocationId)>>>);
+
 impl Middleware for InvocationCalls {
     async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
         self.0.lock().unwrap().push((
@@ -35,6 +38,34 @@ impl Middleware for InvocationCalls {
             call.invocation_id(),
         ));
         next.run(call).await
+    }
+}
+
+impl Middleware for InvocationEvents {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        next.run(call).await
+    }
+
+    fn event(&self, event: &Event) {
+        match event {
+            Event::InvocationStart {
+                invocation,
+                component,
+            } => self
+                .0
+                .lock()
+                .unwrap()
+                .push((true, component.to_string(), *invocation)),
+            Event::InvocationEnd {
+                invocation,
+                component,
+            } => self
+                .0
+                .lock()
+                .unwrap()
+                .push((false, component.to_string(), *invocation)),
+            _ => {}
+        }
     }
 }
 
@@ -91,10 +122,12 @@ fn component(world: &str, name: &str) -> Component {
 fn routed_components_use_their_own_settings() {
     let host = SettingsHost::default();
     let calls = InvocationCalls::default();
+    let events = InvocationEvents::default();
     let app = App::builder()
         .engine(FakeEngine)
         .provide(Provided::new(SETTINGS_HOST, host.clone()))
         .middleware(calls.clone())
+        .middleware(events.clone())
         .build()
         .unwrap();
     app.configure("caller", Label("A")).unwrap();
@@ -114,6 +147,15 @@ fn routed_components_use_their_own_settings() {
     assert_eq!(outer.2, own_import.2);
     assert_eq!(outer.2, routed.2);
     assert_ne!(routed.2, reached_import.2);
+    assert_eq!(
+        *events.0.lock().unwrap(),
+        [
+            (true, "caller".to_owned(), outer.2),
+            (true, "callee".to_owned(), reached_import.2),
+            (false, "callee".to_owned(), reached_import.2),
+            (false, "caller".to_owned(), outer.2),
+        ]
+    );
     let first = outer.2;
     drop(recorded);
 

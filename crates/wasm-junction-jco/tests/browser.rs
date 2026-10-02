@@ -193,10 +193,8 @@ async fn refused_import_stops_before_later_host_effects() {
         [
             "invocation start summarizer",
             "call host → summarizer example:notes/summarizer@0.1.0.summarize(\"provider-refusal\")",
-            "invocation start host",
             "call summarizer → host example:notes/notes@0.1.0.read(\"provider-refusal\")",
             "trap summarizer → host example:notes/notes@0.1.0.read(notes provider refused the call)",
-            "invocation end host",
             "trap host → summarizer example:notes/summarizer@0.1.0.summarize(notes provider refused the call)",
             "invocation end summarizer",
         ]

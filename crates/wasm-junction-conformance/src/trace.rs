@@ -81,10 +81,10 @@ impl Middleware for Trace {
             Event::Unload { component } if self.1 => {
                 self.record(format!("unload {component}"));
             }
-            Event::InvocationStart { component } => {
+            Event::InvocationStart { component, .. } => {
                 self.record(format!("invocation start {component}"));
             }
-            Event::InvocationEnd { component } => {
+            Event::InvocationEnd { component, .. } => {
                 self.record(format!("invocation end {component}"));
             }
             Event::ResourceDrop {
@@ -235,14 +235,11 @@ const NOTE: &str = with_note!("", "");
 pub const EXPECTED_TRACE: &[&str] = &[
     "invocation start summarizer",
     "call host → summarizer example:notes/summarizer@0.1.0.summarize(\"daily\")",
-    "invocation start host",
     "call summarizer → host example:notes/notes@0.1.0.read(\"daily\")",
     with_note!(
         "return summarizer → host example:notes/notes@0.1.0.read(ok(",
         "))"
     ),
-    "invocation end host",
-    "invocation start host",
     with_note!(
         "call summarizer → host example:notes/notes@0.1.0.normalize(",
         ")"
@@ -251,7 +248,6 @@ pub const EXPECTED_TRACE: &[&str] = &[
         "return summarizer → host example:notes/notes@0.1.0.normalize(",
         ")"
     ),
-    "invocation end host",
     with_note!(
         "return host → summarizer example:notes/summarizer@0.1.0.summarize(ok({text: \"Daily: 2 tags\", source: ",
         "}))"
@@ -265,7 +261,6 @@ pub const EXPECTED_RELOAD_TRACE: &[&str] = &[
     "load writer [example:reload/writer@0.1.0]",
     "invocation start greeter",
     "call host → greeter example:reload/greeter@0.1.0.greet-slow(\"Ada\")",
-    "invocation start host",
     "call greeter → host example:reload/gate@0.1.0.wait()",
     "reload greeter [example:reload/greeter@0.1.0, example:reload/legacy@0.1.0] -> [example:reload/greeter@0.1.0, example:reload/legacy@0.1.0]",
     "invocation start greeter",
@@ -281,7 +276,6 @@ pub const EXPECTED_RELOAD_TRACE: &[&str] = &[
     "return host → writer example:reload/writer@0.1.0.write(\"v2: hello, Lin\")",
     "invocation end writer",
     "return greeter → host example:reload/gate@0.1.0.wait()",
-    "invocation end host",
     "return host → greeter example:reload/greeter@0.1.0.greet-slow(\"v1: hello, Ada\")",
     "invocation end greeter",
     "reload greeter [example:reload/greeter@0.1.0, example:reload/legacy@0.1.0] -> [example:reload/legacy@0.1.0]",
@@ -298,10 +292,8 @@ pub const EXPECTED_ROUTED_TRACE: &[&str] = &[
     "call host → writer example:notes/writer@0.1.0.write [session=42](\"hello\")",
     "invocation start translator",
     "call writer → translator example:notes/translator@0.1.0.translate [session=42, hop=writer-to-translator](\"hello\")",
-    "invocation start host",
     "call translator → host example:notes/decoration@0.1.0.decorate [session=42, hop=writer-to-translator](\"hello\")",
     "return translator → host example:notes/decoration@0.1.0.decorate [session=42, hop=writer-to-translator](\"host[session=42, hop=writer-to-translator]: hello\")",
-    "invocation end host",
     "return writer → translator example:notes/translator@0.1.0.translate [session=42, hop=writer-to-translator](\"host[session=42, hop=writer-to-translator]: hello #1\")",
     "invocation end translator",
     "return host → writer example:notes/writer@0.1.0.write [session=42](\"host[session=42, hop=writer-to-translator]: hello #1\")",
@@ -310,10 +302,8 @@ pub const EXPECTED_ROUTED_TRACE: &[&str] = &[
     "call host → writer example:notes/writer@0.1.0.write-async [session=42](\"async\")",
     "invocation start translator",
     "call writer → translator example:notes/translator@0.1.0.translate-async [session=42, hop=writer-to-translator](\"async\")",
-    "invocation start host",
     "call translator → host example:notes/decoration@0.1.0.decorate-async [session=42, hop=writer-to-translator](\"async\")",
     "return translator → host example:notes/decoration@0.1.0.decorate-async [session=42, hop=writer-to-translator](\"host[session=42, hop=writer-to-translator]: async\")",
-    "invocation end host",
     "return writer → translator example:notes/translator@0.1.0.translate-async [session=42, hop=writer-to-translator](\"host[session=42, hop=writer-to-translator]: async #1\")",
     "invocation end translator",
     "return host → writer example:notes/writer@0.1.0.write-async [session=42](\"host[session=42, hop=writer-to-translator]: async #1\")",
@@ -324,14 +314,10 @@ pub const EXPECTED_ROUTED_TRACE: &[&str] = &[
 pub const EXPECTED_RESOURCE_TRACE: &[&str] = &[
     "invocation start resource-client",
     "call host → resource-client example:resources/client@1.0.0.run(false)",
-    "invocation start host",
     "call resource-client → host example:resources/host@1.0.0.[constructor]session(\"Ada\")",
     "return resource-client → host example:resources/host@1.0.0.[constructor]session(own(example:resources/host@1.0.0/session#0))",
-    "invocation end host",
-    "invocation start host",
     "call resource-client → host example:resources/host@1.0.0.[method]session.profile(borrow(example:resources/host@1.0.0/session#0))",
     "return resource-client → host example:resources/host@1.0.0.[method]session.profile(\"profile:Ada\")",
-    "invocation end host",
     "resource drop example:resources/host@1.0.0/session#0",
     "return host → resource-client example:resources/client@1.0.0.run(\"profile:Ada\")",
     "invocation end resource-client",
@@ -341,14 +327,10 @@ pub const EXPECTED_RESOURCE_TRACE: &[&str] = &[
 pub const EXPECTED_RESOURCE_REFUSAL_TRACE: &[&str] = &[
     "invocation start resource-client",
     "call host → resource-client example:resources/client@1.0.0.drop-after-refusal()",
-    "invocation start host",
     "call resource-client → host example:resources/host@1.0.0.[constructor]session(\"refuse\")",
     "return resource-client → host example:resources/host@1.0.0.[constructor]session(own(example:resources/host@1.0.0/session#0))",
-    "invocation end host",
-    "invocation start host",
     "call resource-client → host example:resources/host@1.0.0.[method]session.profile(borrow(example:resources/host@1.0.0/session#0))",
     "trap resource-client → host example:resources/host@1.0.0.[method]session.profile(resource profile refused)",
-    "invocation end host",
     "resource drop example:resources/host@1.0.0/session#0",
     "trap host → resource-client example:resources/client@1.0.0.drop-after-refusal(resource profile refused)",
     "invocation end resource-client",
@@ -358,10 +340,8 @@ pub const EXPECTED_RESOURCE_REFUSAL_TRACE: &[&str] = &[
 pub const EXPECTED_STREAM_TRACE: &[&str] = &[
     "invocation start streams",
     "call host → streams example:streams/probe@0.1.0.motd()",
-    "invocation start host",
     "call streams → host example:streams/host@0.1.0.motd()",
     "return streams → host example:streams/host@0.1.0.motd(stream)",
-    "invocation end host",
     "channel open stream#0 host-to-guest",
     "channel close stream#0 host-to-guest",
     "return host → streams example:streams/probe@0.1.0.motd(\"Have a good day.\")",
@@ -369,11 +349,9 @@ pub const EXPECTED_STREAM_TRACE: &[&str] = &[
     "invocation start streams",
     "call host → streams example:streams/probe@0.1.0.audit()",
     "channel open stream#1 guest-to-host",
-    "invocation start host",
     "call streams → host example:streams/host@0.1.0.audit(stream)",
     "channel close stream#1 guest-to-host",
     "return streams → host example:streams/host@0.1.0.audit()",
-    "invocation end host",
     "return host → streams example:streams/probe@0.1.0.audit()",
     "invocation end streams",
 ];
@@ -388,8 +366,8 @@ mod tests {
         assert_eq!(val(&sample_note()), NOTE);
         assert_eq!(val(&Val::Bytes(vec![0, 127, 255])), "bytes[00 7f ff]");
         assert!(val(&sample_summary()).starts_with("ok({text:"));
-        assert_eq!(EXPECTED_TRACE.len(), 12);
-        assert_eq!(EXPECTED_RESOURCE_TRACE.len(), 13);
+        assert_eq!(EXPECTED_TRACE.len(), 8);
+        assert_eq!(EXPECTED_RESOURCE_TRACE.len(), 9);
     }
 
     #[test]
