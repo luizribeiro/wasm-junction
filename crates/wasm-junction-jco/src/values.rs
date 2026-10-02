@@ -1,11 +1,28 @@
+use std::cell::RefCell;
+use std::collections::HashSet;
+use std::rc::Rc;
+
 use js_sys::{Array, BigInt, Object, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue};
-use wasm_junction_core::{CallError, Val, Vals};
+use wasm_junction_core::{CallError, Resource, ResourceOwnership, Val, Vals};
 
-use crate::types::{FunctionType, ValueType};
+use crate::types::{FunctionType, ResourceType, ValueType};
+
+const RESOURCE_MARKER: &str = "$wasm-junction-resource";
 
 #[derive(Clone, Default)]
-pub(crate) struct ResourceTracker;
+pub(crate) struct ResourceTracker(Rc<RefCell<HashSet<Resource>>>);
+
+impl ResourceTracker {
+    pub(crate) fn take(&self, interface: &str, name: &str, id: u32) -> Result<Resource, CallError> {
+        let resource = Resource::owned(interface, name, id);
+        self.0.borrow_mut().take(&resource).ok_or_else(|| {
+            CallError::refused(format!(
+                "resource `{interface}/{name}#{id}` is no longer owned"
+            ))
+        })
+    }
+}
 
 pub(crate) enum JsResult {
     Return(JsValue),
@@ -210,6 +227,9 @@ fn lower(
         (Val::Result(value), ValueType::Result { ok, err }) => {
             lower_nested_result(value, ok.as_deref(), err.as_deref(), expected, resources)?
         }
+        (Val::Resource(resource), ValueType::Resource(expected)) => {
+            lower_resource(resource, expected, resources)?
+        }
         (_, ValueType::Unsupported(name)) => return Err(unsupported(name)),
         (value, expected) => {
             return Err(wrong_val_type(expected, &value));
@@ -283,7 +303,7 @@ fn lift(
         ValueType::Result { ok, err } => {
             lift_nested_result(value, ok.as_deref(), err.as_deref(), expected, resources)
         }
-        ValueType::Resource(_) => Err(unsupported("resource")),
+        ValueType::Resource(expected) => lift_resource(value, expected, resources),
         ValueType::Unsupported(name) => Err(unsupported(name)),
     }
 }
@@ -625,6 +645,66 @@ fn lift_nested_result(
         "err" => lift_payload(err).map(|value| Val::Result(Err(value))),
         _ => Err(mismatch(expected, &value, "unknown result case")),
     }
+}
+
+fn lower_resource(
+    resource: Resource,
+    expected: &ResourceType,
+    resources: &ResourceTracker,
+) -> Result<JsValue, CallError> {
+    if resource.ownership() != expected.ownership {
+        return Err(CallError::refused(format!(
+            "resource `{}/{}#{}` has {:?} ownership but the call requires {:?}",
+            resource.interface(),
+            resource.name(),
+            resource.id(),
+            resource.ownership(),
+            expected.ownership
+        )));
+    }
+    if resource.interface() != expected.interface || resource.name() != expected.name {
+        return Err(CallError::refused(format!(
+            "resource `{}/{}` does not match the resource type declared by the call",
+            resource.interface(),
+            resource.name()
+        )));
+    }
+    if expected.ownership == ResourceOwnership::Own {
+        resources.0.borrow_mut().insert(resource.clone());
+    }
+    let descriptor = Array::of3(
+        &JsValue::from_str(resource.interface()),
+        &JsValue::from_str(resource.name()),
+        &JsValue::from_f64(f64::from(resource.id())),
+    );
+    let value = Object::new();
+    Reflect::set(&value, &RESOURCE_MARKER.into(), &descriptor)
+        .map_err(|error| resource_mismatch(expected, &error, "could not create resource"))?;
+    Ok(value.into())
+}
+
+fn lift_resource(
+    value: JsValue,
+    expected: &ResourceType,
+    resources: &ResourceTracker,
+) -> Result<Val, CallError> {
+    let id = Reflect::get(&value, &"id".into())
+        .map_err(|error| resource_mismatch(expected, &error, "could not read resource id"))?;
+    let id = integer::<u32>(number(&id, &ValueType::U32)?, &ValueType::U32)?;
+    let resource = if expected.ownership == ResourceOwnership::Own {
+        resources.take(&expected.interface, &expected.name, id)?
+    } else {
+        Resource::borrowed(expected.interface.clone(), expected.name.clone(), id)
+    };
+    Ok(Val::Resource(resource))
+}
+
+fn resource_mismatch(
+    expected: &ResourceType,
+    value: &impl std::fmt::Debug,
+    reason: &str,
+) -> CallError {
+    mismatch(&ValueType::Resource(expected.clone()), value, reason)
 }
 
 fn one_char(value: String) -> Option<char> {
@@ -1015,6 +1095,41 @@ mod tests {
         let error = lift_error(JsValue::from_str("three"), ValueType::U32);
         assert!(error.contains("WIT `u32`"), "{error}");
         assert!(error.contains("three"), "{error}");
+    }
+
+    #[wasm_bindgen_test]
+    fn resources_validate_type_and_ownership_while_crossing_js() {
+        let expected = ResourceType {
+            interface: "example:resources/host@1.0.0".to_owned(),
+            name: "session".to_owned(),
+            ownership: ResourceOwnership::Own,
+        };
+        let signature = FunctionType {
+            params: vec![ValueType::Resource(expected)],
+            result: None,
+        };
+        let resources = ResourceTracker::default();
+        let owned = Resource::owned("example:resources/host@1.0.0", "session", 7);
+        let lowered =
+            lower_args_tracked(vec![Val::Resource(owned.clone())], &signature, &resources).unwrap();
+        assert!(Reflect::has(&lowered.get(0), &RESOURCE_MARKER.into()).unwrap());
+
+        let object = Object::new();
+        Reflect::set(&object, &"id".into(), &7.into()).unwrap();
+        assert_eq!(
+            lift_args_tracked(&Array::of1(&object), &signature, &resources).unwrap(),
+            [Val::Resource(owned)]
+        );
+        assert!(
+            resources
+                .take("example:resources/host@1.0.0", "session", 7)
+                .is_err()
+        );
+
+        let borrowed = Resource::borrowed("example:resources/host@1.0.0", "session", 8);
+        let error =
+            lower_args_tracked(vec![Val::Resource(borrowed)], &signature, &resources).unwrap_err();
+        assert!(error.to_string().contains("requires Own"), "{error}");
     }
 
     fn lift_error(value: JsValue, expected: ValueType) -> String {
