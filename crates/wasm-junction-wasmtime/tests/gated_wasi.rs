@@ -8,7 +8,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use wasm_junction::{
-    App, Call, CallError, Component, InvocationId, Middleware, Next, Resource, Val, Vals,
+    App, Call, CallError, Component, Event, InvocationId, Middleware, Next, Resource, Val, Vals,
 };
 use wasm_junction_wasmtime::{GATED_WASI_INTERFACES, WASI_INTERFACES};
 
@@ -105,6 +105,44 @@ fn checked_app(middleware: impl Middleware + 'static) -> (App, tokio::runtime::R
         .unwrap();
     (app, runtime)
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DropObservation {
+    invocation: InvocationId,
+    interface: String,
+    resource: String,
+}
+
+struct RecordPollableDrop(Arc<Mutex<Vec<DropObservation>>>);
+
+impl Middleware for RecordPollableDrop {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.function.as_ref() == "[drop]pollable" {
+            self.0.lock().unwrap().push(DropObservation {
+                invocation: call.invocation_id(),
+                interface: call.interface.to_string(),
+                resource: "pollable".to_owned(),
+            });
+        }
+        next.run(call).await
+    }
+
+    fn event(&self, event: &Event) {
+        if let Event::ResourceDrop {
+            invocation,
+            interface,
+            resource,
+            ..
+        } = event
+        {
+            self.0.lock().unwrap().push(DropObservation {
+                invocation: *invocation,
+                interface: interface.to_string(),
+                resource: resource.to_string(),
+            });
+        }
+    }
+}
 #[test]
 fn gated_wasi_set_changes_only_deliberately() {
     assert_eq!(
@@ -195,6 +233,33 @@ fn unscoped_pollable_is_refused() {
 }
 
 #[test]
+fn pollable_drop_is_a_call_and_an_event() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let app = App::builder()
+        .engine(wasm_junction_wasmtime::WasmtimeEngine::new().unwrap())
+        .provide(wasm_junction::wasi::provider())
+        .middleware(RecordPollableDrop(seen.clone()))
+        .build()
+        .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(app.load(Component::from_bytes(COMPONENT).unwrap().named("drop")))
+        .unwrap();
+    runtime
+        .block_on(app.call("drop", EXPORT, "start-timer", Vec::new()))
+        .unwrap();
+
+    let drops = seen.lock().unwrap();
+    assert_eq!(drops.len(), 2);
+    assert_eq!(drops[0], drops[1]);
+    assert_eq!(drops[0].interface, "wasi:io/poll@0.2.12");
+    assert_eq!(drops[0].resource, "pollable");
+}
+
+#[test]
 fn every_function_in_each_gated_wit_interface_has_a_gate() {
     let seen = Arc::new(Mutex::new(BTreeSet::new()));
     let app = App::builder()
@@ -258,5 +323,9 @@ fn wit_functions() -> BTreeSet<(String, String)> {
                 .keys()
                 .map(move |function| (interface_name.clone(), function.clone()))
         })
+        .chain([(
+            "wasi:io/poll@0.2.12".to_owned(),
+            "[drop]pollable".to_owned(),
+        )])
         .collect()
 }

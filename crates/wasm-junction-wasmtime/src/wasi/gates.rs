@@ -1,6 +1,6 @@
 use wasm_junction_core::{
-    CallError, InvocationId, Resource as JunctionResource, ResourceOwnership, Val, Vals,
-    validate_resource_for_invocation,
+    CallError, EngineEvent, InvocationId, Resource as JunctionResource, ResourceOwnership, Val,
+    Vals, validate_resource_for_invocation,
 };
 use wasmtime::component::{Linker, Resource};
 use wasmtime_wasi::p2::DynPollable;
@@ -364,10 +364,60 @@ pub(super) fn add_poll(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         wasmtime::component::ResourceType::host::<DynPollable>(),
         |mut store, id| {
             Box::new(async move {
-                store
-                    .data_mut()
-                    .wasi_table()
-                    .delete(Resource::<DynPollable>::new_own(id))?;
+                let invocation = store
+                    .data()
+                    .context
+                    .invocation_id()
+                    .ok_or_else(|| wasmtime::Error::msg("WASI drop has no invocation id"))?;
+                let resource = JunctionResource::__owned_for_invocation(
+                    POLLABLE_INTERFACE,
+                    POLLABLE,
+                    id,
+                    invocation,
+                );
+                store.data().imports.emit(EngineEvent::ResourceDrop {
+                    invocation,
+                    resource: resource.clone(),
+                });
+                let real: Real = |mut store, args| {
+                    Box::pin(async move {
+                        let [Val::Resource(resource)] =
+                            <[Val; 1]>::try_from(args).map_err(|_| shape("one owned pollable"))?
+                        else {
+                            return Err(shape("one owned pollable"));
+                        };
+                        let invocation = store
+                            .data()
+                            .context
+                            .invocation_id()
+                            .ok_or_else(|| CallError::trap("WASI drop has no invocation id"))?;
+                        validate_resource_for_invocation(
+                            &resource,
+                            POLLABLE_INTERFACE,
+                            POLLABLE,
+                            ResourceOwnership::Own,
+                            invocation,
+                        )?;
+                        store
+                            .data_mut()
+                            .wasi_table()
+                            .delete(Resource::<DynPollable>::new_own(resource.id()))
+                            .map_err(|error| CallError::refused(error.to_string()))?;
+                        Ok(Vec::new())
+                    })
+                };
+                let values = trampoline::gate(
+                    &mut store,
+                    POLLABLE_INTERFACE,
+                    "[drop]pollable",
+                    vec![Val::Resource(resource)],
+                    real,
+                )
+                .await
+                .map_err(wasmtime::Error::new)?;
+                if !values.is_empty() {
+                    return Err(wasmtime::Error::new(shape("no results")));
+                }
                 Ok(())
             })
         },
