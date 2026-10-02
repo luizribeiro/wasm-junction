@@ -422,7 +422,8 @@ fn routed_calls_use_fresh_callee_instances() {
 fn every_call_uses_a_fresh_store() {
     let engine = WasmtimeEngine::new().unwrap();
     let fixture = loaded(&engine);
-    block_on(fixture.call("echo", vec![sample_note()])).unwrap();
+    let output = block_on(fixture.call("echo", vec![sample_note()])).unwrap();
+    assert_eq!(output, [sample_note()]);
     block_on(fixture.call("echo", vec![sample_note()])).unwrap();
     assert_eq!(engine.instantiations(), 2);
     assert_eq!(fixture.host().normalizations(), 2);

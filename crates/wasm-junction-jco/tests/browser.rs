@@ -2,6 +2,10 @@
 
 #![cfg(target_family = "wasm")]
 
+use std::cell::Cell;
+use std::rc::Rc;
+use std::sync::Arc;
+
 use js_sys::Uint8Array;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
@@ -9,11 +13,12 @@ use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 use wasm_encoder::{CodeSection, EntityType, ExportKind, ExportSection, Function, FunctionSection};
 use wasm_encoder::{ImportSection, Instruction, Module, TypeSection, ValType};
 use wasm_junction::{
-    App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Component, Provided, Provider,
-    Val, Vals,
+    App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Component, Engine, Middleware,
+    Next, Provided, Provider, Val, Vals, WasiConfig,
 };
 use wasm_junction_conformance::{
-    DECORATION, Fixture, SUMMARIZER, TRANSLATOR, sample_summary, translator_component,
+    DECORATION, Fixture, FixtureHost, SUMMARIZER, TRANSLATOR, component, sample_note,
+    sample_summary, translator_component,
 };
 use wasm_junction_jco::JcoEngine;
 
@@ -120,6 +125,62 @@ async fn provider_error_does_not_leak_into_the_next_call() {
         .await
         .unwrap();
     assert_eq!(result, [sample_summary()]);
+}
+
+#[wasm_bindgen_test]
+async fn full_note_matches_the_native_echo_result() {
+    let fixture = Fixture::new(JcoEngine::new()).await.unwrap();
+    let result = fixture.call("echo", vec![sample_note()]).await.unwrap();
+    assert_eq!(result, [sample_note()]);
+}
+
+#[wasm_bindgen_test]
+async fn malformed_component_has_a_typed_compilation_error() {
+    let result = JcoEngine::new()
+        .compile(Arc::from(&b"not a component"[..]), WasiConfig::default())
+        .await;
+    let Err(error) = result else {
+        panic!("malformed bytes compiled")
+    };
+    assert!(!error.to_string().is_empty());
+}
+
+struct AwaitTimer(Rc<Cell<bool>>);
+
+impl Middleware for AwaitTimer {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.function.as_ref() == "normalize" {
+            JsFuture::from(delay(10))
+                .await
+                .map_err(|error| CallError::trap(format!("timer failed: {error:?}")))?;
+            self.0.set(true);
+        }
+        next.run(call).await
+    }
+}
+
+#[wasm_bindgen_test]
+async fn middleware_can_await_a_timer_during_a_plain_import() {
+    let waited = Rc::new(Cell::new(false));
+    let app = App::builder()
+        .engine(JcoEngine::new())
+        .provide(FixtureHost::default().provided())
+        .middleware(AwaitTimer(waited.clone()))
+        .build()
+        .unwrap();
+    app.load(
+        Component::from_bytes(component())
+            .unwrap()
+            .named("summarizer"),
+    )
+    .await
+    .unwrap();
+    let values = app
+        .call("summarizer", SUMMARIZER, "echo", vec![sample_note()])
+        .await
+        .unwrap();
+    assert_eq!(values, [sample_note()]);
+    assert!(waited.get());
 }
 
 struct DelayedDecoration;
