@@ -1,4 +1,4 @@
-use std::any::Any;
+use std::any::{Any, TypeId};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{self, Display};
@@ -13,7 +13,8 @@ use crate::provider::ProvidedKind;
 use crate::{
     BoxFuture, Call, CallContext, CallError, Caller, CompiledComponent, Component, Engine,
     EngineError, Event, Extensions, HostBound, ImportDispatcher, ImportTarget, InvocationContext,
-    Middleware, Provided, Provider, Resource, Val, Vals, WasiConfig,
+    Middleware, Provided, Provider, Resource, Val, Vals, WASI_PROVIDER_NAME, WasiConfig,
+    WasiSettings,
 };
 
 mod lifecycle;
@@ -26,6 +27,7 @@ pub(crate) struct AppInner {
     engine: Arc<dyn Engine>,
     providers: HashMap<&'static str, Arc<dyn Provider>>,
     engine_interfaces: Vec<&'static str>,
+    wasi_provider: bool,
     #[allow(dead_code, reason = "export dispatch runs the middleware chain")]
     middleware: Arc<[Arc<dyn ErasedMiddleware>]>,
     wasi: WasiConfig,
@@ -134,6 +136,11 @@ impl App {
     where
         T: Any + HostBound,
     {
+        if TypeId::of::<T>() == TypeId::of::<WasiSettings>() && !self.0.wasi_provider {
+            return Err(ConfigureError::ProviderNotRegistered {
+                provider: WASI_PROVIDER_NAME,
+            });
+        }
         lock_or_recover(&self.0.settings)
             .entry(name.into())
             .or_default()
@@ -1553,6 +1560,8 @@ impl AppBuilder {
         let mut providers = HashMap::new();
         #[cfg_attr(not(feature = "wasi"), allow(unused_mut))]
         let mut engine_interfaces = Vec::new();
+        #[cfg_attr(not(feature = "wasi"), allow(unused_mut))]
+        let mut wasi_provider = false;
         let mut locations = HashMap::new();
         for registration in self.providers {
             match registration.provided.into_kind() {
@@ -1572,6 +1581,7 @@ impl AppBuilder {
                         register_location(&mut locations, interface, registration.location)?;
                         engine_interfaces.push(interface);
                     }
+                    wasi_provider |= name == WASI_PROVIDER_NAME;
                 }
             }
         }
@@ -1579,6 +1589,7 @@ impl AppBuilder {
             engine,
             providers,
             engine_interfaces,
+            wasi_provider,
             middleware: self.middleware.into(),
             wasi: self.wasi,
             max_call_depth: self.max_call_depth.unwrap_or(64),
@@ -1668,13 +1679,24 @@ fn register_location(
 /// An error from configuring a component setting.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConfigureError {
-    _private: (),
+pub enum ConfigureError {
+    /// A reserved setting was configured without its engine provider.
+    ProviderNotRegistered {
+        /// The provider required by the setting.
+        provider: &'static str,
+    },
 }
 
 impl Display for ConfigureError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("component setting was rejected")
+        match self {
+            Self::ProviderNotRegistered { provider } => {
+                write!(
+                    formatter,
+                    "{provider} settings require its provider to be registered"
+                )
+            }
+        }
     }
 }
 

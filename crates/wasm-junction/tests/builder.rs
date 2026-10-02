@@ -8,8 +8,9 @@ use std::sync::{Arc, Mutex};
 use support::component_bytes_from;
 use support::{NOTES, block_on, component_bytes};
 use wasm_junction::{
-    App, BoxFuture, Call, CallContext, CallError, CompiledComponent, Component, Engine,
-    EngineError, ImportDispatcher, LoadError, Provided, Provider, Vals, WasiConfig,
+    App, BoxFuture, Call, CallContext, CallError, CompiledComponent, Component, ConfigureError,
+    Engine, EngineError, ImportDispatcher, LoadError, Provided, Provider, Vals, WasiConfig,
+    WasiSettings,
 };
 
 struct UnusedProvider;
@@ -43,6 +44,16 @@ fn add_engine(builder: wasm_junction::AppBuilder) -> wasm_junction::AppBuilder {
 #[test]
 fn engine_and_builder_transform_are_accepted() {
     App::builder().apply(add_engine).build().unwrap();
+}
+
+#[test]
+fn wasi_settings_require_the_wasi_provider() {
+    let app = App::builder().engine(FakeEngine).build().unwrap();
+
+    assert_eq!(
+        app.configure("guest", WasiSettings::new().env("TOKEN", "secret")),
+        Err(ConfigureError::ProviderNotRegistered { provider: "WASI" })
+    );
 }
 
 struct ConfigEngine(Arc<Mutex<Option<WasiConfig>>>);

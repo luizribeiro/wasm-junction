@@ -7,6 +7,62 @@ use crate::{BoxFuture, CallError, HostBound, InvocationContext, Resource, Vals};
 /// Name shared by applications and engines for the built-in WASI provider.
 pub const WASI_PROVIDER_NAME: &str = "WASI";
 
+/// Engine-neutral WASI settings for one component.
+///
+/// Nothing from the host environment is visible unless it is added explicitly.
+///
+/// ```
+/// use wasm_junction_core::WasiSettings;
+///
+/// let settings = WasiSettings::new().env("MODE", "preview").arg("notes.txt");
+/// assert_eq!(settings.environment().collect::<Vec<_>>(), [("MODE", "preview")]);
+/// assert_eq!(settings.arguments().collect::<Vec<_>>(), ["notes.txt"]);
+/// ```
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WasiSettings {
+    environment: BTreeMap<String, String>,
+    arguments: Vec<String>,
+}
+
+impl WasiSettings {
+    /// Creates settings with no environment variables or arguments.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            environment: BTreeMap::new(),
+            arguments: Vec::new(),
+        }
+    }
+
+    /// Makes one environment variable visible, replacing an earlier value for its name.
+    #[must_use]
+    pub fn env(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.environment.insert(name.into(), value.into());
+        self
+    }
+
+    /// Appends one argument visible through `wasi:cli/environment`.
+    #[must_use]
+    pub fn arg(mut self, argument: impl Into<String>) -> Self {
+        self.arguments.push(argument.into());
+        self
+    }
+
+    /// Returns the configured environment variables in name order.
+    #[must_use]
+    pub fn environment(&self) -> impl ExactSizeIterator<Item = (&str, &str)> {
+        self.environment
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+    }
+
+    /// Returns the configured arguments in insertion order.
+    #[must_use]
+    pub fn arguments(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.arguments.iter().map(String::as_str)
+    }
+}
+
 /// The direction bytes travel across a component boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChannelDirection {
