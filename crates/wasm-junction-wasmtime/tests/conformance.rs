@@ -560,6 +560,15 @@ fn wit_error_provider_refusal_and_guest_trap_remain_distinct() {
 }
 
 #[test]
+fn repeatedly_importing_after_a_refusal_terminates_at_the_next_import() {
+    let fixture = loaded(&WasmtimeEngine::new().unwrap());
+    let error = block_on(fixture.call("repeat-after-refusal", Vec::new())).unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert_eq!(error.to_string(), "notes provider refused the call");
+    assert_eq!(fixture.host().reads(), 1);
+}
+
+#[test]
 fn malformed_component_has_a_typed_compilation_error() {
     let engine = WasmtimeEngine::new().unwrap();
     let result =

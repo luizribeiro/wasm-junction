@@ -22,6 +22,12 @@ impl bindings::exports::example::notes::summarizer::Guest for Component {
         })
     }
 
+    async fn repeat_after_refusal() {
+        loop {
+            let _ = notes::read("provider-refusal".to_owned()).await;
+        }
+    }
+
     fn echo(value: types::Note) -> types::Note {
         notes::normalize(&value)
     }

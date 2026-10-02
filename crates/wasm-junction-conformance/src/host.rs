@@ -8,6 +8,7 @@ use crate::{SessionId, TranslatorHop, decoration, notes, types};
 /// The host implementation used by the notes-summary fixture.
 #[derive(Clone, Default)]
 pub struct FixtureHost {
+    reads: Arc<AtomicUsize>,
     normalizations: Arc<AtomicUsize>,
 }
 
@@ -23,6 +24,12 @@ impl FixtureHost {
     pub fn normalizations(&self) -> usize {
         self.normalizations.load(Ordering::Relaxed)
     }
+
+    /// Returns the number of notes read by this host.
+    #[must_use]
+    pub fn reads(&self) -> usize {
+        self.reads.load(Ordering::Relaxed)
+    }
 }
 
 impl notes::Host for FixtureHost {
@@ -31,6 +38,7 @@ impl notes::Host for FixtureHost {
         _context: &CallContext,
         name: String,
     ) -> impl std::future::Future<Output = Result<Result<types::Note, String>, CallError>> {
+        self.reads.fetch_add(1, Ordering::Relaxed);
         std::future::ready(if name == "provider-refusal" {
             Err(CallError::refused("notes provider refused the call"))
         } else {

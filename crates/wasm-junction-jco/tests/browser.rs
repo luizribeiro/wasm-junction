@@ -140,6 +140,18 @@ async fn refused_import_stops_before_later_host_effects() {
 }
 
 #[wasm_bindgen_test]
+async fn repeatedly_importing_after_a_refusal_terminates_at_the_next_import() {
+    let fixture = Fixture::new(JcoEngine::new()).await.unwrap();
+    let error = fixture
+        .call("repeat-after-refusal", Vec::new())
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert_eq!(error.to_string(), "notes provider refused the call");
+    assert_eq!(fixture.host().reads(), 1);
+}
+
+#[wasm_bindgen_test]
 async fn provider_error_does_not_leak_into_the_next_call() {
     let fixture = Fixture::new(JcoEngine::new()).await.unwrap();
     let refusal = fixture

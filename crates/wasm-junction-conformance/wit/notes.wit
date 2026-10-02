@@ -40,6 +40,7 @@ interface notes {
 interface summarizer {
   use types.{note, summary};
   summarize: async func(name: string) -> result<summary, string>;
+  repeat-after-refusal: async func();
   echo: func(value: note) -> note;
   crash: func();
 }
