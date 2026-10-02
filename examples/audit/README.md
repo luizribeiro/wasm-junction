@@ -23,5 +23,6 @@ nix develop -c cargo run -p wasm-junction-example-audit
 
 Everything used by the example lives here: `wit/` defines the interfaces and world, `guest/` is
 the isolated component workspace, `build.rs` builds and componentizes it without WASI,
-`src/bindings.rs` generates host bindings, `src/trace.rs` contains the middleware, and `tests/`
+`src/bindings.rs` generates host bindings, `src/trace.rs` contains the middleware, `src/lib.rs`
+runs the target-neutral workflow, and `src/main.rs` uses Tokio to print its output. `tests/`
 checks the executable's complete output.

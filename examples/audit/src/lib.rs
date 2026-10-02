@@ -15,6 +15,8 @@ use wasm_junction::{App, CallContext, CallError, Component, InputStream};
 
 const COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/audit.wasm"));
 
+type Output = Arc<dyn Fn(String) + Send + Sync>;
+
 struct RequestId(u64);
 
 struct Session {
@@ -69,12 +71,17 @@ impl audit::Host for Audit {
     }
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), Box<dyn Error>> {
+/// Runs the audited call and writes its complete call and lifecycle transcript.
+///
+/// # Errors
+///
+/// Returns an error when the application cannot be built, loaded, or called.
+pub async fn run(write: impl Fn(String) + Send + Sync + 'static) -> Result<(), Box<dyn Error>> {
+    let output: Output = Arc::new(write);
     let audit = Arc::new(Audit::default());
     let app = App::builder()
         .provide(audit::provider(audit.clone()))
-        .middleware(Trace::default())
+        .middleware(Trace::new(output.clone()))
         .build()?;
     app.load(Component::from_bytes(COMPONENT)?.named("audit-log"))
         .await?;
@@ -83,7 +90,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     runner.run("Ada").await?;
 
     for line in audit.lines().iter() {
-        println!("stored {line}");
+        output(format!("stored {line}"));
     }
     Ok(())
 }

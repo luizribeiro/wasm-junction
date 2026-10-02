@@ -7,20 +7,31 @@ use wasm_junction::{
     Call, CallError, ChannelDirection, Event, Middleware, Next, ResourceOwnership, Val, Vals,
 };
 
+use crate::Output;
+
 /// Middleware that prints calls, resource drops, and stream lifecycles.
-#[derive(Default)]
 pub struct Trace {
+    output: Output,
     streams: Mutex<HashMap<u64, usize>>,
+}
+
+impl Trace {
+    pub(crate) fn new(output: Output) -> Self {
+        Self {
+            output,
+            streams: Mutex::default(),
+        }
+    }
 }
 
 impl Middleware for Trace {
     async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
         let label = call.to_string();
-        println!("call {label}({})", vals(&call.args));
+        (self.output)(format!("call {label}({})", vals(&call.args)));
         let result = next.run(call).await;
         match &result {
-            Ok(values) => println!("return {label}({})", vals(values)),
-            Err(error) => println!("trap {label}({error})"),
+            Ok(values) => (self.output)(format!("return {label}({})", vals(values))),
+            Err(error) => (self.output)(format!("trap {label}({error})")),
         }
         result
     }
@@ -31,7 +42,7 @@ impl Middleware for Trace {
                 interface,
                 resource,
                 id,
-            } => println!("resource drop {interface}/{resource}#{id}"),
+            } => (self.output)(format!("resource drop {interface}/{resource}#{id}")),
             Event::ChannelOpen { stream, direction } => {
                 self.channel("open", *stream, *direction);
             }
@@ -52,7 +63,7 @@ impl Trace {
             ChannelDirection::HostToGuest => "host-to-guest",
             ChannelDirection::GuestToHost => "guest-to-host",
         };
-        println!("channel {action} stream#{label} {direction}");
+        (self.output)(format!("channel {action} stream#{label} {direction}"));
     }
 }
 
