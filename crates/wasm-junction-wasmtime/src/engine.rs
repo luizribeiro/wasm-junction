@@ -33,8 +33,6 @@ pub(crate) struct StoreData {
     pub(crate) component: Arc<str>,
     #[cfg(feature = "wasi")]
     wasi: WasiState,
-    #[cfg(feature = "wasi")]
-    pub(crate) gated_wasi: Arc<std::sync::Mutex<WasiState>>,
     pub(crate) resources: Arc<[ResourceDefinition]>,
     pub(crate) owned_resources: HashSet<Resource>,
     pub(crate) active_streams: crate::streams::ActiveStreams,
@@ -270,8 +268,6 @@ impl Compiled {
                 component,
                 #[cfg(feature = "wasi")]
                 wasi: wasi_context(&wasi),
-                #[cfg(feature = "wasi")]
-                gated_wasi: Arc::new(std::sync::Mutex::new(wasi_context(&wasi))),
                 resources: self.resources.clone(),
                 owned_resources: HashSet::new(),
                 active_streams: Arc::new(std::sync::Mutex::new(HashMap::new())),

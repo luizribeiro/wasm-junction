@@ -32,6 +32,21 @@ impl FromVal for String {
     }
 }
 
+impl ToVal for u64 {
+    fn to_val(self) -> Val {
+        Val::U64(self)
+    }
+}
+
+impl FromVal for u64 {
+    fn from_val(value: Val) -> Result<Self, CallError> {
+        match value {
+            Val::U64(value) => Ok(value),
+            _ => Err(shape("u64")),
+        }
+    }
+}
+
 impl<T: ToVal> ToVal for Vec<T> {
     fn to_val(self) -> Val {
         Val::List(self.into_iter().map(ToVal::to_val).collect())
@@ -156,6 +171,16 @@ pub(super) fn add_wall_clock(linker: &mut Linker<StoreData>) -> wasmtime::Result
     gate!(linker, "wasi:clocks/wall-clock@0.2.12", "resolution", clocks,
         wasmtime_wasi::p2::bindings::clocks::wall_clock::Host::resolution,
         () -> Datetime);
+    Ok(())
+}
+
+pub(super) fn add_monotonic_reads(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    gate!(linker, "wasi:clocks/monotonic-clock@0.2.12", "now", clocks,
+        wasmtime_wasi::p2::bindings::clocks::monotonic_clock::Host::now,
+        () -> u64);
+    gate!(linker, "wasi:clocks/monotonic-clock@0.2.12", "resolution", clocks,
+        wasmtime_wasi::p2::bindings::clocks::monotonic_clock::Host::resolution,
+        () -> u64);
     Ok(())
 }
 

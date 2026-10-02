@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
 use wasm_junction_core::{ImportTarget, Vals};
 use wasmtime::component::{Linker, ResourceTable};
@@ -40,7 +40,8 @@ impl WasiView for WasiState {
 pub(crate) fn add_gates(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     gates::add_environment(linker)?;
     gates::add_wall_clock(linker)?;
-    clocks::add_monotonic_clock_gate(linker)
+    gates::add_monotonic_reads(linker)?;
+    clocks::add_subscriptions(linker)
 }
 
 pub(super) async fn dispatch(
@@ -70,11 +71,4 @@ pub(super) async fn dispatch(
         )
         .await
         .map_err(wasmtime::Error::new)
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    match mutex.lock() {
-        Ok(value) => value,
-        Err(poisoned) => poisoned.into_inner(),
-    }
 }
