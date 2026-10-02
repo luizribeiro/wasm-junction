@@ -7,7 +7,7 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
-use wasm_junction::{App, Call, CallError, Component, Middleware, Next, Vals};
+use wasm_junction::{App, Call, CallError, Component, InvocationId, Middleware, Next, Val, Vals};
 use wasm_junction_wasmtime::{GATED_WASI_INTERFACES, WASI_INTERFACES};
 
 const COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wasi-test.wasm"));
@@ -24,6 +24,23 @@ impl Middleware for RecordGates {
                 .insert((call.interface.to_string(), call.function.to_string()));
         }
         next.run(call).await
+    }
+}
+
+struct RecordResourceScope(Arc<Mutex<Option<(InvocationId, InvocationId)>>>);
+
+impl Middleware for RecordResourceScope {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        let invocation = call.invocation_id();
+        let records_subscription = call.function.as_ref() == "subscribe-duration";
+        let values = next.run(call).await?;
+        if records_subscription {
+            let Val::Resource(resource) = &values[0] else {
+                panic!("subscription did not return a resource");
+            };
+            *self.0.lock().unwrap() = Some((invocation, resource.invocation_id().unwrap()));
+        }
+        Ok(values)
     }
 }
 
@@ -47,6 +64,30 @@ fn advertised_wasi_set_excludes_ungated_filesystem_and_sockets() {
             .all(|interface| !interface.starts_with("wasi:filesystem/")
                 && !interface.starts_with("wasi:sockets/"))
     );
+}
+
+#[test]
+fn wasi_resources_carry_their_invocation() {
+    let seen = Arc::new(Mutex::new(None));
+    let app = App::builder()
+        .engine(wasm_junction_wasmtime::WasmtimeEngine::new().unwrap())
+        .provide(wasm_junction::wasi::provider())
+        .middleware(RecordResourceScope(seen.clone()))
+        .build()
+        .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(app.load(Component::from_bytes(COMPONENT).unwrap().named("scope")))
+        .unwrap();
+    runtime
+        .block_on(app.call("scope", EXPORT, "start-timer", Vec::new()))
+        .unwrap();
+
+    let (call, resource) = seen.lock().unwrap().unwrap();
+    assert_eq!(resource, call);
 }
 
 #[test]

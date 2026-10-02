@@ -1,4 +1,6 @@
-use wasm_junction_core::{CallError, Resource as JunctionResource, ResourceOwnership, Val, Vals};
+use wasm_junction_core::{
+    CallError, InvocationId, Resource as JunctionResource, ResourceOwnership, Val, Vals,
+};
 use wasmtime::component::{Linker, Resource};
 use wasmtime_wasi::p2::DynPollable;
 use wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime;
@@ -16,6 +18,32 @@ trait FromVal: Sized {
 
 fn shape(expected: &str) -> CallError {
     CallError::trap(format!("expected {expected}"))
+}
+
+fn scope(value: Val, invocation: InvocationId) -> Val {
+    match value {
+        Val::Resource(resource) => Val::Resource(match resource.ownership() {
+            ResourceOwnership::Own => JunctionResource::__owned_for_invocation(
+                resource.interface(),
+                resource.name(),
+                resource.id(),
+                invocation,
+            ),
+            ResourceOwnership::Borrow => JunctionResource::__borrowed_for_invocation(
+                resource.interface(),
+                resource.name(),
+                resource.id(),
+                invocation,
+            ),
+        }),
+        Val::List(values) => Val::List(
+            values
+                .into_iter()
+                .map(|value| scope(value, invocation))
+                .collect(),
+        ),
+        value => value,
+    }
 }
 
 impl ToVal for String {
@@ -171,7 +199,10 @@ macro_rules! gate {
         $linker.instance($iface)?.func_wrap_async(
             $name,
             |mut store, ($($arg,)*): ($($ty,)*)| Box::new(async move {
-                let args = vec![$($arg.to_val()),*];
+                let invocation = store.data().context.invocation_id()
+                    .ok_or_else(|| wasmtime::Error::msg("WASI call has no invocation id"))?;
+                let args = vec![$(scope($arg.to_val(), invocation)),*];
+                let _ = invocation;
                 let real: Real = |mut store, args| Box::pin(async move {
                     #[allow(unused_mut, unused_variables)]
                     let mut args = args.into_iter();
@@ -180,7 +211,9 @@ macro_rules! gate {
                     )?;)*
                     let value = $method(&mut views::$view(store.data_mut()) $(, $arg)*) $(.$await)?
                         .map_err(|error| CallError::trap(error.to_string()))?;
-                    Ok(vec![value.to_val()])
+                    let invocation = store.data().context.invocation_id()
+                        .ok_or_else(|| CallError::trap("WASI call has no invocation id"))?;
+                    Ok(vec![scope(value.to_val(), invocation)])
                 });
                 let outcome = trampoline::gate(&mut store, $iface, $name, args, real).await;
                 Ok((finish::<$ok>(outcome)?,))
