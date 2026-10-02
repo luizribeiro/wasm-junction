@@ -85,9 +85,13 @@ fn lower(value: Val, expected: &ValueType) -> Result<JsValue, CallError> {
                 .into()
         }
         (Val::Record(values), ValueType::Record(fields)) => lower_record(values, fields, expected)?,
+        (Val::Variant { case, value }, ValueType::Variant(cases)) => {
+            lower_variant(case, value, cases, expected)?
+        }
+        (Val::Enum(case), ValueType::Enum(cases)) if cases.contains(&case) => {
+            JsValue::from_str(&case)
+        }
         (_, ValueType::Unsupported(name)) => return Err(unsupported(name)),
-        (_, ValueType::Variant(_)) => return Err(unsupported("variant")),
-        (_, ValueType::Enum(_)) => return Err(unsupported("enum")),
         (_, ValueType::Flags(_)) => return Err(unsupported("flags")),
         (_, ValueType::Option(_)) => return Err(unsupported("option")),
         (_, ValueType::Result { .. }) => return Err(unsupported("result")),
@@ -148,8 +152,12 @@ fn lift(value: JsValue, expected: &ValueType) -> Result<Val, CallError> {
                 .map(Val::Tuple)
         }
         ValueType::Record(fields) => lift_record(value, fields, expected),
-        ValueType::Variant(_) => Err(unsupported("variant")),
-        ValueType::Enum(_) => Err(unsupported("enum")),
+        ValueType::Variant(cases) => lift_variant(value, cases, expected),
+        ValueType::Enum(cases) => value
+            .as_string()
+            .filter(|case| cases.contains(case))
+            .map(Val::Enum)
+            .ok_or_else(|| mismatch(expected, &value, "unknown enum case")),
         ValueType::Flags(_) => Err(unsupported("flags")),
         ValueType::Option(_) => Err(unsupported("option")),
         ValueType::Result { .. } => Err(unsupported("result")),
@@ -263,6 +271,71 @@ fn lift_record(
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Val::Record(values))
+}
+
+fn lower_variant(
+    case: String,
+    value: Option<Box<Val>>,
+    cases: &[crate::types::CaseType],
+    expected: &ValueType,
+) -> Result<JsValue, CallError> {
+    let actual = Val::Variant {
+        case: case.clone(),
+        value: value.clone(),
+    };
+    let Some(case_type) = cases.iter().find(|candidate| candidate.name == case) else {
+        return Err(mismatch(expected, &actual, "unknown variant case"));
+    };
+    let object = Object::new();
+    Reflect::set(&object, &"tag".into(), &JsValue::from_str(&case))
+        .map_err(|error| mismatch(expected, &error, "could not set variant tag"))?;
+    match (value, &case_type.ty) {
+        (None, None) => {}
+        (Some(value), Some(ty)) => {
+            Reflect::set(&object, &"val".into(), &lower(*value, ty)?)
+                .map_err(|error| mismatch(expected, &error, "could not set variant payload"))?;
+        }
+        _ => {
+            return Err(mismatch(
+                expected,
+                &actual,
+                "wrong payload for variant case",
+            ));
+        }
+    }
+    Ok(object.into())
+}
+
+fn lift_variant(
+    value: JsValue,
+    cases: &[crate::types::CaseType],
+    expected: &ValueType,
+) -> Result<Val, CallError> {
+    if !value.is_object() || Array::is_array(&value) {
+        return Err(wrong_js_type(expected, &value));
+    }
+    let tag = Reflect::get(&value, &"tag".into())
+        .ok()
+        .and_then(|tag| tag.as_string())
+        .ok_or_else(|| mismatch(expected, &value, "missing string tag"))?;
+    let case = cases
+        .iter()
+        .find(|candidate| candidate.name == tag)
+        .ok_or_else(|| mismatch(expected, &value, "unknown variant case"))?;
+    let payload = case
+        .ty
+        .as_ref()
+        .map(|ty| {
+            Reflect::get(&value, &"val".into())
+                .map_err(|error| mismatch(expected, &error, "could not read variant payload"))
+                .and_then(|value| lift(value, ty))
+                .map(Box::new)
+        })
+        .transpose()?;
+    Ok(Val::Variant {
+        case: tag,
+        value: payload,
+    })
 }
 
 fn one_char(value: String) -> Option<char> {
@@ -433,6 +506,55 @@ mod tests {
         );
         assert!(error.contains("WIT `record`"), "{error}");
         assert!(error.contains("missing field `title`"), "{error}");
+    }
+
+    #[wasm_bindgen_test]
+    fn round_trips_variants_and_enums() {
+        let cases = vec![
+            crate::types::CaseType {
+                name: "none".to_owned(),
+                ty: None,
+            },
+            crate::types::CaseType {
+                name: "text".to_owned(),
+                ty: Some(ValueType::String),
+            },
+        ];
+        let values = vec![
+            Val::Variant {
+                case: "text".to_owned(),
+                value: Some(Box::new(Val::from("diagram"))),
+            },
+            Val::Enum("upbeat".to_owned()),
+        ];
+        let signature = FunctionType {
+            params: vec![
+                ValueType::Variant(cases),
+                ValueType::Enum(vec!["neutral".to_owned(), "upbeat".to_owned()]),
+            ],
+            result: None,
+        };
+        let lowered = lower_args(values.clone(), &signature).unwrap();
+        assert_eq!(lift_args(&lowered, &signature).unwrap(), values);
+    }
+
+    #[wasm_bindgen_test]
+    fn refuses_an_unknown_variant_case() {
+        let error = lower_args(
+            vec![Val::Variant {
+                case: "missing".to_owned(),
+                value: None,
+            }],
+            &FunctionType {
+                params: vec![ValueType::Variant(Vec::new())],
+                result: None,
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("WIT `variant`"), "{error}");
+        assert!(error.contains("missing"), "{error}");
+        assert!(error.contains("unknown variant case"), "{error}");
     }
 
     #[wasm_bindgen_test]
