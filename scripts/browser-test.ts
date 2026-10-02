@@ -1,5 +1,5 @@
 import type { Buffer } from "node:buffer";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,6 +18,48 @@ const playwrightRoot = configuredPlaywrightRoot;
 const selectedBrowserName = browserName;
 
 const commandEnv = { ...process.env };
+if (cargoArgs[0] === "--package-tests") {
+  const packageName = cargoArgs[1];
+  if (!packageName || cargoArgs.length !== 2) {
+    throw new Error("--package-tests requires exactly one package name");
+  }
+  const metadata = JSON.parse(
+    execFileSync("cargo", ["metadata", "--format-version", "1", "--no-deps"], {
+      encoding: "utf8",
+      env: commandEnv,
+    }),
+  ) as {
+    packages: Array<{
+      name: string;
+      targets: Array<{ kind: string[]; name: string; test: boolean }>;
+    }>;
+  };
+  const packageMetadata = metadata.packages.find(pkg => pkg.name === packageName);
+  if (!packageMetadata) throw new Error(`Cargo package ${packageName} was not found`);
+  const targets = packageMetadata.targets.filter(target => target.test);
+  if (targets.length === 0) throw new Error(`Cargo package ${packageName} has no test targets`);
+  for (const target of targets) {
+    const selector = target.kind.includes("lib")
+      ? ["--lib"]
+      : target.kind.includes("test")
+        ? ["--test", target.name]
+        : target.kind.includes("bin")
+          ? ["--bin", target.name]
+          : [];
+    if (selector.length === 0) {
+      throw new Error(`unsupported test target ${target.name}: ${target.kind.join(", ")}`);
+    }
+    execFileSync(
+      process.execPath,
+      [import.meta.filename, selectedBrowserName, "-p", packageName, ...selector],
+      {
+        env: commandEnv,
+        stdio: "inherit",
+      },
+    );
+  }
+  process.exit(0);
+}
 const diagnosticsDirectory = mkdtempSync(join(tmpdir(), "wasm-junction-browser-"));
 const diagnosticsPath = join(diagnosticsDirectory, `${selectedBrowserName}.log`);
 process.env.DEBUG = "pw:browser";

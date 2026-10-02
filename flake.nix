@@ -125,8 +125,7 @@
               pkgs.wasm-bindgen-cli
             ];
             text = ''
-              scripts/browser-test all -- -p wasm-junction-jco --lib
-              scripts/browser-test all -- -p wasm-junction-jco --test browser
+              scripts/browser-test all -- --package-tests wasm-junction-jco
             '';
             stages = [ "pre-push" ];
           };
