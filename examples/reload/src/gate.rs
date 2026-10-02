@@ -13,6 +13,7 @@ struct State {
     entered: bool,
     released: bool,
     waker: Option<Waker>,
+    entered_waker: Option<Waker>,
 }
 
 /// Gate shared by the host and the guest's slow greeting.
@@ -26,10 +27,18 @@ impl Gate {
         gate::provider(self)
     }
 
-    /// Reports whether the slow guest call reached the gate.
-    #[must_use]
-    pub fn entered(&self) -> bool {
-        self.lock().entered
+    /// Waits until the slow guest call reaches the gate.
+    pub async fn wait_until_entered(&self) {
+        poll_fn(|context| {
+            let mut state = self.lock();
+            if state.entered {
+                Poll::Ready(())
+            } else {
+                state.entered_waker = Some(context.waker().clone());
+                Poll::Pending
+            }
+        })
+        .await;
     }
 
     /// Releases the slow guest call.
@@ -55,12 +64,18 @@ impl gate::Host for Gate {
         _context: &CallContext,
     ) -> impl std::future::Future<Output = Result<(), CallError>> {
         poll_fn(|context| {
-            let mut state = self.lock();
-            state.entered = true;
-            if state.released {
+            let (released, entered_waker) = {
+                let mut state = self.lock();
+                state.entered = true;
+                state.waker = Some(context.waker().clone());
+                (state.released, state.entered_waker.take())
+            };
+            if let Some(waker) = entered_waker {
+                waker.wake();
+            }
+            if released {
                 Poll::Ready(Ok(()))
             } else {
-                state.waker = Some(context.waker().clone());
                 Poll::Pending
             }
         })

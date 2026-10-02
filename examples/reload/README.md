@@ -10,6 +10,18 @@ Run it from the repository root:
 nix develop -c cargo run -p wasm-junction-example-reload
 ```
 
+## In the browser
+
+Run the dedicated-Worker browser test in Chromium, Firefox, and WebKit:
+
+```sh
+nix develop -c scripts/browser-test all -- -p wasm-junction-example-reload --lib
+```
+
+The native entry point and the browser test call the same `run` function. In the browser, both
+embedded generations are transpiled to JavaScript on the Worker's thread, including v2 during
+the reload itself.
+
 The executable tells one short lifecycle story:
 
 1. It loads `greeter` v1 and calls it through a typed handle.
@@ -34,5 +46,5 @@ The files are intentionally self-contained:
 - `src/gate.rs` implements the host-controlled suspension point.
 - `src/trace.rs` contains the example's tracing middleware.
 - `src/lib.rs` loads, calls, reloads, and releases the two generations.
-- `src/bin/` uses Tokio to run that target-neutral workflow and print its output.
+- `src/main.rs` uses Tokio to run that target-neutral workflow and print its output.
 - `tests/` runs the executable and checks its complete output.

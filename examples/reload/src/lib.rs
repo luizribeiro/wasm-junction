@@ -47,11 +47,12 @@ pub async fn run(write: impl Fn(String) + Send + Sync + 'static) -> Result<(), B
     let slow = greeter.greet_slow("Grace");
     let mut slow = std::pin::pin!(slow);
     poll_fn(|context| match slow.as_mut().poll(context) {
-        Poll::Pending if gate.entered() => Poll::Ready(()),
-        Poll::Pending => Poll::Pending,
+        Poll::Pending => Poll::Ready(()),
         Poll::Ready(result) => panic!("slow call ended before reload: {result:?}"),
     })
     .await;
+    // Jco reaches the host import asynchronously, so starting the call and entering the gate are separate steps.
+    gate.wait_until_entered().await;
     output("slow call is waiting on v1".to_owned());
 
     app.reload("greeter", Component::from_bytes(V2)?).await?;
@@ -60,4 +61,30 @@ pub async fn run(write: impl Fn(String) + Send + Sync + 'static) -> Result<(), B
     gate.release();
     output(format!("slow call finished: {}", slow.await?));
     Ok(())
+}
+
+#[cfg(all(test, target_family = "wasm"))]
+mod browser_tests {
+    use std::sync::{Arc, Mutex};
+
+    use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
+
+    wasm_bindgen_test_configure!(run_in_dedicated_worker);
+
+    #[wasm_bindgen_test]
+    async fn browser_output_matches_native_output() {
+        let actual = Arc::new(Mutex::new(String::new()));
+        let captured = actual.clone();
+        super::run(move |line| {
+            let mut output = captured.lock().unwrap();
+            output.push_str(&line);
+            output.push('\n');
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            *actual.lock().unwrap(),
+            include_str!("../tests/expected-output.txt")
+        );
+    }
 }
