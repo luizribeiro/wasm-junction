@@ -4,11 +4,12 @@ use wasmtime_wasi::p2::bindings::filesystem::types::{
     HostDescriptor, MetadataHashValue, NewTimestamp, OpenFlags, PathFlags,
 };
 
-use super::{FromVal, ToVal, WitResource, shape};
-use wasm_junction_core::{CallError, Val};
+use super::{FromVal, ToVal, WitResource, open_channel, shape};
+use wasm_junction_core::{CallError, ChannelDirection, Val};
 use wasmtime::component::Linker;
 use wasmtime_wasi::p2::FsResult;
 use wasmtime_wasi::p2::bindings::filesystem::preopens;
+use wasmtime_wasi::p2::{DynInputStream, DynOutputStream, FsError};
 
 use super::{Real, finish, scope_values, trampoline, views};
 use crate::engine::StoreData;
@@ -334,6 +335,37 @@ async fn read_directory(
     Ok(stream)
 }
 
+fn read_via_stream(
+    store: &mut StoreData,
+    descriptor: Resource<types::Descriptor>,
+    offset: u64,
+) -> FsResult<Resource<DynInputStream>> {
+    let stream =
+        HostDescriptor::read_via_stream(&mut views::filesystem(store), descriptor, offset)?;
+    open_channel(&stream, store, ChannelDirection::HostToGuest).map_err(FsError::trap)?;
+    Ok(stream)
+}
+
+fn write_via_stream(
+    store: &mut StoreData,
+    descriptor: Resource<types::Descriptor>,
+    offset: u64,
+) -> FsResult<Resource<DynOutputStream>> {
+    let stream =
+        HostDescriptor::write_via_stream(&mut views::filesystem(store), descriptor, offset)?;
+    open_channel(&stream, store, ChannelDirection::GuestToHost).map_err(FsError::trap)?;
+    Ok(stream)
+}
+
+fn append_via_stream(
+    store: &mut StoreData,
+    descriptor: Resource<types::Descriptor>,
+) -> FsResult<Resource<DynOutputStream>> {
+    let stream = HostDescriptor::append_via_stream(&mut views::filesystem(store), descriptor)?;
+    open_channel(&stream, store, ChannelDirection::GuestToHost).map_err(FsError::trap)?;
+    Ok(stream)
+}
+
 pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     linker
         .instance("wasi:filesystem/preopens@0.2.12")?
@@ -378,6 +410,12 @@ pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             open_flags: OpenFlags, descriptor_flags: DescriptorFlags) -> Resource<types::Descriptor>);
     gate_fs!(linker, "[method]descriptor.read-directory", read_directory, store_async,
         [0], (descriptor: Resource<types::Descriptor>) -> Resource<types::DirectoryEntryStream>);
+    gate_fs!(linker, "[method]descriptor.read-via-stream", read_via_stream, store_sync,
+        [0], (descriptor: Resource<types::Descriptor>, offset: u64) -> Resource<DynInputStream>);
+    gate_fs!(linker, "[method]descriptor.write-via-stream", write_via_stream, store_sync,
+        [0], (descriptor: Resource<types::Descriptor>, offset: u64) -> Resource<DynOutputStream>);
+    gate_fs!(linker, "[method]descriptor.append-via-stream", append_via_stream, store_sync,
+        [0], (descriptor: Resource<types::Descriptor>) -> Resource<DynOutputStream>);
     gate_fs!(linker, "[method]descriptor.advise", HostDescriptor::advise, async,
         [0], (descriptor: Resource<types::Descriptor>, offset: u64, len: u64, advice: Advice) -> ());
     gate_fs!(linker, "[method]descriptor.sync-data", HostDescriptor::sync_data, async,
