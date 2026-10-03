@@ -27,6 +27,8 @@ interface environment {
   stat-preopen: func() -> result<_, string>;
   link-preopens: func();
   filesystem-channels: func();
+  descriptor-handle: func() -> bool;
+  directory-stream-handle: func() -> bool;
 }
 
 world fixture {

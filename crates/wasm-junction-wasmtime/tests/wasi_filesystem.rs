@@ -316,3 +316,108 @@ fn filesystem_streams_open_and_close_invocation_channels() {
         }));
     }
 }
+
+#[derive(Clone, Copy)]
+enum InvalidHandle {
+    Foreign,
+    Mistyped,
+    Unscoped,
+}
+
+struct RewriteHandle {
+    target: &'static str,
+    replacement: InvalidHandle,
+    saved: Mutex<Option<wasm_junction::Resource>>,
+}
+
+impl Middleware for RewriteHandle {
+    async fn call(&self, mut call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.function.as_ref() != self.target {
+            return next.run(call).await;
+        }
+        let Val::Resource(current) = &call.args[0] else {
+            panic!("filesystem handle call did not receive a resource")
+        };
+        let replacement = match self.replacement {
+            InvalidHandle::Foreign => {
+                let foreign = {
+                    let mut saved = self.saved.lock().unwrap();
+                    if let Some(resource) = saved.as_ref() {
+                        Some(resource.clone())
+                    } else {
+                        *saved = Some(current.clone());
+                        None
+                    }
+                };
+                let Some(resource) = foreign else {
+                    return next.run(call).await;
+                };
+                resource
+            }
+            InvalidHandle::Mistyped => wasm_junction::Resource::__borrowed_for_invocation(
+                "wasi:io/poll@0.2.12",
+                "pollable",
+                current.id(),
+                call.invocation_id(),
+            ),
+            InvalidHandle::Unscoped => {
+                wasm_junction::Resource::borrowed(current.interface(), current.name(), current.id())
+            }
+        };
+        call.args[0] = Val::Resource(replacement);
+        next.run(call).await
+    }
+}
+
+fn assert_invalid_handle(export: &str, target: &'static str, replacement: InvalidHandle) {
+    let directory = TestDirectory::new(export);
+    let app = App::builder()
+        .engine(wasm_junction_wasmtime::WasmtimeEngine::new().unwrap())
+        .provide(wasm_junction::wasi::provider())
+        .middleware(RewriteHandle {
+            target,
+            replacement,
+            saved: Mutex::new(None),
+        })
+        .build()
+        .unwrap();
+    app.configure(
+        "files",
+        WasiSettings::new().preopen(&directory.0, "/data", Access::ReadOnly),
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(app.load(Component::from_bytes(COMPONENT).unwrap().named("files")))
+        .unwrap();
+    if matches!(replacement, InvalidHandle::Foreign) {
+        runtime
+            .block_on(app.call("files", EXPORT, export, Vec::new()))
+            .unwrap();
+    }
+    let result = runtime
+        .block_on(app.call("files", EXPORT, export, Vec::new()))
+        .unwrap();
+    assert_eq!(result, [Val::Bool(true)]);
+}
+
+#[test]
+fn invalid_filesystem_handles_are_refused_as_access_errors() {
+    for (export, target) in [
+        ("descriptor-handle", "[method]descriptor.stat"),
+        (
+            "directory-stream-handle",
+            "[method]directory-entry-stream.read-directory-entry",
+        ),
+    ] {
+        for replacement in [
+            InvalidHandle::Foreign,
+            InvalidHandle::Mistyped,
+            InvalidHandle::Unscoped,
+        ] {
+            assert_invalid_handle(export, target, replacement);
+        }
+    }
+}

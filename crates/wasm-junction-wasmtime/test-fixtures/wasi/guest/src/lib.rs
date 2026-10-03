@@ -318,6 +318,29 @@ impl exports::test::wasi::environment::Guest for Component {
         drop(file.write_via_stream(0).unwrap());
         drop(file.append_via_stream().unwrap());
     }
+
+    fn descriptor_handle() -> bool {
+        let (directory, _) = wasi::filesystem::preopens::get_directories()
+            .into_iter()
+            .next()
+            .unwrap();
+        matches!(
+            directory.stat(),
+            Err(wasi::filesystem::types::ErrorCode::Access)
+        )
+    }
+
+    fn directory_stream_handle() -> bool {
+        let (directory, _) = wasi::filesystem::preopens::get_directories()
+            .into_iter()
+            .next()
+            .unwrap();
+        let stream = directory.read_directory().unwrap();
+        matches!(
+            stream.read_directory_entry(),
+            Err(wasi::filesystem::types::ErrorCode::Access)
+        )
+    }
 }
 
 export!(Component);
