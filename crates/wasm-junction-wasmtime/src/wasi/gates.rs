@@ -1377,6 +1377,10 @@ mod tests {
     }
 
     #[cfg(feature = "wasi-http")]
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "the mock matches the trappable host method signature"
+    )]
     fn test_plain_result(
         _store: &mut StoreData,
         value: u64,

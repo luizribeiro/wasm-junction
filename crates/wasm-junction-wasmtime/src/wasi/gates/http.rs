@@ -1,3 +1,7 @@
+#[allow(
+    clippy::wildcard_imports,
+    reason = "HTTP gates share the parent module's private gate machinery"
+)]
 use super::*;
 use wasmtime::component::{Access, ComponentType, FutureReader, StreamReader};
 use wasmtime::{AsContextMut, StoreContextMut};
@@ -123,17 +127,24 @@ fn validate_owned_arg<T: WitResource>(
 type TransferResult = Result<(), ErrorCode>;
 type TrailersResult = Result<Option<Resource<Fields>>, ErrorCode>;
 type Headers = Vec<(String, Vec<u8>)>;
-
-fn request_context(
-    store: &mut StoreData,
-    request: &Resource<Request>,
-) -> wasmtime::Result<(
+type RequestContext = (
     Method,
     Option<Scheme>,
     Option<String>,
     Option<String>,
     Headers,
-)> {
+);
+type RequestNewParams = (
+    Resource<Fields>,
+    Option<StreamReader<u8>>,
+    FutureReader<TrailersResult>,
+    Option<Resource<RequestOptions>>,
+);
+
+fn request_context(
+    store: &mut StoreData,
+    request: &Resource<Request>,
+) -> wasmtime::Result<RequestContext> {
     use wasmtime_wasi_http::p3::bindings::http::types::{HostFields, HostRequest};
 
     let id = request.rep();
@@ -199,6 +210,10 @@ fn drop_request_options(
     wasmtime_wasi_http::p3::bindings::http::types::HostRequestOptions::drop(&mut view, options)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "keeping the WIT registrations together makes gate coverage auditable"
+)]
 pub(super) fn add(linker: &mut Linker<crate::engine::StoreData>) -> wasmtime::Result<()> {
     use wasmtime_wasi_http::p3::bindings::http::types::{
         HostFields, HostRequest, HostRequestOptions, HostRequestWithStore, HostResponse,
@@ -347,13 +362,7 @@ fn add_request_new(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 
     linker.instance(TYPES)?.func_wrap_async(
         "[static]request.new",
-        |mut store,
-         (headers, contents, trailers, options): (
-            Resource<Fields>,
-            Option<StreamReader<u8>>,
-            FutureReader<TrailersResult>,
-            Option<Resource<RequestOptions>>,
-        )| {
+        |mut store, (headers, contents, trailers, options): RequestNewParams| {
             Box::new(async move {
                 let invocation = store
                     .data()
@@ -963,6 +972,10 @@ fn fields<const N: usize>(value: Val, expected: &str) -> Result<[Val; N], CallEr
         .map_err(|_| shape(expected))
 }
 
+#[expect(
+    clippy::ref_option,
+    reason = "callers still need to move payloads in the other match arms"
+)]
 fn no_payload(value: &Option<Box<Val>>) -> Result<(), CallError> {
     if value.is_none() {
         Ok(())
