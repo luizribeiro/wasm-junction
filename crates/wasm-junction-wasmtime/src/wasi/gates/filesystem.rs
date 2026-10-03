@@ -1,10 +1,11 @@
+use wasmtime::component::Resource;
 use wasmtime_wasi::p2::bindings::filesystem::types::{
     self, Advice, DescriptorFlags, DescriptorStat, DescriptorType, DirectoryEntry, ErrorCode,
     MetadataHashValue, NewTimestamp, OpenFlags, PathFlags,
 };
 
 use super::{FromVal, ToVal, WitResource, shape};
-use wasm_junction_core::Val;
+use wasm_junction_core::{CallError, Val};
 
 const INTERFACE: &str = "wasi:filesystem/types@0.2.12";
 const DESCRIPTOR: &str = "descriptor";
@@ -192,6 +193,30 @@ impl ToVal for DescriptorStat {
     }
 }
 
+impl FromVal for DescriptorStat {
+    fn from_val(value: Val) -> Result<Self, wasm_junction_core::CallError> {
+        let Val::Record(fields) = value else {
+            return Err(shape("descriptor-stat"));
+        };
+        let [
+            (_, type_),
+            (_, link_count),
+            (_, size),
+            (_, accessed),
+            (_, modified),
+            (_, changed),
+        ] = <[_; 6]>::try_from(fields).map_err(|_| shape("descriptor-stat fields"))?;
+        Ok(Self {
+            type_: DescriptorType::from_val(type_)?,
+            link_count: u64::from_val(link_count)?,
+            size: u64::from_val(size)?,
+            data_access_timestamp: Option::<super::Datetime>::from_val(accessed)?,
+            data_modification_timestamp: Option::<super::Datetime>::from_val(modified)?,
+            status_change_timestamp: Option::<super::Datetime>::from_val(changed)?,
+        })
+    }
+}
+
 impl ToVal for DirectoryEntry {
     fn to_val(self) -> Val {
         Val::Record(vec![
@@ -224,6 +249,20 @@ impl ToVal for MetadataHashValue {
     }
 }
 
+impl FromVal for MetadataHashValue {
+    fn from_val(value: Val) -> Result<Self, wasm_junction_core::CallError> {
+        let Val::Record(fields) = value else {
+            return Err(shape("metadata-hash-value"));
+        };
+        let [(_, lower), (_, upper)] =
+            <[_; 2]>::try_from(fields).map_err(|_| shape("metadata-hash-value fields"))?;
+        Ok(Self {
+            lower: u64::from_val(lower)?,
+            upper: u64::from_val(upper)?,
+        })
+    }
+}
+
 impl<T: ToVal> ToVal for Result<T, ErrorCode> {
     fn to_val(self) -> Val {
         Val::Result(match self {
@@ -243,3 +282,5 @@ impl<T: FromVal> FromVal for Result<T, ErrorCode> {
         }
     }
 }
+
+list_value!((Resource<types::Descriptor>, String));
