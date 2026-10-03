@@ -1,0 +1,9 @@
+call host → http example:http/client@0.1.0.fetch()
+call http → host wasi:http/client@0.3.0.send()
+policy allow POST http://local/message
+allowed: 200:hello from server
+server received rewritten header and request body
+call host → http example:http/client@0.1.0.fetch()
+call http → host wasi:http/client@0.3.0.send()
+policy deny POST http://blocked.invalid/message
+blocked: denied
