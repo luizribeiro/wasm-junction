@@ -156,6 +156,17 @@ impl exports::test::wasi::environment::Guest for Component {
         let output = wasi::cli::stdout::get_stdout();
         let _ = output.splice(&input, 0);
     }
+
+    fn benchmark_write(bytes: Vec<u8>) -> Vec<u8> {
+        let output = wasi::cli::stdout::get_stdout();
+        for chunk in bytes.chunks(4096) {
+            let permit = output.check_write().unwrap();
+            assert!(permit >= chunk.len() as u64);
+            output.write(chunk).unwrap();
+        }
+        output.blocking_flush().unwrap();
+        bytes
+    }
 }
 
 export!(Component);

@@ -14,6 +14,7 @@ interface environment {
   input-read: func() -> string;
   rewritten-write: func() -> bool;
   splice-first: func();
+  benchmark-write: func(bytes: list<u8>) -> list<u8>;
 }
 
 world fixture {

@@ -45,5 +45,10 @@ harness = false
 required-features = ["wasi"]
 
 [[bench]]
+name = "wasi_streams"
+harness = false
+required-features = ["wasi"]
+
+[[bench]]
 name = "reload"
 harness = false
