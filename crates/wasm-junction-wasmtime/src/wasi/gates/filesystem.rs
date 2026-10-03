@@ -333,5 +333,52 @@ pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         })?;
     gate_fs!(linker, "[method]descriptor.stat", HostDescriptor::stat, async,
         [0], (descriptor: Resource<types::Descriptor>) -> DescriptorStat);
+    gate_fs!(linker, "[method]descriptor.advise", HostDescriptor::advise, async,
+        [0], (descriptor: Resource<types::Descriptor>, offset: u64, len: u64, advice: Advice) -> ());
+    gate_fs!(linker, "[method]descriptor.sync-data", HostDescriptor::sync_data, async,
+        [0], (descriptor: Resource<types::Descriptor>) -> ());
+    gate_fs!(linker, "[method]descriptor.get-flags", HostDescriptor::get_flags, async,
+        [0], (descriptor: Resource<types::Descriptor>) -> DescriptorFlags);
+    gate_fs!(linker, "[method]descriptor.get-type", HostDescriptor::get_type, async,
+        [0], (descriptor: Resource<types::Descriptor>) -> DescriptorType);
+    gate_fs!(linker, "[method]descriptor.set-size", HostDescriptor::set_size, async,
+        [0], (descriptor: Resource<types::Descriptor>, size: u64) -> ());
+    gate_fs!(linker, "[method]descriptor.set-times", HostDescriptor::set_times, async,
+        [0], (descriptor: Resource<types::Descriptor>, accessed: NewTimestamp, modified: NewTimestamp) -> ());
+    gate_fs!(linker, "[method]descriptor.read", HostDescriptor::read, async,
+        [0], (descriptor: Resource<types::Descriptor>, len: u64, offset: u64) -> (Vec<u8>, bool));
+    gate_fs!(linker, "[method]descriptor.write", HostDescriptor::write, async,
+        [0], (descriptor: Resource<types::Descriptor>, bytes: Vec<u8>, offset: u64) -> u64);
+    gate_fs!(linker, "[method]descriptor.sync", HostDescriptor::sync, async,
+        [0], (descriptor: Resource<types::Descriptor>) -> ());
+    gate_fs!(linker, "[method]descriptor.create-directory-at",
+        HostDescriptor::create_directory_at, async,
+        [0], (descriptor: Resource<types::Descriptor>, path: String) -> ());
+    gate_fs!(linker, "[method]descriptor.stat-at", HostDescriptor::stat_at, async,
+        [0], (descriptor: Resource<types::Descriptor>, path_flags: PathFlags, path: String) -> DescriptorStat);
+    gate_fs!(linker, "[method]descriptor.set-times-at", HostDescriptor::set_times_at, async,
+        [0], (descriptor: Resource<types::Descriptor>, path_flags: PathFlags, path: String,
+            accessed: NewTimestamp, modified: NewTimestamp) -> ());
+    gate_fs!(linker, "[method]descriptor.link-at", HostDescriptor::link_at, async,
+        [0, 3], (descriptor: Resource<types::Descriptor>, old_path_flags: PathFlags,
+            old_path: String, new_descriptor: Resource<types::Descriptor>, new_path: String) -> ());
+    gate_fs!(linker, "[method]descriptor.readlink-at", HostDescriptor::readlink_at, async,
+        [0], (descriptor: Resource<types::Descriptor>, path: String) -> String);
+    gate_fs!(linker, "[method]descriptor.remove-directory-at",
+        HostDescriptor::remove_directory_at, async,
+        [0], (descriptor: Resource<types::Descriptor>, path: String) -> ());
+    gate_fs!(linker, "[method]descriptor.rename-at", HostDescriptor::rename_at, async,
+        [0, 2], (descriptor: Resource<types::Descriptor>, old_path: String,
+            new_descriptor: Resource<types::Descriptor>, new_path: String) -> ());
+    gate_fs!(linker, "[method]descriptor.symlink-at", HostDescriptor::symlink_at, async,
+        [0], (descriptor: Resource<types::Descriptor>, old_path: String, new_path: String) -> ());
+    gate_fs!(linker, "[method]descriptor.unlink-file-at", HostDescriptor::unlink_file_at, async,
+        [0], (descriptor: Resource<types::Descriptor>, path: String) -> ());
+    gate_fs!(linker, "[method]descriptor.metadata-hash", HostDescriptor::metadata_hash, async,
+        [0], (descriptor: Resource<types::Descriptor>) -> MetadataHashValue);
+    gate_fs!(linker, "[method]descriptor.metadata-hash-at",
+        HostDescriptor::metadata_hash_at, async,
+        [0], (descriptor: Resource<types::Descriptor>, path_flags: PathFlags,
+            path: String) -> MetadataHashValue);
     Ok(())
 }
