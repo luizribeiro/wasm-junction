@@ -1,6 +1,8 @@
 use wasmtime_wasi::p2::bindings::sockets::network::{
     ErrorCode, IpAddress, IpAddressFamily, IpSocketAddress, Ipv4SocketAddress, Ipv6SocketAddress,
 };
+use wasmtime_wasi::p2::bindings::sockets::tcp::ShutdownType;
+use wasmtime_wasi::p2::bindings::sockets::udp::{IncomingDatagram, OutgoingDatagram};
 
 use super::super::{FromVal, ToVal, shape};
 use wasm_junction_core::{CallError, Val};
@@ -119,3 +121,124 @@ impl FromVal for IpAddress {
         }
     }
 }
+
+impl ToVal for Ipv4SocketAddress {
+    fn to_val(self) -> Val {
+        let address = Val::Tuple(
+            [
+                self.address.0,
+                self.address.1,
+                self.address.2,
+                self.address.3,
+            ]
+            .into_iter()
+            .map(Val::U8)
+            .collect(),
+        );
+        Val::Record(vec![
+            ("port".to_owned(), self.port.to_val()),
+            ("address".to_owned(), address),
+        ])
+    }
+}
+
+impl FromVal for Ipv4SocketAddress {
+    fn from_val(value: Val) -> Result<Self, CallError> {
+        let Val::Record(fields) = value else {
+            return Err(shape("ipv4-socket-address"));
+        };
+        let [(_, port), (_, address)] =
+            <[_; 2]>::try_from(fields).map_err(|_| shape("ipv4-socket-address fields"))?;
+        let IpAddress::Ipv4(address) = IpAddress::from_val(Val::Variant {
+            case: "ipv4".to_owned(),
+            value: Some(Box::new(address)),
+        })?
+        else {
+            return Err(shape("ipv4-address"));
+        };
+        Ok(Self {
+            port: u16::from_val(port)?,
+            address,
+        })
+    }
+}
+
+impl ToVal for Ipv6SocketAddress {
+    fn to_val(self) -> Val {
+        let address = Val::Tuple(
+            [
+                self.address.0,
+                self.address.1,
+                self.address.2,
+                self.address.3,
+                self.address.4,
+                self.address.5,
+                self.address.6,
+                self.address.7,
+            ]
+            .into_iter()
+            .map(Val::U16)
+            .collect(),
+        );
+        Val::Record(vec![
+            ("port".to_owned(), self.port.to_val()),
+            ("flow-info".to_owned(), self.flow_info.to_val()),
+            ("address".to_owned(), address),
+            ("scope-id".to_owned(), self.scope_id.to_val()),
+        ])
+    }
+}
+
+impl FromVal for Ipv6SocketAddress {
+    fn from_val(value: Val) -> Result<Self, CallError> {
+        let Val::Record(fields) = value else {
+            return Err(shape("ipv6-socket-address"));
+        };
+        let [(_, port), (_, flow_info), (_, address), (_, scope_id)] =
+            <[_; 4]>::try_from(fields).map_err(|_| shape("ipv6-socket-address fields"))?;
+        let IpAddress::Ipv6(address) = IpAddress::from_val(Val::Variant {
+            case: "ipv6".to_owned(),
+            value: Some(Box::new(address)),
+        })?
+        else {
+            return Err(shape("ipv6-address"));
+        };
+        Ok(Self {
+            port: u16::from_val(port)?,
+            flow_info: u32::from_val(flow_info)?,
+            address,
+            scope_id: u32::from_val(scope_id)?,
+        })
+    }
+}
+
+impl ToVal for IpSocketAddress {
+    fn to_val(self) -> Val {
+        let (case, value) = match self {
+            Self::Ipv4(value) => ("ipv4", value.to_val()),
+            Self::Ipv6(value) => ("ipv6", value.to_val()),
+        };
+        Val::Variant {
+            case: case.to_owned(),
+            value: Some(Box::new(value)),
+        }
+    }
+}
+
+impl FromVal for IpSocketAddress {
+    fn from_val(value: Val) -> Result<Self, CallError> {
+        match value {
+            Val::Variant {
+                case,
+                value: Some(value),
+            } if case == "ipv4" => Ipv4SocketAddress::from_val(*value).map(Self::Ipv4),
+            Val::Variant {
+                case,
+                value: Some(value),
+            } if case == "ipv6" => Ipv6SocketAddress::from_val(*value).map(Self::Ipv6),
+            _ => Err(shape("ip-socket-address")),
+        }
+    }
+}
+
+enum_value!(ShutdownType { Receive => "receive", Send => "send", Both => "both" });
