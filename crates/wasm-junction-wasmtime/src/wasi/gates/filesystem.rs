@@ -7,6 +7,7 @@ use wasmtime_wasi::p2::bindings::filesystem::types::{
 use super::{FromVal, ToVal, WitResource, shape};
 use wasm_junction_core::{CallError, Val};
 use wasmtime::component::Linker;
+use wasmtime_wasi::p2::FsResult;
 use wasmtime_wasi::p2::bindings::filesystem::preopens;
 
 use super::{Real, finish, scope_values, trampoline, views};
@@ -294,6 +295,45 @@ impl<T: FromVal> FromVal for Result<T, ErrorCode> {
 
 list_value!((Resource<types::Descriptor>, String));
 
+#[allow(clippy::too_many_arguments)]
+async fn open_at(
+    store: &mut StoreData,
+    descriptor: Resource<types::Descriptor>,
+    path_flags: PathFlags,
+    path: String,
+    open_flags: OpenFlags,
+    descriptor_flags: DescriptorFlags,
+) -> FsResult<Resource<types::Descriptor>> {
+    let preopen = store
+        .descriptor_preopen(descriptor.rep())
+        .ok_or(ErrorCode::Access)?
+        .to_owned();
+    let opened = HostDescriptor::open_at(
+        &mut views::filesystem(store),
+        descriptor,
+        path_flags,
+        path,
+        open_flags,
+        descriptor_flags,
+    )
+    .await?;
+    store.set_descriptor_preopen(opened.rep(), preopen);
+    Ok(opened)
+}
+
+async fn read_directory(
+    store: &mut StoreData,
+    descriptor: Resource<types::Descriptor>,
+) -> FsResult<Resource<types::DirectoryEntryStream>> {
+    let preopen = store
+        .descriptor_preopen(descriptor.rep())
+        .ok_or(ErrorCode::Access)?
+        .to_owned();
+    let stream = HostDescriptor::read_directory(&mut views::filesystem(store), descriptor).await?;
+    store.set_directory_stream_preopen(stream.rep(), preopen);
+    Ok(stream)
+}
+
 pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     linker
         .instance("wasi:filesystem/preopens@0.2.12")?
@@ -333,6 +373,11 @@ pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         })?;
     gate_fs!(linker, "[method]descriptor.stat", HostDescriptor::stat, async,
         [0], (descriptor: Resource<types::Descriptor>) -> DescriptorStat);
+    gate_fs!(linker, "[method]descriptor.open-at", open_at, store_async,
+        [0], (descriptor: Resource<types::Descriptor>, path_flags: PathFlags, path: String,
+            open_flags: OpenFlags, descriptor_flags: DescriptorFlags) -> Resource<types::Descriptor>);
+    gate_fs!(linker, "[method]descriptor.read-directory", read_directory, store_async,
+        [0], (descriptor: Resource<types::Descriptor>) -> Resource<types::DirectoryEntryStream>);
     gate_fs!(linker, "[method]descriptor.advise", HostDescriptor::advise, async,
         [0], (descriptor: Resource<types::Descriptor>, offset: u64, len: u64, advice: Advice) -> ());
     gate_fs!(linker, "[method]descriptor.sync-data", HostDescriptor::sync_data, async,

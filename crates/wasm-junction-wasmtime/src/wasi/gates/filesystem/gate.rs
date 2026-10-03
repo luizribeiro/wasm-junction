@@ -99,7 +99,7 @@ macro_rules! gate_fs {
                         args.next().ok_or_else(|| super::shape("another argument"))?
                     )?;)*
                     let result = gate_fs!(@call $mode, $method,
-                        &mut views::filesystem(store.data_mut()) $(, $arg)*);
+                        store.data_mut() $(, $arg)*);
                     let result = convert(store.data_mut(), result)?;
                     Ok(vec![result.to_val()])
                 });
@@ -108,11 +108,17 @@ macro_rules! gate_fs {
             }),
         )?;
     };
-    (@call async, $method:path, $view:expr $(, $arg:ident)*) => {
-        $method($view $(, $arg)*).await
+    (@call async, $method:path, $store:expr $(, $arg:ident)*) => {
+        $method(&mut views::filesystem($store) $(, $arg)*).await
     };
-    (@call sync, $method:path, $view:expr $(, $arg:ident)*) => {
-        $method($view $(, $arg)*)
+    (@call sync, $method:path, $store:expr $(, $arg:ident)*) => {
+        $method(&mut views::filesystem($store) $(, $arg)*)
+    };
+    (@call store_async, $method:path, $store:expr $(, $arg:ident)*) => {
+        $method($store $(, $arg)*).await
+    };
+    (@call store_sync, $method:path, $store:expr $(, $arg:ident)*) => {
+        $method($store $(, $arg)*)
     };
 }
 
