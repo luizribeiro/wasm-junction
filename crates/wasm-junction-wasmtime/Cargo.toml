@@ -16,7 +16,7 @@ default = ["parallel-compilation", "wasi"]
 parallel-compilation = ["wasmtime/parallel-compilation"]
 wasi = ["dep:tokio", "dep:wasmtime-wasi"]
 wasi-p3 = ["wasi", "wasmtime-wasi/p3"]
-wasi-http = ["wasi-p3", "dep:wasmtime-wasi-http"]
+wasi-http = ["wasi-p3", "dep:wasmtime-wasi-http", "wasm-junction/wasi-http"]
 
 [dependencies]
 wasm-junction-core = { path = "../wasm-junction-core", version = "=0.0.0" }
