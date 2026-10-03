@@ -107,6 +107,17 @@ impl exports::test::wasi::environment::Guest for Component {
             second >= first
         )
     }
+
+    fn refused_write() -> String {
+        let output = wasi::cli::stdout::get_stdout();
+        let _ = output.check_write();
+        match output.write(b"refuse") {
+            Err(wasi::io::streams::StreamError::LastOperationFailed(error)) => {
+                error.to_debug_string()
+            }
+            other => format!("unexpected result: {other:?}"),
+        }
+    }
 }
 
 export!(Component);

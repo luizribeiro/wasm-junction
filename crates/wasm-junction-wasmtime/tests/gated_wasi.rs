@@ -34,6 +34,18 @@ impl Middleware for RecordGates {
     }
 }
 
+struct RefuseWrite;
+
+impl Middleware for RefuseWrite {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.function.as_ref() == "[method]output-stream.write" {
+            Err(CallError::refused("write denied by policy"))
+        } else {
+            next.run(call).await
+        }
+    }
+}
+
 struct RecordResourceScope(Arc<Mutex<Option<(InvocationId, InvocationId)>>>);
 
 impl Middleware for RecordResourceScope {
@@ -237,6 +249,18 @@ fn unscoped_pollable_is_refused() {
             .to_string()
             .contains("does not belong to this invocation")
     );
+}
+
+#[test]
+fn refused_write_is_a_guest_stream_error() {
+    let (app, runtime) = checked_app(RefuseWrite);
+    let values = runtime
+        .block_on(app.call("checked", EXPORT, "refused-write", Vec::new()))
+        .unwrap();
+    let [Val::String(message)] = values.as_slice() else {
+        panic!("refused write returned the wrong shape");
+    };
+    assert!(message.contains("write denied by policy"));
 }
 
 #[test]

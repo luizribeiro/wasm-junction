@@ -10,6 +10,7 @@ interface environment {
   sleep: func();
   coverage: func();
   differential: func() -> string;
+  refused-write: func() -> string;
 }
 
 world fixture {
