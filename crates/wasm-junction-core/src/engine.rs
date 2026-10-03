@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{error::Error, fmt};
 
@@ -10,6 +11,22 @@ pub const WASI_PROVIDER_NAME: &str = "WASI";
 /// Name shared by applications and engines for the built-in WASI HTTP provider.
 pub const WASI_HTTP_PROVIDER_NAME: &str = "WASI HTTP";
 
+/// Filesystem access granted to a WASI preopened directory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Access {
+    /// Allows reading files and metadata without modifying them.
+    ReadOnly,
+    /// Allows reading and modifying files, directories, and metadata.
+    ReadWrite,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Preopen {
+    host_path: PathBuf,
+    guest_path: String,
+    access: Access,
+}
+
 /// Engine-neutral WASI settings for one component.
 ///
 /// Nothing from the host environment is visible unless it is added explicitly.
@@ -20,15 +37,19 @@ pub const WASI_HTTP_PROVIDER_NAME: &str = "WASI HTTP";
 /// let settings = WasiSettings::new()
 ///     .env("MODE", "preview")
 ///     .arg("notes.txt")
+///     .preopen("./notes", "/notes", Access::ReadOnly)
 ///     .network(true);
+/// # use wasm_junction_core::Access;
 /// assert_eq!(settings.environment().collect::<Vec<_>>(), [("MODE", "preview")]);
 /// assert_eq!(settings.arguments().collect::<Vec<_>>(), ["notes.txt"]);
+/// assert_eq!(settings.preopens().count(), 1);
 /// assert!(settings.network_enabled());
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WasiSettings {
     environment: BTreeMap<String, String>,
     arguments: Vec<String>,
+    preopens: Vec<Preopen>,
     network: bool,
 }
 
@@ -39,6 +60,7 @@ impl WasiSettings {
         Self {
             environment: BTreeMap::new(),
             arguments: Vec::new(),
+            preopens: Vec::new(),
             network: false,
         }
     }
@@ -54,6 +76,26 @@ impl WasiSettings {
     #[must_use]
     pub fn arg(mut self, argument: impl Into<String>) -> Self {
         self.arguments.push(argument.into());
+        self
+    }
+
+    /// Makes a host directory visible at `guest_path` with the requested access.
+    ///
+    /// Preopens are per component and absent by default. Relative host paths are resolved by the
+    /// engine when an invocation starts. The directory is opened fresh for every invocation, so a
+    /// missing or unreadable host path traps the next call to that component.
+    #[must_use]
+    pub fn preopen(
+        mut self,
+        host_path: impl Into<PathBuf>,
+        guest_path: impl Into<String>,
+        access: Access,
+    ) -> Self {
+        self.preopens.push(Preopen {
+            host_path: host_path.into(),
+            guest_path: guest_path.into(),
+            access,
+        });
         self
     }
 
@@ -81,6 +123,19 @@ impl WasiSettings {
         self.arguments.iter().map(String::as_str)
     }
 
+    /// Returns the configured preopens in insertion order.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn preopens(&self) -> impl ExactSizeIterator<Item = (&Path, &str, Access)> {
+        self.preopens.iter().map(|preopen| {
+            (
+                preopen.host_path.as_path(),
+                preopen.guest_path.as_str(),
+                preopen.access,
+            )
+        })
+    }
+
     /// Reports whether outgoing HTTP connections are enabled.
     #[must_use]
     pub const fn network_enabled(&self) -> bool {
@@ -90,7 +145,17 @@ impl WasiSettings {
 
 #[cfg(test)]
 mod wasi_settings_tests {
-    use super::WasiSettings;
+    use super::{Access, WasiSettings};
+
+    #[test]
+    fn preopens_are_empty_by_default_and_keep_their_access() {
+        assert_eq!(WasiSettings::new().preopens().len(), 0);
+        let settings = WasiSettings::new().preopen("notes", "/notes", Access::ReadOnly);
+        assert_eq!(
+            settings.preopens().collect::<Vec<_>>(),
+            [(std::path::Path::new("notes"), "/notes", Access::ReadOnly)]
+        );
+    }
 
     #[test]
     fn network_is_off_by_default_and_can_be_enabled() {

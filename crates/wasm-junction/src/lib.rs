@@ -29,10 +29,10 @@ pub use context::CallContext;
 pub use middleware::{Event, Middleware, Next};
 pub use provider::{Provided, Provider};
 pub use wasm_junction_core::{
-    BoxFuture, CallError, CallErrorKind, ChannelDirection, CompiledComponent, Engine, EngineError,
-    EngineEvent, Extensions, FutureHandle, HostBound, ImportDispatcher, ImportTarget, InputStream,
-    InvocationContext, InvocationId, MaybeSend, OutputStream, OutputStreamWriter, Resource,
-    ResourceOwnership, ResourceTable, StreamError, StreamHandle, TypeError, Val, Vals,
+    Access, BoxFuture, CallError, CallErrorKind, ChannelDirection, CompiledComponent, Engine,
+    EngineError, EngineEvent, Extensions, FutureHandle, HostBound, ImportDispatcher, ImportTarget,
+    InputStream, InvocationContext, InvocationId, MaybeSend, OutputStream, OutputStreamWriter,
+    Resource, ResourceOwnership, ResourceTable, StreamError, StreamHandle, TypeError, Val, Vals,
     WASI_HTTP_PROVIDER_NAME, WASI_PROVIDER_NAME, WasiSettings, validate_resource_for_invocation,
 };
 /// Generates bindings for every interface in a local WIT package.
