@@ -258,6 +258,7 @@ pub(super) fn add(linker: &mut Linker<crate::engine::StoreData>) -> wasmtime::Re
     add_request_new(linker)?;
     add_request_consume(linker)?;
     add_response_new(linker)?;
+    add_response_consume(linker)?;
     Ok(())
 }
 
@@ -488,6 +489,74 @@ fn add_response_new(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let transferred: FutureReader<TransferResult> =
                     lower_future_plain(&mut store, transferred.clone())?;
                 Ok(((response, transferred),))
+            })
+        },
+    )?;
+    Ok(())
+}
+
+fn add_response_consume(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    use wasmtime_wasi_http::p3::bindings::http::types::HostResponseWithStore;
+    use wasmtime_wasi_http::{WasiHttp, WasiHttpView};
+
+    linker.instance(TYPES)?.func_wrap_async(
+        "[static]response.consume-body",
+        |mut store, (response, transferred): (Resource<Response>, FutureReader<TransferResult>)| {
+            Box::new(async move {
+                let invocation = store
+                    .data()
+                    .context
+                    .invocation_id()
+                    .ok_or_else(|| wasmtime::Error::msg("WASI call has no invocation id"))?;
+                let args = vec![
+                    scope(response.to_val(), invocation),
+                    lift_future_plain(&mut store, transferred)?,
+                ];
+                let real: Real = |mut store, args| {
+                    Box::pin(async move {
+                        let [response, transferred] = <[Val; 2]>::try_from(args)
+                            .map_err(|_| shape("response.consume-body arguments"))?;
+                        let Val::Resource(resource) = &response else {
+                            return Err(shape(RESPONSE_NAME));
+                        };
+                        validate_owned::<Response>(resource, store.data_mut())?;
+                        let response = Resource::<Response>::from_val(response)?;
+                        let transferred = lower_future_plain(&mut store, transferred)
+                            .map_err(|error| CallError::trap(error.to_string()))?;
+                        let access = Access::<StoreData, WasiHttp>::new(
+                            store.as_context_mut(),
+                            WasiHttpView::http,
+                        );
+                        let (body, trailers) =
+                            HostResponseWithStore::consume_body(access, response, transferred)
+                                .map_err(|error| CallError::trap(error.to_string()))?;
+                        Ok(vec![Val::Tuple(vec![
+                            lift_stream_plain(&mut store, body)
+                                .map_err(|error| CallError::trap(error.to_string()))?,
+                            lift_future_plain(&mut store, trailers)
+                                .map_err(|error| CallError::trap(error.to_string()))?,
+                        ])])
+                    })
+                };
+                let outcome = trampoline::gate(
+                    &mut store,
+                    TYPES,
+                    "[static]response.consume-body",
+                    args,
+                    real,
+                )
+                .await
+                .map_err(wasmtime::Error::new)?;
+                let [Val::Tuple(values)] = outcome.as_slice() else {
+                    return Err(wasmtime::Error::new(shape("body and trailers")));
+                };
+                let [body, trailers] = values.as_slice() else {
+                    return Err(wasmtime::Error::new(shape("body and trailers")));
+                };
+                let body = lower_stream_plain(&mut store, body.clone())?;
+                let trailers: FutureReader<TrailersResult> =
+                    lower_future_plain(&mut store, trailers.clone())?;
+                Ok(((body, trailers),))
             })
         },
     )?;
