@@ -242,3 +242,72 @@ impl FromVal for IpSocketAddress {
 }
 
 enum_value!(ShutdownType { Receive => "receive", Send => "send", Both => "both" });
+
+impl ToVal for IncomingDatagram {
+    fn to_val(self) -> Val {
+        Val::Record(vec![
+            ("data".to_owned(), self.data.to_val()),
+            ("remote-address".to_owned(), self.remote_address.to_val()),
+        ])
+    }
+}
+
+impl FromVal for IncomingDatagram {
+    fn from_val(value: Val) -> Result<Self, CallError> {
+        let Val::Record(fields) = value else {
+            return Err(shape("incoming-datagram"));
+        };
+        let [(_, data), (_, remote_address)] =
+            <[_; 2]>::try_from(fields).map_err(|_| shape("incoming-datagram fields"))?;
+        Ok(Self {
+            data: Vec::<u8>::from_val(data)?,
+            remote_address: IpSocketAddress::from_val(remote_address)?,
+        })
+    }
+}
+
+impl ToVal for OutgoingDatagram {
+    fn to_val(self) -> Val {
+        Val::Record(vec![
+            ("data".to_owned(), self.data.to_val()),
+            ("remote-address".to_owned(), self.remote_address.to_val()),
+        ])
+    }
+}
+
+impl FromVal for OutgoingDatagram {
+    fn from_val(value: Val) -> Result<Self, CallError> {
+        let Val::Record(fields) = value else {
+            return Err(shape("outgoing-datagram"));
+        };
+        let [(_, data), (_, remote_address)] =
+            <[_; 2]>::try_from(fields).map_err(|_| shape("outgoing-datagram fields"))?;
+        Ok(Self {
+            data: Vec::<u8>::from_val(data)?,
+            remote_address: Option::<IpSocketAddress>::from_val(remote_address)?,
+        })
+    }
+}
+
+list_value!(IncomingDatagram);
+list_value!(OutgoingDatagram);
+
+impl<T: ToVal> ToVal for Result<T, ErrorCode> {
+    fn to_val(self) -> Val {
+        Val::Result(match self {
+            Ok(value) => Ok(Some(Box::new(value.to_val()))),
+            Err(error) => Err(Some(Box::new(error.to_val()))),
+        })
+    }
+}
+
+impl<T: FromVal> FromVal for Result<T, ErrorCode> {
+    fn from_val(value: Val) -> Result<Self, CallError> {
+        match value {
+            Val::Result(Ok(Some(value))) => T::from_val(*value).map(Ok),
+            Val::Result(Ok(None)) => T::from_val(Val::Tuple(Vec::new())).map(Ok),
+            Val::Result(Err(Some(error))) => ErrorCode::from_val(*error).map(Err),
+            _ => Err(shape("socket result")),
+        }
+    }
+}
