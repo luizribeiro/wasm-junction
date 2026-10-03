@@ -11,6 +11,7 @@ interface environment {
   coverage: func();
   differential: func() -> string;
   refused-write: func() -> string;
+  input-read: func() -> string;
 }
 
 world fixture {

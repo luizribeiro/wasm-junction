@@ -89,6 +89,54 @@ impl Middleware for RewriteOutputStream {
     }
 }
 
+struct UnscopeInputStream;
+
+impl Middleware for UnscopeInputStream {
+    async fn call(&self, mut call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.function.as_ref() == "[method]input-stream.read" {
+            let Val::Resource(current) = &call.args[0] else {
+                panic!("read did not receive a stream");
+            };
+            call.args[0] = Val::Resource(Resource::borrowed(
+                current.interface(),
+                current.name(),
+                current.id(),
+            ));
+        }
+        next.run(call).await
+    }
+}
+
+enum RewriteError {
+    Mistyped,
+    Unscoped,
+}
+
+impl Middleware for RewriteError {
+    async fn call(&self, mut call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.function.as_ref() == "[method]output-stream.write" {
+            return Err(CallError::refused("create an error resource"));
+        }
+        if call.function.as_ref() == "[method]error.to-debug-string" {
+            let Val::Resource(current) = &call.args[0] else {
+                panic!("to-debug-string did not receive an error");
+            };
+            call.args[0] = Val::Resource(match self {
+                Self::Mistyped => Resource::__borrowed_for_invocation(
+                    "wasi:io/streams@0.2.12",
+                    "input-stream",
+                    current.id(),
+                    call.invocation_id(),
+                ),
+                Self::Unscoped => {
+                    Resource::borrowed(current.interface(), current.name(), current.id())
+                }
+            });
+        }
+        next.run(call).await
+    }
+}
+
 struct RecordResourceScope(Arc<Mutex<Option<(InvocationId, InvocationId)>>>);
 
 impl Middleware for RecordResourceScope {
@@ -343,6 +391,44 @@ fn unscoped_output_stream_is_refused() {
         panic!("unscoped stream returned the wrong shape");
     };
     assert!(message.contains("does not belong to this invocation"));
+}
+
+#[test]
+fn unscoped_input_stream_is_refused() {
+    let (app, runtime) = checked_app(UnscopeInputStream);
+    let values = runtime
+        .block_on(app.call("checked", EXPORT, "input-read", Vec::new()))
+        .unwrap();
+    let [Val::String(message)] = values.as_slice() else {
+        panic!("unscoped input stream returned the wrong shape");
+    };
+    assert!(message.contains("does not belong to this invocation"));
+}
+
+#[test]
+fn mistyped_error_handle_is_refused() {
+    let (app, runtime) = checked_app(RewriteError::Mistyped);
+    let error = runtime
+        .block_on(app.call("checked", EXPORT, "refused-write", Vec::new()))
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("does not match the resource type")
+    );
+}
+
+#[test]
+fn unscoped_error_handle_is_refused() {
+    let (app, runtime) = checked_app(RewriteError::Unscoped);
+    let error = runtime
+        .block_on(app.call("checked", EXPORT, "refused-write", Vec::new()))
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("does not belong to this invocation")
+    );
 }
 
 #[test]

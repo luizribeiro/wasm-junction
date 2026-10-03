@@ -118,6 +118,16 @@ impl exports::test::wasi::environment::Guest for Component {
             other => format!("unexpected result: {other:?}"),
         }
     }
+
+    fn input_read() -> String {
+        let input = wasi::cli::stdin::get_stdin();
+        match input.read(0) {
+            Err(wasi::io::streams::StreamError::LastOperationFailed(error)) => {
+                error.to_debug_string()
+            }
+            other => format!("unexpected result: {other:?}"),
+        }
+    }
 }
 
 export!(Component);
