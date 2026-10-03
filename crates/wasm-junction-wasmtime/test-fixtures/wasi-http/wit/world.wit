@@ -1,0 +1,9 @@
+package test:wasi-http@0.1.0;
+
+interface probe {
+  request: async func(authority: string, path: string) -> string;
+}
+
+world fixture {
+  export probe;
+}
