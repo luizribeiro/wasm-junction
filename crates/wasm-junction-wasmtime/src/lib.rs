@@ -21,9 +21,8 @@ mod wasi;
 
 pub use engine::WasmtimeEngine;
 
-/// WASI Preview 2 interfaces supplied by [`WasmtimeEngine`].
 #[cfg(feature = "wasi")]
-pub const WASI_INTERFACES: &[&str] = &[
+const P2_WASI_INTERFACES: &[&str] = &[
     "wasi:cli/environment@0.2.12",
     "wasi:cli/exit@0.2.12",
     "wasi:cli/stderr@0.2.12",
@@ -44,7 +43,39 @@ pub const WASI_INTERFACES: &[&str] = &[
     "wasi:random/random@0.2.12",
 ];
 
-/// WASI Preview 2 interfaces intercepted by the application middleware chain.
+#[cfg(feature = "wasi-p3")]
+const P3_WASI_INTERFACES: [&str; 6] = [
+    "wasi:clocks/types@0.3.0",
+    "wasi:clocks/monotonic-clock@0.3.0",
+    "wasi:clocks/system-clock@0.3.0",
+    "wasi:random/insecure-seed@0.3.0",
+    "wasi:random/insecure@0.3.0",
+    "wasi:random/random@0.3.0",
+];
+
+/// WASI interfaces supplied by [`WasmtimeEngine`].
+#[cfg(all(feature = "wasi", not(feature = "wasi-p3")))]
+pub const WASI_INTERFACES: &[&str] = P2_WASI_INTERFACES;
+
+/// WASI interfaces supplied by [`WasmtimeEngine`].
+#[cfg(feature = "wasi-p3")]
+pub const WASI_INTERFACES: &[&str] = &{
+    let mut interfaces = [""; P2_WASI_INTERFACES.len() + P3_WASI_INTERFACES.len()];
+    let mut index = 0;
+    while index < P2_WASI_INTERFACES.len() {
+        interfaces[index] = P2_WASI_INTERFACES[index];
+        index += 1;
+    }
+    let mut p3 = 0;
+    while p3 < P3_WASI_INTERFACES.len() {
+        interfaces[index] = P3_WASI_INTERFACES[p3];
+        index += 1;
+        p3 += 1;
+    }
+    interfaces
+};
+
+/// WASI interfaces supplied by [`WasmtimeEngine`].
 ///
 /// Every interface supplied by the provider is gated.
 #[cfg(feature = "wasi")]
