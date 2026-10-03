@@ -1,7 +1,7 @@
 use wasmtime::component::Resource;
 use wasmtime_wasi::p2::bindings::filesystem::types::{
     self, Advice, DescriptorFlags, DescriptorStat, DescriptorType, DirectoryEntry, ErrorCode,
-    MetadataHashValue, NewTimestamp, OpenFlags, PathFlags,
+    HostDescriptor, MetadataHashValue, NewTimestamp, OpenFlags, PathFlags,
 };
 
 use super::{FromVal, ToVal, WitResource, shape};
@@ -11,6 +11,10 @@ use wasmtime_wasi::p2::bindings::filesystem::preopens;
 
 use super::{Real, finish, scope_values, trampoline, views};
 use crate::engine::StoreData;
+
+mod gate;
+
+use gate::{add_context, convert, finish_result, gate_fs, validate_context};
 
 const INTERFACE: &str = "wasi:filesystem/types@0.2.12";
 const DESCRIPTOR: &str = "descriptor";
@@ -327,5 +331,7 @@ pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 )?,))
             })
         })?;
+    gate_fs!(linker, "[method]descriptor.stat", HostDescriptor::stat, async,
+        [0], (descriptor: Resource<types::Descriptor>) -> DescriptorStat);
     Ok(())
 }
