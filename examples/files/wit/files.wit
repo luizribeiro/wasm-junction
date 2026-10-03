@@ -1,0 +1,9 @@
+package example:files@0.1.0;
+
+interface files {
+  read: func(path: string) -> string;
+}
+
+world plugin {
+  export files;
+}
