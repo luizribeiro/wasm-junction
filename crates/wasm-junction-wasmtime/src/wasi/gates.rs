@@ -12,6 +12,8 @@ use wasmtime_wasi::p2::bindings::io::streams::{
 };
 use wasmtime_wasi::p2::{DynInputStream, DynOutputStream, DynPollable, IoError, StreamResult};
 
+#[cfg(feature = "wasi-p3")]
+use super::trampoline::RealConcurrent;
 use super::trampoline::{self, Real};
 use crate::engine::StoreData;
 
@@ -642,6 +644,33 @@ fn finish_stream<T: FromVal>(
 }
 
 macro_rules! gate {
+    ($linker:ident, $iface:literal, $name:literal, $method:path,
+     concurrent[$data:ty, $getter:path], ($($arg:ident: $ty:ty),*) -> ()) => {
+        $linker.instance($iface)?.func_wrap_concurrent(
+            $name,
+            |accessor, ($($arg,)*): ($($ty,)*)| Box::pin(async move {
+                let invocation = accessor.with(|mut access| access.get().context.invocation_id())
+                    .ok_or_else(|| wasmtime::Error::msg("WASI call has no invocation id"))?;
+                let args = scope_values(vec![$($arg.to_val()),*], invocation);
+                let real: RealConcurrent = |accessor, args| Box::pin(async move {
+                    #[allow(unused_mut, unused_variables)]
+                    let mut args = args.into_iter();
+                    $(let $arg = <$ty>::from_val(
+                        args.next().ok_or_else(|| shape("another argument"))?
+                    )?;)*
+                    let view = accessor.with_getter::<$data>($getter);
+                    $method(&view $(, $arg)*).await
+                        .map_err(|error| CallError::trap(error.to_string()))?;
+                    Ok(Vec::new())
+                });
+                let outcome = trampoline::gate_concurrent(
+                    accessor, $iface, $name, args, real,
+                ).await;
+                finish_unit(outcome)?;
+                Ok(())
+            }),
+        )?;
+    };
     ($linker:ident, $iface:literal, $name:literal, $view:ident, $method:path, plain,
      ($($arg:ident: $ty:ty),*) -> ()) => {
         gate!(@define $linker, $iface, $name, $view, $method, no_resource_validation, ,
@@ -914,6 +943,7 @@ pub(super) fn add_random(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
 
 #[cfg(feature = "wasi-p3")]
 pub(super) fn add_p3(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    use wasmtime_wasi::clocks::{WasiClocks, WasiClocksView};
     use wasmtime_wasi::p3::bindings::clocks::{monotonic_clock, system_clock};
     use wasmtime_wasi::p3::bindings::random::{insecure, insecure_seed, random};
 
@@ -922,6 +952,12 @@ pub(super) fn add_p3(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         monotonic_clock::Host::now, plain, () -> u64);
     gate!(linker, "wasi:clocks/monotonic-clock@0.3.0", "get-resolution", clocks,
         monotonic_clock::Host::get_resolution, plain, () -> u64);
+    gate!(linker, "wasi:clocks/monotonic-clock@0.3.0", "wait-until",
+        monotonic_clock::HostWithStore::wait_until,
+        concurrent[WasiClocks, WasiClocksView::clocks], (when: u64) -> ());
+    gate!(linker, "wasi:clocks/monotonic-clock@0.3.0", "wait-for",
+        monotonic_clock::HostWithStore::wait_for,
+        concurrent[WasiClocks, WasiClocksView::clocks], (duration: u64) -> ());
     gate!(linker, "wasi:clocks/system-clock@0.3.0", "now", clocks,
         system_clock::Host::now, plain,
         () -> wasmtime_wasi::p3::bindings::clocks::system_clock::Instant);

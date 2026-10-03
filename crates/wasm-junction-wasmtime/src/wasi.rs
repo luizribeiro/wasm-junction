@@ -71,4 +71,10 @@ mod tests {
         assert!(state.close_channel(7));
         assert!(!state.close_channel(7));
     }
+
+    #[test]
+    #[cfg(feature = "wasi-p3")]
+    fn concurrent_p3_gates_register() {
+        crate::WasmtimeEngine::new().unwrap();
+    }
 }
