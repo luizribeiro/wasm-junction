@@ -60,6 +60,8 @@ pub(crate) fn add_gates(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> 
     gates::add_error(linker)?;
     #[cfg(feature = "wasi-p3")]
     gates::add_p3(linker)?;
+    #[cfg(feature = "wasi-http")]
+    gates::add_http(linker)?;
     Ok(())
 }
 

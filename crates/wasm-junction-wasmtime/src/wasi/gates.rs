@@ -17,9 +17,6 @@ use super::trampoline::RealConcurrent;
 use super::trampoline::{self, Real};
 use crate::engine::StoreData;
 
-#[cfg(feature = "wasi-http")]
-mod http;
-
 trait ToVal {
     fn to_val(self) -> Val;
 }
@@ -722,6 +719,32 @@ fn finish_stream<T: FromVal>(
 
 macro_rules! gate {
     ($linker:ident, $iface:literal, $name:literal, $view:ident, $method:path,
+     plain_result_with[$validate:ident, $denied:expr],
+     ($($arg:ident: $ty:ty),*) -> Result<$ok:ty, $error:ty>) => {
+        $linker.instance($iface)?.func_wrap_async(
+            $name,
+            |mut store, ($($arg,)*): ($($ty,)*)| Box::new(async move {
+                let invocation = store.data().context.invocation_id()
+                    .ok_or_else(|| wasmtime::Error::msg("WASI call has no invocation id"))?;
+                let args = scope_values(vec![$($arg.to_val()),*], invocation);
+                let real: Real = |mut store, args| Box::pin(async move {
+                    $validate(&args, store.data_mut())?;
+                    #[allow(unused_mut, unused_variables)]
+                    let mut args = args.into_iter();
+                    $(let $arg = <$ty>::from_val(
+                        args.next().ok_or_else(|| shape("another argument"))?
+                    )?;)*
+                    let result = $method(&mut views::$view(store.data_mut()) $(, $arg)*);
+                    Ok(vec![p3_result_value(convert_trappable(result)?)])
+                });
+                let outcome = trampoline::gate(&mut store, $iface, $name, args, real).await;
+                Ok((finish_p3_error(
+                    outcome, $denied, decode_p3_result::<$ok, $error>,
+                )?,))
+            }),
+        )?;
+    };
+    ($linker:ident, $iface:literal, $name:literal, $view:ident, $method:path,
      plain_result[$denied:expr],
      ($($arg:ident: $ty:ty),*) -> Result<$ok:ty, $error:ty>) => {
         $linker.instance($iface)?.func_wrap_async(
@@ -804,6 +827,11 @@ macro_rules! gate {
      ($($arg:ident: $ty:ty),*) -> ()) => {
         gate!(@define $linker, $iface, $name, $view, $method, no_resource_validation, ,
             ($($arg: $ty),*) -> (), unit);
+    };
+    ($linker:ident, $iface:literal, $name:literal, $view:ident, $method:path,
+     plain_with[$validate:ident], $signature:tt -> $ok:ty) => {
+        gate!(@define $linker, $iface, $name, $view, $method, $validate, ,
+            $signature -> $ok, one);
     };
     ($linker:ident, $iface:literal, $name:literal, $view:ident, $method:path, plain,
      $signature:tt -> $ok:ty) => {
@@ -957,6 +985,14 @@ macro_rules! gate_drop {
             }),
         )?;
     };
+}
+
+#[cfg(feature = "wasi-http")]
+mod http;
+
+#[cfg(feature = "wasi-http")]
+pub(super) fn add_http(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    http::add(linker)
 }
 
 pub(super) fn add_environment(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
@@ -1234,6 +1270,11 @@ mod views {
 
     pub(super) const fn store(store: &mut StoreData) -> &mut StoreData {
         store
+    }
+
+    #[cfg(feature = "wasi-http")]
+    pub(super) fn http(store: &mut StoreData) -> wasmtime_wasi_http::WasiHttpCtxView<'_> {
+        wasmtime_wasi_http::WasiHttpView::http(store)
     }
 }
 

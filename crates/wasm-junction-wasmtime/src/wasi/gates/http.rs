@@ -1,11 +1,11 @@
-use super::{FromVal, ToVal, WitResource, shape};
-use wasm_junction_core::{CallError, Val};
+use super::*;
 use wasmtime_wasi_http::p3::bindings::http::types::{
     DnsErrorPayload, ErrorCode, FieldSizePayload, Fields, HeaderError, Method, Request,
     RequestOptions, RequestOptionsError, Response, Scheme, TlsAlertReceivedPayload,
 };
 
 const TYPES: &str = "wasi:http/types@0.3.0";
+const FIELDS_NAME: &str = "fields";
 
 macro_rules! resource {
     ($ty:ty, $name:literal) => {
@@ -20,6 +20,58 @@ resource!(Fields, "fields");
 resource!(Request, "request");
 resource!(RequestOptions, "request-options");
 resource!(Response, "response");
+
+fn validate_fields(values: &[Val], store: &mut crate::engine::StoreData) -> Result<(), CallError> {
+    validate_borrowed::<Fields>(values.first().ok_or_else(|| shape(FIELDS_NAME))?, store)
+}
+
+fn drop_fields(store: &mut StoreData, fields: Resource<Fields>) -> wasmtime::Result<()> {
+    let mut view = views::http(store);
+    wasmtime_wasi_http::p3::bindings::http::types::HostFields::drop(&mut view, fields)
+}
+
+pub(super) fn add(linker: &mut Linker<crate::engine::StoreData>) -> wasmtime::Result<()> {
+    use wasmtime_wasi_http::p3::bindings::http::types::HostFields;
+
+    gate_drop!(
+        linker,
+        TYPES,
+        FIELDS_NAME,
+        "[drop]fields",
+        Fields,
+        store,
+        None,
+        drop_fields
+    );
+    gate!(linker, "wasi:http/types@0.3.0", "[constructor]fields", http, HostFields::new,
+        plain, () -> Resource<Fields>);
+    gate!(linker, "wasi:http/types@0.3.0", "[static]fields.from-list", http, HostFields::from_list,
+        plain_result[HeaderError::Forbidden],
+        (entries: Vec<(String, Vec<u8>)>) -> Result<Resource<Fields>, HeaderError>);
+    gate!(linker, "wasi:http/types@0.3.0", "[method]fields.get", http, HostFields::get,
+        plain_with[validate_fields],
+        (fields: Resource<Fields>, name: String) -> Vec<Vec<u8>>);
+    gate!(linker, "wasi:http/types@0.3.0", "[method]fields.has", http, HostFields::has,
+        plain_with[validate_fields], (fields: Resource<Fields>, name: String) -> bool);
+    gate!(linker, "wasi:http/types@0.3.0", "[method]fields.set", http, HostFields::set,
+        plain_result_with[validate_fields, HeaderError::Forbidden],
+        (fields: Resource<Fields>, name: String, values: Vec<Vec<u8>>) -> Result<(), HeaderError>);
+    gate!(linker, "wasi:http/types@0.3.0", "[method]fields.delete", http, HostFields::delete,
+        plain_result_with[validate_fields, HeaderError::Forbidden],
+        (fields: Resource<Fields>, name: String) -> Result<(), HeaderError>);
+    gate!(linker, "wasi:http/types@0.3.0", "[method]fields.get-and-delete", http, HostFields::get_and_delete,
+        plain_result_with[validate_fields, HeaderError::Forbidden],
+        (fields: Resource<Fields>, name: String) -> Result<Vec<Vec<u8>>, HeaderError>);
+    gate!(linker, "wasi:http/types@0.3.0", "[method]fields.append", http, HostFields::append,
+        plain_result_with[validate_fields, HeaderError::Forbidden],
+        (fields: Resource<Fields>, name: String, value: Vec<u8>) -> Result<(), HeaderError>);
+    gate!(linker, "wasi:http/types@0.3.0", "[method]fields.copy-all", http, HostFields::copy_all,
+        plain_with[validate_fields],
+        (fields: Resource<Fields>) -> Vec<(String, Vec<u8>)>);
+    gate!(linker, "wasi:http/types@0.3.0", "[method]fields.clone", http, HostFields::clone,
+        plain_with[validate_fields], (fields: Resource<Fields>) -> Resource<Fields>);
+    Ok(())
+}
 
 fn variant(case: &str, value: Option<Val>) -> Val {
     Val::Variant {
