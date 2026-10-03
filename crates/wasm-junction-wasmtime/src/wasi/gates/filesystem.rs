@@ -5,8 +5,10 @@ use wasmtime_wasi::p2::bindings::filesystem::types::{
     PathFlags,
 };
 
-use super::{FromVal, ToVal, WitResource, open_channel, shape};
-use wasm_junction_core::{CallError, ChannelDirection, Val};
+use super::{FromVal, ToVal, WitResource, finish_unit, open_channel, shape, validate_owned};
+use wasm_junction_core::{
+    CallError, ChannelDirection, EngineEvent, Resource as JunctionResource, Val,
+};
 use wasmtime::component::Linker;
 use wasmtime_wasi::p2::FsResult;
 use wasmtime_wasi::p2::bindings::filesystem::preopens;
@@ -414,7 +416,95 @@ fn add_directory_entry_stream(linker: &mut Linker<StoreData>) -> wasmtime::Resul
     Ok(())
 }
 
+macro_rules! filesystem_drop {
+    ($linker:ident, $resource_name:ident, $drop_name:literal, $ty:ty,
+     $get:ident, $remove:ident, $method:path) => {
+        $linker.instance(INTERFACE)?.resource_async(
+            $resource_name,
+            wasmtime::component::ResourceType::host::<$ty>(),
+            |mut store, id| {
+                Box::new(async move {
+                    let invocation =
+                        store.data().context.invocation_id().ok_or_else(|| {
+                            wasmtime::Error::msg("WASI drop has no invocation id")
+                        })?;
+                    let resource = JunctionResource::__owned_for_invocation(
+                        INTERFACE,
+                        $resource_name,
+                        id,
+                        invocation,
+                    );
+                    let preopen = store
+                        .data()
+                        .$get(id)
+                        .ok_or_else(|| wasmtime::Error::msg("filesystem handle has no preopen"))?
+                        .to_owned();
+                    store.data().imports.emit(EngineEvent::ResourceDrop {
+                        invocation,
+                        resource: resource.clone(),
+                    });
+                    let real: Real = |mut store, args| {
+                        Box::pin(async move {
+                            let [Val::Resource(resource), Val::String(context)] =
+                                <[Val; 2]>::try_from(args).map_err(|_| shape($resource_name))?
+                            else {
+                                return Err(shape($resource_name));
+                            };
+                            validate_owned::<$ty>(&resource, store.data_mut())?;
+                            if store.data().$get(resource.id()) != Some(context.as_str()) {
+                                return Err(CallError::refused(
+                                    "filesystem handle preopen context does not match",
+                                ));
+                            }
+                            $method(
+                                &mut views::filesystem(store.data_mut()),
+                                Resource::<$ty>::new_own(resource.id()),
+                            )
+                            .map_err(|error| CallError::trap(error.to_string()))?;
+                            Ok(Vec::new())
+                        })
+                    };
+                    let values = trampoline::gate(
+                        &mut store,
+                        INTERFACE,
+                        $drop_name,
+                        vec![Val::Resource(resource), Val::String(preopen)],
+                        real,
+                    )
+                    .await;
+                    finish_unit(values)?;
+                    store.data_mut().$remove(id);
+                    Ok(())
+                })
+            },
+        )?;
+    };
+}
+
+fn add_drops(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    filesystem_drop!(
+        linker,
+        DESCRIPTOR,
+        "[drop]descriptor",
+        types::Descriptor,
+        descriptor_preopen,
+        remove_descriptor_preopen,
+        HostDescriptor::drop
+    );
+    filesystem_drop!(
+        linker,
+        DIRECTORY_ENTRY_STREAM,
+        "[drop]directory-entry-stream",
+        types::DirectoryEntryStream,
+        directory_stream_preopen,
+        remove_directory_stream_preopen,
+        HostDirectoryEntryStream::drop
+    );
+    Ok(())
+}
+
 pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    add_drops(linker)?;
     add_directory_entry_stream(linker)?;
     linker
         .instance("wasi:filesystem/preopens@0.2.12")?

@@ -17,11 +17,9 @@ pub(crate) struct WasiState {
     pub(crate) http: WasiHttpCtx,
     channels: HashSet<u32>,
     descriptor_preopens: HashMap<u32, String>,
-    #[allow(dead_code)]
     directory_stream_preopens: HashMap<u32, String>,
 }
 
-#[allow(dead_code)]
 impl WasiState {
     pub(crate) fn new(context: WasiCtx) -> Self {
         Self {
