@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use support::HttpServer;
 use wasm_junction::{
-    App, Call, CallError, Component, Middleware, Next, Resource, Val, Vals, WasiSettings,
+    App, Call, CallError, Component, LoadError, Middleware, Next, Resource, Val, Vals, WasiSettings,
 };
 use wasm_junction_wasmtime::WasmtimeEngine;
 
@@ -239,5 +239,23 @@ fn trailer_future_cannot_be_reused_after_its_invocation() {
             .to_string()
             .contains("does not belong to this invocation"),
         "{error:#}"
+    );
+}
+
+#[test]
+fn http_imports_are_missing_without_the_http_provider() {
+    let app = App::builder()
+        .engine(WasmtimeEngine::new().unwrap())
+        .provide(wasm_junction::wasi::provider())
+        .build()
+        .unwrap();
+    let error =
+        block_on(app.load(Component::from_bytes(COMPONENT).unwrap().named("http"))).unwrap_err();
+    let LoadError::MissingImports(missing) = error else {
+        panic!("expected missing HTTP imports")
+    };
+    assert_eq!(
+        missing.interfaces(),
+        ["wasi:http/client@0.3.0", "wasi:http/types@0.3.0"]
     );
 }
