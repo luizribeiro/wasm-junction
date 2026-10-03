@@ -51,7 +51,10 @@ pub(crate) fn add_gates(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> 
     gates::add_random(linker)?;
     gates::add_poll(linker)?;
     gates::add_streams(linker)?;
-    gates::add_error(linker)
+    gates::add_error(linker)?;
+    #[cfg(feature = "wasi-p3")]
+    gates::add_p3(linker)?;
+    Ok(())
 }
 
 #[cfg(test)]

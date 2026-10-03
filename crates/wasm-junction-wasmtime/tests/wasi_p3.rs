@@ -4,7 +4,9 @@
 
 use std::future::Future;
 
-use wasm_junction::{App, Component, LoadError};
+#[cfg(not(feature = "wasi-p3"))]
+use wasm_junction::LoadError;
+use wasm_junction::{App, Component};
 use wasm_junction_wasmtime::WasmtimeEngine;
 
 const COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wasi-p3-test.wasm"));

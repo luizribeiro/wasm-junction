@@ -266,6 +266,23 @@ impl FromVal for u64 {
     }
 }
 
+#[cfg(feature = "wasi-p3")]
+impl ToVal for i64 {
+    fn to_val(self) -> Val {
+        Val::S64(self)
+    }
+}
+
+#[cfg(feature = "wasi-p3")]
+impl FromVal for i64 {
+    fn from_val(value: Val) -> Result<Self, CallError> {
+        match value {
+            Val::S64(value) => Ok(value),
+            _ => Err(shape("s64")),
+        }
+    }
+}
+
 impl ToVal for u8 {
     fn to_val(self) -> Val {
         Val::U8(self)
@@ -474,6 +491,31 @@ impl FromVal for Datetime {
             }
             _ => Err(shape("datetime fields")),
         }
+    }
+}
+
+#[cfg(feature = "wasi-p3")]
+impl ToVal for wasmtime_wasi::p3::bindings::clocks::system_clock::Instant {
+    fn to_val(self) -> Val {
+        Val::Record(vec![
+            ("seconds".to_owned(), self.seconds.to_val()),
+            ("nanoseconds".to_owned(), self.nanoseconds.to_val()),
+        ])
+    }
+}
+
+#[cfg(feature = "wasi-p3")]
+impl FromVal for wasmtime_wasi::p3::bindings::clocks::system_clock::Instant {
+    fn from_val(value: Val) -> Result<Self, CallError> {
+        let Val::Record(fields) = value else {
+            return Err(shape("instant"));
+        };
+        let [(_, seconds), (_, nanoseconds)] =
+            <[(String, Val); 2]>::try_from(fields).map_err(|_| shape("instant fields"))?;
+        Ok(Self {
+            seconds: i64::from_val(seconds)?,
+            nanoseconds: u32::from_val(nanoseconds)?,
+        })
     }
 }
 
@@ -870,6 +912,34 @@ pub(super) fn add_random(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
     Ok(())
 }
 
+#[cfg(feature = "wasi-p3")]
+pub(super) fn add_p3(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    use wasmtime_wasi::p3::bindings::clocks::{monotonic_clock, system_clock};
+    use wasmtime_wasi::p3::bindings::random::{insecure, insecure_seed, random};
+
+    linker.instance("wasi:clocks/types@0.3.0")?;
+    gate!(linker, "wasi:clocks/monotonic-clock@0.3.0", "now", clocks,
+        monotonic_clock::Host::now, plain, () -> u64);
+    gate!(linker, "wasi:clocks/monotonic-clock@0.3.0", "get-resolution", clocks,
+        monotonic_clock::Host::get_resolution, plain, () -> u64);
+    gate!(linker, "wasi:clocks/system-clock@0.3.0", "now", clocks,
+        system_clock::Host::now, plain,
+        () -> wasmtime_wasi::p3::bindings::clocks::system_clock::Instant);
+    gate!(linker, "wasi:clocks/system-clock@0.3.0", "get-resolution", clocks,
+        system_clock::Host::get_resolution, plain, () -> u64);
+    gate!(linker, "wasi:random/random@0.3.0", "get-random-bytes", random,
+        random::Host::get_random_bytes, plain, (len: u64) -> Vec<u8>);
+    gate!(linker, "wasi:random/random@0.3.0", "get-random-u64", random,
+        random::Host::get_random_u64, plain, () -> u64);
+    gate!(linker, "wasi:random/insecure@0.3.0", "get-insecure-random-bytes", random,
+        insecure::Host::get_insecure_random_bytes, plain, (len: u64) -> Vec<u8>);
+    gate!(linker, "wasi:random/insecure@0.3.0", "get-insecure-random-u64", random,
+        insecure::Host::get_insecure_random_u64, plain, () -> u64);
+    gate!(linker, "wasi:random/insecure-seed@0.3.0", "get-insecure-seed", random,
+        insecure_seed::Host::get_insecure_seed, plain, () -> (u64, u64));
+    Ok(())
+}
+
 pub(super) fn add_streams(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     gate_drop!(
         linker,
@@ -1018,5 +1088,19 @@ mod tests {
         };
         assert!(error.owned());
         assert_eq!(error.rep(), 17);
+    }
+
+    #[test]
+    #[cfg(feature = "wasi-p3")]
+    fn p3_system_clock_instants_round_trip_through_middleware_values() {
+        use wasmtime_wasi::p3::bindings::clocks::system_clock::Instant;
+
+        let instant = Instant {
+            seconds: -1,
+            nanoseconds: 999_999_999,
+        };
+        let decoded = Instant::from_val(instant.to_val()).unwrap();
+        assert_eq!(decoded.seconds, -1);
+        assert_eq!(decoded.nanoseconds, 999_999_999);
     }
 }
