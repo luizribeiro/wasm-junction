@@ -95,6 +95,28 @@ fn validate_borrowed<T: WitResource>(value: &Val, store: &mut StoreData) -> Resu
     Ok(())
 }
 
+fn validate_owned<T: WitResource>(
+    resource: &JunctionResource,
+    store: &mut StoreData,
+) -> Result<(), CallError> {
+    let invocation = store
+        .context
+        .invocation_id()
+        .ok_or_else(|| CallError::trap("WASI call has no invocation id"))?;
+    validate_resource_for_invocation(
+        resource,
+        T::INTERFACE,
+        T::NAME,
+        ResourceOwnership::Own,
+        invocation,
+    )?;
+    store
+        .wasi_table()
+        .get(&Resource::<T>::new_borrow(resource.id()))
+        .map_err(|_| CallError::refused(format!("unknown {} handle {}", T::NAME, resource.id())))?;
+    Ok(())
+}
+
 fn validate_input_borrow(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
     let value = values.first().ok_or_else(|| shape("input-stream"))?;
     validate_borrowed::<DynInputStream>(value, store)
@@ -701,22 +723,18 @@ macro_rules! gate_drop {
                 let resource = JunctionResource::__owned_for_invocation(
                     $iface, $name, id, invocation,
                 );
+                // ResourceDrop is a pre-drop lifecycle event; ChannelClose only follows success.
                 store.data().imports.emit(EngineEvent::ResourceDrop {
                     invocation,
                     resource: resource.clone(),
                 });
-                close_channel(store.data_mut(), id, $direction);
                 let real: Real = |mut store, args| Box::pin(async move {
                     let [Val::Resource(resource)] = <[Val; 1]>::try_from(args)
                         .map_err(|_| shape($name))?
                     else {
                         return Err(shape($name));
                     };
-                    let invocation = store.data().context.invocation_id()
-                        .ok_or_else(|| CallError::trap("WASI drop has no invocation id"))?;
-                    validate_resource_for_invocation(
-                        &resource, $iface, $name, ResourceOwnership::Own, invocation,
-                    )?;
+                    validate_owned::<$ty>(&resource, store.data_mut())?;
                     $method(views::$view(store.data_mut()), Resource::<$ty>::new_own(resource.id()))
                         $(.$await)?
                         .map_err(|error| CallError::trap(error.to_string()))?;
@@ -734,6 +752,7 @@ macro_rules! gate_drop {
                 if !values.is_empty() {
                     return Err(wasmtime::Error::new(shape("no results")));
                 }
+                close_channel(store.data_mut(), id, $direction);
                 Ok(())
             }),
         )?;

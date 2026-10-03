@@ -157,6 +157,87 @@ impl Middleware for RefuseExit {
     }
 }
 
+enum RewriteTerminalInput {
+    Foreign(Mutex<Option<Resource>>),
+    Mistyped,
+    Unscoped,
+    Unknown,
+}
+
+impl Middleware for RewriteTerminalInput {
+    async fn call(&self, mut call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.function.as_ref() == "[drop]terminal-input" {
+            let Val::Resource(current) = &call.args[0] else {
+                panic!("terminal drop did not receive a resource");
+            };
+            let replacement = match self {
+                Self::Foreign(saved) => {
+                    let mut saved = saved.lock().unwrap();
+                    if let Some(foreign) = saved.as_ref() {
+                        Some(foreign.clone())
+                    } else {
+                        *saved = Some(current.clone());
+                        return Ok(Vec::new());
+                    }
+                }
+                Self::Mistyped => Some(Resource::__owned_for_invocation(
+                    "wasi:io/streams@0.2.12",
+                    "input-stream",
+                    current.id(),
+                    call.invocation_id(),
+                )),
+                Self::Unscoped => Some(Resource::owned(
+                    current.interface(),
+                    current.name(),
+                    current.id(),
+                )),
+                Self::Unknown => Some(current.clone()),
+            };
+            call.args[0] = Val::Resource(replacement.unwrap());
+        }
+        let invocation = call.invocation_id();
+        let terminal_stdin = call.function.as_ref() == "get-terminal-stdin";
+        let mut values = next.run(call).await?;
+        if terminal_stdin {
+            values = vec![Val::Option(Some(Box::new(Val::Resource(
+                Resource::__owned_for_invocation(
+                    "wasi:cli/terminal-input@0.2.12",
+                    "terminal-input",
+                    23,
+                    invocation,
+                ),
+            ))))];
+        }
+        Ok(values)
+    }
+}
+
+struct RefuseOutputDrop(Arc<Mutex<Vec<&'static str>>>);
+
+impl Middleware for RefuseOutputDrop {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.function.as_ref() == "[drop]output-stream" {
+            Err(CallError::refused("keep output open"))
+        } else {
+            next.run(call).await
+        }
+    }
+
+    fn event(&self, event: &Event) {
+        let observed = match event {
+            Event::ChannelOpen { .. } => Some("open"),
+            Event::ChannelClose { .. } => Some("close"),
+            Event::ResourceDrop { resource, .. } if resource.as_ref() == "output-stream" => {
+                Some("drop")
+            }
+            _ => None,
+        };
+        if let Some(observed) = observed {
+            self.0.lock().unwrap().push(observed);
+        }
+    }
+}
+
 struct RefuseWrite;
 
 impl Middleware for RefuseWrite {
@@ -511,6 +592,67 @@ fn refused_exit_is_observed_and_ends_the_invocation() {
         *seen.lock().unwrap(),
         Some(("exit-with-code".to_owned(), vec![Val::U8(7)]))
     );
+}
+
+fn assert_invalid_terminal_handle(middleware: RewriteTerminalInput, expected: &str) {
+    let (app, runtime) = checked_app(middleware);
+    let error = runtime
+        .block_on(app.call("checked", EXPORT, "terminal-handles", Vec::new()))
+        .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert!(error.to_string().contains(expected));
+}
+
+#[test]
+fn foreign_terminal_handle_is_refused() {
+    let (app, runtime) = checked_app(RewriteTerminalInput::Foreign(Mutex::new(None)));
+    runtime
+        .block_on(app.call("checked", EXPORT, "terminal-handles", Vec::new()))
+        .unwrap();
+    let error = runtime
+        .block_on(app.call("checked", EXPORT, "terminal-handles", Vec::new()))
+        .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert!(
+        error
+            .to_string()
+            .contains("does not belong to this invocation")
+    );
+}
+
+#[test]
+fn mistyped_terminal_handle_is_refused() {
+    assert_invalid_terminal_handle(
+        RewriteTerminalInput::Mistyped,
+        "does not match the resource type",
+    );
+}
+
+#[test]
+fn unscoped_terminal_handle_is_refused() {
+    assert_invalid_terminal_handle(
+        RewriteTerminalInput::Unscoped,
+        "does not belong to this invocation",
+    );
+}
+
+#[test]
+fn unknown_terminal_handle_is_refused() {
+    assert_invalid_terminal_handle(
+        RewriteTerminalInput::Unknown,
+        "unknown terminal-input handle",
+    );
+}
+
+#[test]
+fn refused_stream_drop_does_not_emit_channel_close() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let (app, runtime) = checked_app(RefuseOutputDrop(events.clone()));
+    let error = runtime
+        .block_on(app.call("checked", EXPORT, "stdout-channel", Vec::new()))
+        .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert_eq!(*events.lock().unwrap(), ["open", "drop"]);
 }
 
 #[test]
