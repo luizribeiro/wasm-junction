@@ -1,4 +1,7 @@
-use wasmtime_wasi::p2::bindings::filesystem::types::{self, Advice, DescriptorType, ErrorCode};
+use wasmtime_wasi::p2::bindings::filesystem::types::{
+    self, Advice, DescriptorFlags, DescriptorStat, DescriptorType, DirectoryEntry, ErrorCode,
+    MetadataHashValue, NewTimestamp, OpenFlags, PathFlags,
+};
 
 use super::{FromVal, ToVal, WitResource, shape};
 use wasm_junction_core::Val;
@@ -96,3 +99,147 @@ enum_value!(ErrorCode {
     TextFileBusy => "text-file-busy",
     CrossDevice => "cross-device",
 });
+
+macro_rules! flags_value {
+    ($ty:ty { $($flag:ident => $name:literal),+ $(,)? }) => {
+        impl ToVal for $ty {
+            fn to_val(self) -> Val {
+                Val::Flags(vec![$($name.to_owned(),)+].into_iter().zip([
+                    $(self.contains(Self::$flag),)+
+                ]).filter_map(|(name, set)| set.then_some(name)).collect())
+            }
+        }
+
+        impl FromVal for $ty {
+            fn from_val(value: Val) -> Result<Self, wasm_junction_core::CallError> {
+                let Val::Flags(values) = value else { return Err(shape("flags")); };
+                let mut flags = Self::empty();
+                for value in values {
+                    match value.as_str() {
+                        $($name => flags |= Self::$flag,)+
+                        _ => return Err(shape(stringify!($ty))),
+                    }
+                }
+                Ok(flags)
+            }
+        }
+    };
+}
+
+flags_value!(DescriptorFlags {
+    READ => "read",
+    WRITE => "write",
+    FILE_INTEGRITY_SYNC => "file-integrity-sync",
+    DATA_INTEGRITY_SYNC => "data-integrity-sync",
+    REQUESTED_WRITE_SYNC => "requested-write-sync",
+    MUTATE_DIRECTORY => "mutate-directory",
+});
+flags_value!(PathFlags { SYMLINK_FOLLOW => "symlink-follow" });
+flags_value!(OpenFlags {
+    CREATE => "create",
+    DIRECTORY => "directory",
+    EXCLUSIVE => "exclusive",
+    TRUNCATE => "truncate",
+});
+
+impl ToVal for NewTimestamp {
+    fn to_val(self) -> Val {
+        let (case, value) = match self {
+            Self::NoChange => ("no-change", None),
+            Self::Now => ("now", None),
+            Self::Timestamp(value) => ("timestamp", Some(Box::new(value.to_val()))),
+        };
+        Val::Variant {
+            case: case.to_owned(),
+            value,
+        }
+    }
+}
+
+impl FromVal for NewTimestamp {
+    fn from_val(value: Val) -> Result<Self, wasm_junction_core::CallError> {
+        match value {
+            Val::Variant { case, value: None } if case == "no-change" => Ok(Self::NoChange),
+            Val::Variant { case, value: None } if case == "now" => Ok(Self::Now),
+            Val::Variant {
+                case,
+                value: Some(value),
+            } if case == "timestamp" => super::Datetime::from_val(*value).map(Self::Timestamp),
+            _ => Err(shape("new-timestamp")),
+        }
+    }
+}
+
+impl ToVal for DescriptorStat {
+    fn to_val(self) -> Val {
+        Val::Record(vec![
+            ("type".to_owned(), self.type_.to_val()),
+            ("link-count".to_owned(), self.link_count.to_val()),
+            ("size".to_owned(), self.size.to_val()),
+            (
+                "data-access-timestamp".to_owned(),
+                self.data_access_timestamp.to_val(),
+            ),
+            (
+                "data-modification-timestamp".to_owned(),
+                self.data_modification_timestamp.to_val(),
+            ),
+            (
+                "status-change-timestamp".to_owned(),
+                self.status_change_timestamp.to_val(),
+            ),
+        ])
+    }
+}
+
+impl ToVal for DirectoryEntry {
+    fn to_val(self) -> Val {
+        Val::Record(vec![
+            ("type".to_owned(), self.type_.to_val()),
+            ("name".to_owned(), self.name.to_val()),
+        ])
+    }
+}
+
+impl FromVal for DirectoryEntry {
+    fn from_val(value: Val) -> Result<Self, wasm_junction_core::CallError> {
+        let Val::Record(fields) = value else {
+            return Err(shape("directory-entry"));
+        };
+        let [(_, type_), (_, name)] =
+            <[_; 2]>::try_from(fields).map_err(|_| shape("directory-entry fields"))?;
+        Ok(Self {
+            type_: DescriptorType::from_val(type_)?,
+            name: String::from_val(name)?,
+        })
+    }
+}
+
+impl ToVal for MetadataHashValue {
+    fn to_val(self) -> Val {
+        Val::Record(vec![
+            ("lower".to_owned(), self.lower.to_val()),
+            ("upper".to_owned(), self.upper.to_val()),
+        ])
+    }
+}
+
+impl<T: ToVal> ToVal for Result<T, ErrorCode> {
+    fn to_val(self) -> Val {
+        Val::Result(match self {
+            Ok(value) => Ok(Some(Box::new(value.to_val()))),
+            Err(error) => Err(Some(Box::new(error.to_val()))),
+        })
+    }
+}
+
+impl<T: FromVal> FromVal for Result<T, ErrorCode> {
+    fn from_val(value: Val) -> Result<Self, wasm_junction_core::CallError> {
+        match value {
+            Val::Result(Ok(Some(value))) => T::from_val(*value).map(Ok),
+            Val::Result(Ok(None)) => T::from_val(Val::Tuple(Vec::new())).map(Ok),
+            Val::Result(Err(Some(error))) => ErrorCode::from_val(*error).map(Err),
+            _ => Err(shape("filesystem result")),
+        }
+    }
+}
