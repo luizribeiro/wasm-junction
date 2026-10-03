@@ -135,6 +135,12 @@ impl exports::test::wasi::environment::Guest for Component {
             .blocking_write_and_flush(&vec![0; 4097])
             .is_ok()
     }
+
+    fn splice_first() {
+        let input = wasi::cli::stdin::get_stdin();
+        let output = wasi::cli::stdout::get_stdout();
+        let _ = output.splice(&input, 0);
+    }
 }
 
 export!(Component);

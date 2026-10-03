@@ -278,6 +278,57 @@ impl Middleware for RecordPollableDrop {
         }
     }
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ChannelObservation {
+    open: bool,
+    invocation: InvocationId,
+    stream: u64,
+    direction: wasm_junction::ChannelDirection,
+}
+
+struct RecordChannels {
+    calls: Arc<Mutex<Vec<InvocationId>>>,
+    events: Arc<Mutex<Vec<ChannelObservation>>>,
+}
+
+impl Middleware for RecordChannels {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.interface.as_ref() == "wasi:io/streams@0.2.12" {
+            self.calls.lock().unwrap().push(call.invocation_id());
+        }
+        next.run(call).await
+    }
+
+    fn event(&self, event: &Event) {
+        let observation = match event {
+            Event::ChannelOpen {
+                invocation,
+                stream,
+                direction,
+            } => Some(ChannelObservation {
+                open: true,
+                invocation: *invocation,
+                stream: *stream,
+                direction: *direction,
+            }),
+            Event::ChannelClose {
+                invocation,
+                stream,
+                direction,
+            } => Some(ChannelObservation {
+                open: false,
+                invocation: *invocation,
+                stream: *stream,
+                direction: *direction,
+            }),
+            _ => None,
+        };
+        if let Some(observation) = observation {
+            self.events.lock().unwrap().push(observation);
+        }
+    }
+}
 #[test]
 fn gated_wasi_set_changes_only_deliberately() {
     assert_eq!(
@@ -507,6 +558,45 @@ fn pollable_drop_is_a_call_and_an_event() {
     assert_eq!(drops[0], drops[1]);
     assert_eq!(drops[0].interface, "wasi:io/poll@0.2.12");
     assert_eq!(drops[0].resource, "pollable");
+}
+
+#[test]
+fn splice_opens_both_channels_on_first_gated_use() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let app = App::builder()
+        .engine(wasm_junction_wasmtime::WasmtimeEngine::new().unwrap())
+        .provide(wasm_junction::wasi::provider())
+        .middleware(RecordChannels {
+            calls: calls.clone(),
+            events: events.clone(),
+        })
+        .build()
+        .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(app.load(Component::from_bytes(COMPONENT).unwrap().named("channels")))
+        .unwrap();
+    runtime
+        .block_on(app.call("channels", EXPORT, "splice-first", Vec::new()))
+        .unwrap();
+
+    let calls = calls.lock().unwrap();
+    let events = events.lock().unwrap();
+    assert!(!calls.is_empty());
+    assert_eq!(events.len(), 4);
+    assert!(events.iter().all(|event| event.invocation == calls[0]));
+    for opened in events.iter().filter(|event| event.open) {
+        assert!(events.iter().any(|closed| {
+            !closed.open
+                && closed.stream == opened.stream
+                && closed.direction == opened.direction
+                && closed.invocation == opened.invocation
+        }));
+    }
 }
 
 #[test]

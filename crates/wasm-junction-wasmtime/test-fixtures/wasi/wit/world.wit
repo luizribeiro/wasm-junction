@@ -13,6 +13,7 @@ interface environment {
   refused-write: func() -> string;
   input-read: func() -> string;
   rewritten-write: func() -> bool;
+  splice-first: func();
 }
 
 world fixture {
