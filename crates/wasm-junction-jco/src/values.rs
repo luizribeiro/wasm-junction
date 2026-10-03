@@ -241,6 +241,7 @@ fn default_value(ty: &ValueType) -> Result<Val, CallError> {
             .transpose()?
             .map(Box::new))),
         ValueType::Stream => return Err(unsupported(ty.name())),
+        ValueType::Future => return Err(unsupported(ty.name())),
         ValueType::Resource(resource) => Val::Resource(match resource.ownership {
             ResourceOwnership::Own => {
                 Resource::owned(resource.interface.clone(), resource.name.clone(), u32::MAX)
@@ -425,6 +426,7 @@ fn lower(
             stream_marker("host", id)
         }
         (_, ValueType::Stream) => return Err(unsupported(expected.name())),
+        (_, ValueType::Future) => return Err(unsupported(expected.name())),
         (_, ValueType::Unsupported(name)) => return Err(unsupported(name)),
         (value, expected) => {
             return Err(wrong_val_type(expected, &value));
@@ -500,6 +502,7 @@ fn lift(
         }
         ValueType::Resource(expected) => lift_resource(value, expected, resources),
         ValueType::Stream => lift_stream(value, resources),
+        ValueType::Future => Err(unsupported(expected.name())),
         ValueType::Unsupported(name) => Err(unsupported(name)),
     }
 }
@@ -1088,6 +1091,24 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("store ends with each call"));
+    }
+
+    #[wasm_bindgen_test]
+    fn refuses_component_future_values() {
+        let future =
+            wasm_junction_core::FutureHandle::__for_invocation(7, InvocationId::__from_counter(3));
+        let error = lower_args(
+            vec![Val::Future(future)],
+            &FunctionType {
+                params: vec![ValueType::Future],
+                result: None,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "jco does not yet support WIT `future` values"
+        );
     }
 
     #[wasm_bindgen_test]

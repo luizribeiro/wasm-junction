@@ -33,6 +33,7 @@ pub(crate) enum ValueType {
         err: Option<Box<ValueType>>,
     },
     Stream,
+    Future,
     Resource(ResourceType),
     Unsupported(&'static str),
 }
@@ -98,6 +99,7 @@ impl ValueType {
             Self::Option(_) => "option",
             Self::Result { .. } => "result",
             Self::Stream => "stream<u8>",
+            Self::Future => "future",
             Self::Resource(resource) => match resource.ownership {
                 ResourceOwnership::Own => "own",
                 ResourceOwnership::Borrow => "borrow",
@@ -351,6 +353,7 @@ fn value_type(resolve: &Resolve, ty: Type) -> ValueType {
                 err: result.err.map(|ty| Box::new(value_type(resolve, ty))),
             },
             TypeDefKind::Stream(Some(Type::U8)) => ValueType::Stream,
+            TypeDefKind::Future(_) => ValueType::Future,
             TypeDefKind::Handle(handle) => resource_type(resolve, *handle),
             kind => ValueType::Unsupported(kind.as_str()),
         },
