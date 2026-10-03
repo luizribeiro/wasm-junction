@@ -626,6 +626,43 @@ fn finish_unit(outcome: Result<Vals, CallError>) -> wasmtime::Result<()> {
     }
 }
 
+#[cfg(feature = "wasi-p3")]
+fn finish_p3_error<T, E>(
+    outcome: Result<Vals, CallError>,
+    denied: E,
+    decode: impl FnOnce(Vals) -> Result<Result<T, E>, CallError>,
+) -> wasmtime::Result<Result<T, E>> {
+    match outcome {
+        Err(error) if error.kind() == CallErrorKind::Refused => Ok(Err(denied)),
+        Err(error) => Err(wasmtime::Error::new(error)),
+        Ok(values) => decode(values).map_err(wasmtime::Error::new),
+    }
+}
+
+#[cfg(feature = "wasi-p3")]
+fn decode_p3_result<T: FromVal, E: FromVal>(values: Vals) -> Result<Result<T, E>, CallError> {
+    let [value] = <[Val; 1]>::try_from(values).map_err(|_| shape("one result"))?;
+    let Val::Result(result) = value else {
+        return Err(shape("result"));
+    };
+    match result {
+        Ok(value) => {
+            T::from_val(value.map_or_else(|| Val::Tuple(Vec::new()), |value| *value)).map(Ok)
+        }
+        Err(value) => {
+            E::from_val(value.map_or_else(|| Val::Tuple(Vec::new()), |value| *value)).map(Err)
+        }
+    }
+}
+
+#[cfg(feature = "wasi-p3")]
+fn p3_result_value<T: ToVal, E: ToVal>(result: Result<T, E>) -> Val {
+    Val::Result(match result {
+        Ok(value) => Ok(Some(Box::new(value.to_val()))),
+        Err(error) => Err(Some(Box::new(error.to_val()))),
+    })
+}
+
 fn finish_stream<T: FromVal>(
     store: &mut StoreData,
     outcome: Result<Vals, CallError>,
@@ -644,6 +681,33 @@ fn finish_stream<T: FromVal>(
 }
 
 macro_rules! gate {
+    ($linker:ident, $iface:literal, $name:literal, $method:path,
+     concurrent_result[$data:ty, $getter:path, $denied:expr],
+     ($($arg:ident: $ty:ty),*) -> Result<$ok:ty, $error:ty>) => {
+        $linker.instance($iface)?.func_wrap_concurrent(
+            $name,
+            |accessor, ($($arg,)*): ($($ty,)*)| Box::pin(async move {
+                let invocation = accessor.with(|mut access| access.get().context.invocation_id())
+                    .ok_or_else(|| wasmtime::Error::msg("WASI call has no invocation id"))?;
+                let args = scope_values(vec![$($arg.to_val()),*], invocation);
+                let real: RealConcurrent = |accessor, args| Box::pin(async move {
+                    #[allow(unused_mut, unused_variables)]
+                    let mut args = args.into_iter();
+                    $(let $arg = <$ty>::from_val(
+                        args.next().ok_or_else(|| shape("another argument"))?
+                    )?;)*
+                    let view = accessor.with_getter::<$data>($getter);
+                    let value = $method(&view $(, $arg)*).await
+                        .map_err(|error| CallError::trap(error.to_string()))?;
+                    Ok(vec![p3_result_value(value)])
+                });
+                let outcome = trampoline::gate_concurrent(
+                    accessor, $iface, $name, args, real,
+                ).await;
+                Ok((finish_p3_error(outcome, $denied, decode_p3_result::<$ok, $error>)?,))
+            }),
+        )?;
+    };
     ($linker:ident, $iface:literal, $name:literal, $method:path,
      concurrent[$data:ty, $getter:path], ($($arg:ident: $ty:ty),*) -> ()) => {
         $linker.instance($iface)?.func_wrap_concurrent(
@@ -1112,6 +1176,19 @@ mod views {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "wasi-p3")]
+    async fn test_result_gate(
+        _store: &wasmtime::component::Accessor<StoreData, wasmtime::component::HasSelf<StoreData>>,
+        value: u64,
+    ) -> wasmtime::Result<Result<u64, u64>> {
+        Ok(Ok(value))
+    }
+
+    #[cfg(feature = "wasi-p3")]
+    const fn store_data(store: &mut StoreData) -> &mut StoreData {
+        store
+    }
+
     #[test]
     fn stream_errors_round_trip_through_middleware_values() {
         let closed = StreamError::from_val(StreamError::Closed.to_val()).unwrap();
@@ -1138,5 +1215,42 @@ mod tests {
         let decoded = Instant::from_val(instant.to_val()).unwrap();
         assert_eq!(decoded.seconds, -1);
         assert_eq!(decoded.nanoseconds, 999_999_999);
+    }
+
+    #[test]
+    #[cfg(feature = "wasi-p3")]
+    fn p3_refusals_map_to_access_and_other_failures_trap() {
+        use wasmtime_wasi::p3::bindings::filesystem::types::ErrorCode;
+
+        let refused: Result<(), ErrorCode> = finish_p3_error(
+            Err(CallError::refused("denied")),
+            ErrorCode::Access,
+            |_| unreachable!(),
+        )
+        .unwrap();
+        assert!(matches!(refused, Err(ErrorCode::Access)));
+
+        let trapped = finish_p3_error::<(), _>(
+            Err(CallError::trap("broken")),
+            ErrorCode::Access,
+            |_| unreachable!(),
+        )
+        .unwrap_err();
+        assert!(trapped.to_string().contains("broken"));
+    }
+
+    #[test]
+    #[cfg(feature = "wasi-p3")]
+    fn concurrent_p3_error_gates_register() -> wasmtime::Result<()> {
+        let mut config = wasmtime::Config::new();
+        config
+            .wasm_component_model_async(true)
+            .concurrency_support(true);
+        let engine = wasmtime::Engine::new(&config).unwrap();
+        let mut linker = Linker::<StoreData>::new(&engine);
+        gate!(linker, "test:p3/error@0.1.0", "probe", test_result_gate,
+            concurrent_result[wasmtime::component::HasSelf<StoreData>, store_data, 403_u64],
+            (value: u64) -> Result<u64, u64>);
+        Ok(())
     }
 }
