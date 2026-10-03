@@ -251,6 +251,14 @@ fn no_payload(value: &Option<Box<Val>>) -> Result<(), CallError> {
     }
 }
 
+fn field_size_from_val(value: Val) -> Result<FieldSizePayload, CallError> {
+    let [field_name, field_size] = fields(value, "field-size-payload")?;
+    Ok(FieldSizePayload {
+        field_name: Option::<String>::from_val(field_name)?,
+        field_size: Option::<u32>::from_val(field_size)?,
+    })
+}
+
 fn decode_transport_error(
     case: &str,
     value: Option<Box<Val>>,
@@ -302,6 +310,48 @@ fn decode_transport_error(
     Some(decoded)
 }
 
+fn decode_request_error(
+    case: &str,
+    value: Option<Box<Val>>,
+) -> Option<Result<ErrorCode, CallError>> {
+    let decoded = match case {
+        "HTTP-request-denied" => no_payload(&value).map(|()| ErrorCode::HttpRequestDenied),
+        "HTTP-request-length-required" => {
+            no_payload(&value).map(|()| ErrorCode::HttpRequestLengthRequired)
+        }
+        "HTTP-request-body-size" => payload(value, "body size").map(ErrorCode::HttpRequestBodySize),
+        "HTTP-request-method-invalid" => {
+            no_payload(&value).map(|()| ErrorCode::HttpRequestMethodInvalid)
+        }
+        "HTTP-request-URI-invalid" => no_payload(&value).map(|()| ErrorCode::HttpRequestUriInvalid),
+        "HTTP-request-URI-too-long" => {
+            no_payload(&value).map(|()| ErrorCode::HttpRequestUriTooLong)
+        }
+        "HTTP-request-header-section-size" => {
+            payload(value, "header section size").map(ErrorCode::HttpRequestHeaderSectionSize)
+        }
+        "HTTP-request-header-size" => (|| {
+            let Val::Option(payload) = *value.ok_or_else(|| shape("header size"))? else {
+                return Err(shape("optional header size"));
+            };
+            Ok(ErrorCode::HttpRequestHeaderSize(
+                payload
+                    .map(|value| field_size_from_val(*value))
+                    .transpose()?,
+            ))
+        })(),
+        "HTTP-request-trailer-section-size" => {
+            payload(value, "trailer section size").map(ErrorCode::HttpRequestTrailerSectionSize)
+        }
+        "HTTP-request-trailer-size" => value
+            .ok_or_else(|| shape("trailer size"))
+            .and_then(|value| field_size_from_val(*value))
+            .map(ErrorCode::HttpRequestTrailerSize),
+        _ => return None,
+    };
+    Some(decoded)
+}
+
 impl FromVal for ErrorCode {
     fn from_val(value: Val) -> Result<Self, CallError> {
         let Val::Variant { case, value } = value else {
@@ -310,8 +360,10 @@ impl FromVal for ErrorCode {
         if let Some(decoded) = decode_transport_error(&case, value.clone()) {
             return decoded;
         }
+        if let Some(decoded) = decode_request_error(&case, value.clone()) {
+            return decoded;
+        }
         match case.as_str() {
-            "HTTP-request-denied" => no_payload(&value).map(|()| Self::HttpRequestDenied),
             "internal-error" => payload(value, "internal error").map(Self::InternalError),
             _ => Err(shape("error-code case")),
         }
@@ -369,5 +421,16 @@ mod tests {
         };
         assert_eq!(decoded.rcode.as_deref(), Some("refused"));
         assert_eq!(decoded.info_code, Some(5));
+        let header = ErrorCode::HttpRequestHeaderSize(Some(FieldSizePayload {
+            field_name: Some("authorization".to_owned()),
+            field_size: Some(99),
+        }));
+        assert!(matches!(
+            ErrorCode::from_val(header.to_val()).unwrap(),
+            ErrorCode::HttpRequestHeaderSize(Some(FieldSizePayload {
+                field_size: Some(99),
+                ..
+            }))
+        ));
     }
 }
