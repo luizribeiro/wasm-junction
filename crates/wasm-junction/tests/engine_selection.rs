@@ -90,3 +90,23 @@ fn wasi_dependency_follows_the_feature() {
     );
     assert!(with.lines().any(|line| line.starts_with("wasmtime-wasi ")));
 }
+
+#[test]
+fn wasi_http_dependency_follows_the_feature() {
+    let without = tree(env!("WASM_JUNCTION_TARGET"), true, Some("wasmtime,wasi-p3"));
+    let with = tree(
+        env!("WASM_JUNCTION_TARGET"),
+        true,
+        Some("wasmtime,wasi-http"),
+    );
+
+    assert!(
+        !without
+            .lines()
+            .any(|line| line.starts_with("wasmtime-wasi-http "))
+    );
+    assert!(
+        with.lines()
+            .any(|line| line.starts_with("wasmtime-wasi-http "))
+    );
+}

@@ -20,6 +20,7 @@ default = ["wasmtime", "jco", "wasi"]
 jco = ["dep:wasm-junction-jco"]
 wasi = ["wasm-junction-wasmtime?/wasi"]
 wasi-p3 = ["wasi", "wasm-junction-wasmtime?/wasi-p3"]
+wasi-http = ["wasi-p3", "wasm-junction-wasmtime?/wasi-http"]
 wasmtime = ["dep:wasm-junction-wasmtime"]
 
 [dependencies]
