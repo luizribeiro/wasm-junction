@@ -26,6 +26,7 @@ interface environment {
   write-file: func(path: string, contents: string) -> result<_, string>;
   stat-preopen: func() -> result<_, string>;
   link-preopens: func();
+  filesystem-channels: func();
 }
 
 world fixture {

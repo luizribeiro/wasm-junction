@@ -6,7 +6,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use wasm_junction::{
-    Access, App, Call, CallError, Component, Middleware, Next, Val, Vals, WasiSettings,
+    Access, App, Call, CallError, ChannelDirection, Component, Event, InvocationId, Middleware,
+    Next, Val, Vals, WasiSettings,
 };
 
 const COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wasi-test.wasm"));
@@ -221,4 +222,97 @@ fn descriptor_calls_carry_preopen_roots_in_descriptor_order() {
         args[args.len() - 2..],
         [Val::from("/data"), Val::from("/peer")]
     );
+}
+
+type ChannelEvents = Arc<Mutex<Vec<(bool, InvocationId, u64, ChannelDirection)>>>;
+
+struct RecordChannels {
+    calls: Arc<Mutex<Vec<(InvocationId, ChannelDirection)>>>,
+    events: ChannelEvents,
+}
+
+impl Middleware for RecordChannels {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        let direction = match call.function.as_ref() {
+            "[method]descriptor.read-via-stream" => Some(ChannelDirection::HostToGuest),
+            "[method]descriptor.write-via-stream" | "[method]descriptor.append-via-stream" => {
+                Some(ChannelDirection::GuestToHost)
+            }
+            _ => None,
+        };
+        if let Some(direction) = direction {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((call.invocation_id(), direction));
+        }
+        next.run(call).await
+    }
+
+    fn event(&self, event: &Event) {
+        let observed = match event {
+            Event::ChannelOpen {
+                invocation,
+                stream,
+                direction,
+            } => Some((true, *invocation, *stream, *direction)),
+            Event::ChannelClose {
+                invocation,
+                stream,
+                direction,
+            } => Some((false, *invocation, *stream, *direction)),
+            _ => None,
+        };
+        if let Some(observed) = observed {
+            self.events.lock().unwrap().push(observed);
+        }
+    }
+}
+
+#[test]
+fn filesystem_streams_open_and_close_invocation_channels() {
+    let directory = TestDirectory::new("filesystem-channels");
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let app = App::builder()
+        .engine(wasm_junction_wasmtime::WasmtimeEngine::new().unwrap())
+        .provide(wasm_junction::wasi::provider())
+        .middleware(RecordChannels {
+            calls: calls.clone(),
+            events: events.clone(),
+        })
+        .build()
+        .unwrap();
+    app.configure(
+        "files",
+        WasiSettings::new().preopen(&directory.0, "/data", Access::ReadWrite),
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(app.load(Component::from_bytes(COMPONENT).unwrap().named("files")))
+        .unwrap();
+    runtime
+        .block_on(app.call("files", EXPORT, "filesystem-channels", Vec::new()))
+        .unwrap();
+
+    let calls = calls.lock().unwrap();
+    let events = events.lock().unwrap();
+    assert_eq!(calls.len(), 3);
+    assert_eq!(events.len(), 6);
+    for (invocation, direction) in calls.iter() {
+        let matching = events
+            .iter()
+            .filter(|event| event.1 == *invocation && event.3 == *direction)
+            .collect::<Vec<_>>();
+        assert!(matching.iter().any(|event| event.0));
+        assert!(matching.iter().any(|event| !event.0));
+    }
+    for opened in events.iter().filter(|event| event.0) {
+        assert!(events.iter().any(|closed| {
+            !closed.0 && closed.1 == opened.1 && closed.2 == opened.2 && closed.3 == opened.3
+        }));
+    }
 }

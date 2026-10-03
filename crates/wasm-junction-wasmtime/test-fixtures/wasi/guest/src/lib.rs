@@ -298,6 +298,26 @@ impl exports::test::wasi::environment::Guest for Component {
         let (target, _) = directories.next().unwrap();
         let _ = source.link_at(PathFlags::empty(), "note.txt", &target, "linked.txt");
     }
+
+    fn filesystem_channels() {
+        use wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
+
+        let (directory, _) = wasi::filesystem::preopens::get_directories()
+            .into_iter()
+            .next()
+            .unwrap();
+        let file = directory
+            .open_at(
+                PathFlags::empty(),
+                "note.txt",
+                OpenFlags::empty(),
+                DescriptorFlags::READ | DescriptorFlags::WRITE,
+            )
+            .unwrap();
+        drop(file.read_via_stream(0).unwrap());
+        drop(file.write_via_stream(0).unwrap());
+        drop(file.append_via_stream().unwrap());
+    }
 }
 
 export!(Component);
