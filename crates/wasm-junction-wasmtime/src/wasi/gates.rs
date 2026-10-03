@@ -300,6 +300,23 @@ impl FromVal for u8 {
     }
 }
 
+#[cfg(feature = "wasi-http")]
+impl ToVal for u16 {
+    fn to_val(self) -> Val {
+        Val::U16(self)
+    }
+}
+
+#[cfg(feature = "wasi-http")]
+impl FromVal for u16 {
+    fn from_val(value: Val) -> Result<Self, CallError> {
+        match value {
+            Val::U16(value) => Ok(value),
+            _ => Err(shape("u16")),
+        }
+    }
+}
+
 impl ToVal for bool {
     fn to_val(self) -> Val {
         Val::Bool(self)
@@ -419,6 +436,10 @@ macro_rules! list_value {
 
 list_value!(String);
 list_value!((String, String));
+#[cfg(feature = "wasi-http")]
+list_value!((String, Vec<u8>));
+#[cfg(feature = "wasi-http")]
+list_value!(Vec<u8>);
 list_value!(u32);
 list_value!(Resource<DynPollable>);
 
@@ -1215,6 +1236,17 @@ mod tests {
         let decoded = Instant::from_val(instant.to_val()).unwrap();
         assert_eq!(decoded.seconds, -1);
         assert_eq!(decoded.nanoseconds, 999_999_999);
+    }
+
+    #[test]
+    #[cfg(feature = "wasi-http")]
+    fn http_scalar_and_header_values_round_trip() {
+        assert_eq!(u16::from_val(418_u16.to_val()).unwrap(), 418);
+        let headers = vec![("x-test".to_owned(), b"value".to_vec())];
+        assert_eq!(
+            Vec::<(String, Vec<u8>)>::from_val(headers.clone().to_val()).unwrap(),
+            headers
+        );
     }
 
     #[test]
