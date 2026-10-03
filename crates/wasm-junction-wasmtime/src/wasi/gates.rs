@@ -95,14 +95,12 @@ fn validate_borrowed<T: WitResource>(value: &Val, store: &mut StoreData) -> Resu
 
 fn validate_input_borrow(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
     let value = values.first().ok_or_else(|| shape("input-stream"))?;
-    validate_borrowed::<DynInputStream>(value, store)?;
-    open_channel(value, store, ChannelDirection::HostToGuest)
+    validate_borrowed::<DynInputStream>(value, store)
 }
 
 fn validate_output_borrow(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
     let value = values.first().ok_or_else(|| shape("output-stream"))?;
-    validate_borrowed::<DynOutputStream>(value, store)?;
-    open_channel(value, store, ChannelDirection::GuestToHost)
+    validate_borrowed::<DynOutputStream>(value, store)
 }
 
 fn validate_splice_borrows(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
@@ -114,27 +112,43 @@ fn validate_error_borrow(values: &[Val], store: &mut StoreData) -> Result<(), Ca
     validate_borrowed::<IoError>(values.first().ok_or_else(|| shape("error"))?, store)
 }
 
-fn open_channel(
-    value: &Val,
+fn open_channel<T>(
+    resource: &Resource<T>,
     store: &mut StoreData,
     direction: ChannelDirection,
-) -> Result<(), CallError> {
-    let Val::Resource(resource) = value else {
-        return Err(shape("stream resource"));
-    };
-    // Standard-stream getters are not gated yet, so first use is the earliest observable opening.
-    if store.open_wasi_channel(resource.id()) {
+) -> wasmtime::Result<()> {
+    if store.open_wasi_channel(resource.rep()) {
         let invocation = store
             .context
             .invocation_id()
-            .ok_or_else(|| CallError::trap("WASI call has no invocation id"))?;
+            .ok_or_else(|| wasmtime::Error::msg("WASI call has no invocation id"))?;
         store.imports.emit(EngineEvent::ChannelOpen {
             invocation,
-            stream: u64::from(resource.id()),
+            stream: u64::from(resource.rep()),
             direction,
         });
     }
     Ok(())
+}
+
+fn get_stdin(store: &mut StoreData) -> wasmtime::Result<Resource<DynInputStream>> {
+    let stream = wasmtime_wasi::p2::bindings::cli::stdin::Host::get_stdin(&mut views::cli(store))?;
+    open_channel(&stream, store, ChannelDirection::HostToGuest)?;
+    Ok(stream)
+}
+
+fn get_stdout(store: &mut StoreData) -> wasmtime::Result<Resource<DynOutputStream>> {
+    let stream =
+        wasmtime_wasi::p2::bindings::cli::stdout::Host::get_stdout(&mut views::cli(store))?;
+    open_channel(&stream, store, ChannelDirection::GuestToHost)?;
+    Ok(stream)
+}
+
+fn get_stderr(store: &mut StoreData) -> wasmtime::Result<Resource<DynOutputStream>> {
+    let stream =
+        wasmtime_wasi::p2::bindings::cli::stderr::Host::get_stderr(&mut views::cli(store))?;
+    open_channel(&stream, store, ChannelDirection::GuestToHost)?;
+    Ok(stream)
 }
 
 fn close_channel(store: &mut StoreData, id: u32, direction: Option<ChannelDirection>) {
@@ -667,6 +681,16 @@ pub(super) fn add_environment(linker: &mut Linker<StoreData>) -> wasmtime::Resul
     Ok(())
 }
 
+pub(super) fn add_stdio(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    gate!(linker, "wasi:cli/stdin@0.2.12", "get-stdin", store,
+        get_stdin, resource, () -> Resource<DynInputStream>);
+    gate!(linker, "wasi:cli/stdout@0.2.12", "get-stdout", store,
+        get_stdout, resource, () -> Resource<DynOutputStream>);
+    gate!(linker, "wasi:cli/stderr@0.2.12", "get-stderr", store,
+        get_stderr, resource, () -> Resource<DynOutputStream>);
+    Ok(())
+}
+
 pub(super) fn add_wall_clock(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     gate!(linker, "wasi:clocks/wall-clock@0.2.12", "now", clocks,
         wasmtime_wasi::p2::bindings::clocks::wall_clock::Host::now,
@@ -809,6 +833,10 @@ mod views {
 
     pub(super) fn io(store: &mut StoreData) -> &mut wasmtime::component::ResourceTable {
         store.wasi_table()
+    }
+
+    pub(super) const fn store(store: &mut StoreData) -> &mut StoreData {
+        store
     }
 }
 

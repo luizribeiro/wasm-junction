@@ -60,6 +60,7 @@ impl exports::test::wasi::environment::Guest for Component {
         drop(input.subscribe());
 
         let output = wasi::cli::stdout::get_stdout();
+        drop(wasi::cli::stderr::get_stderr());
         let _ = output.check_write();
         let refused = output.write(&[0xfa]);
         if let Err(wasi::io::streams::StreamError::LastOperationFailed(error)) = refused {
@@ -155,6 +156,10 @@ impl exports::test::wasi::environment::Guest for Component {
         let input = wasi::cli::stdin::get_stdin();
         let output = wasi::cli::stdout::get_stdout();
         let _ = output.splice(&input, 0);
+    }
+
+    fn stdout_channel() {
+        drop(wasi::cli::stdout::get_stdout());
     }
 
     fn benchmark_write(bytes: Vec<u8>) -> Vec<u8> {

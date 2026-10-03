@@ -389,6 +389,9 @@ fn gated_wasi_set_changes_only_deliberately() {
         GATED_WASI_INTERFACES,
         [
             "wasi:cli/environment@0.2.12",
+            "wasi:cli/stderr@0.2.12",
+            "wasi:cli/stdin@0.2.12",
+            "wasi:cli/stdout@0.2.12",
             "wasi:clocks/monotonic-clock@0.2.12",
             "wasi:clocks/wall-clock@0.2.12",
             "wasi:io/error@0.2.12",
@@ -615,7 +618,7 @@ fn pollable_drop_is_a_call_and_an_event() {
 }
 
 #[test]
-fn splice_opens_both_channels_on_first_gated_use() {
+fn stdout_getter_opens_one_channel_and_drop_closes_it() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let events = Arc::new(Mutex::new(Vec::new()));
     let app = App::builder()
@@ -635,22 +638,19 @@ fn splice_opens_both_channels_on_first_gated_use() {
         .block_on(app.load(Component::from_bytes(COMPONENT).unwrap().named("channels")))
         .unwrap();
     runtime
-        .block_on(app.call("channels", EXPORT, "splice-first", Vec::new()))
+        .block_on(app.call("channels", EXPORT, "stdout-channel", Vec::new()))
         .unwrap();
 
     let calls = calls.lock().unwrap();
     let events = events.lock().unwrap();
-    assert!(!calls.is_empty());
-    assert_eq!(events.len(), 4);
-    assert!(events.iter().all(|event| event.invocation == calls[0]));
-    for opened in events.iter().filter(|event| event.open) {
-        assert!(events.iter().any(|closed| {
-            !closed.open
-                && closed.stream == opened.stream
-                && closed.direction == opened.direction
-                && closed.invocation == opened.invocation
-        }));
-    }
+    assert_eq!(calls.len(), 1);
+    assert_eq!(events.len(), 2);
+    assert!(events[0].open);
+    assert!(!events[1].open);
+    assert_eq!(events[0].invocation, calls[0]);
+    assert_eq!(events[0].stream, events[1].stream);
+    assert_eq!(events[0].direction, events[1].direction);
+    assert_eq!(events[0].invocation, events[1].invocation);
 }
 
 #[test]

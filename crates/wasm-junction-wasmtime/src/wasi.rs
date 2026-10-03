@@ -48,6 +48,7 @@ pub(crate) fn add_gates(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> 
     gates::add_environment(linker)?;
     gates::add_wall_clock(linker)?;
     gates::add_monotonic_clock(linker)?;
+    gates::add_stdio(linker)?;
     gates::add_poll(linker)?;
     gates::add_streams(linker)?;
     gates::add_error(linker)

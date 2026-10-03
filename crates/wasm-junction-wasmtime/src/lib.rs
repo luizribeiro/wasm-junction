@@ -48,6 +48,9 @@ pub const WASI_INTERFACES: &[&str] = &[
 #[cfg(feature = "wasi")]
 pub const GATED_WASI_INTERFACES: &[&str] = &[
     "wasi:cli/environment@0.2.12",
+    "wasi:cli/stderr@0.2.12",
+    "wasi:cli/stdin@0.2.12",
+    "wasi:cli/stdout@0.2.12",
     "wasi:clocks/monotonic-clock@0.2.12",
     "wasi:clocks/wall-clock@0.2.12",
     "wasi:io/error@0.2.12",
