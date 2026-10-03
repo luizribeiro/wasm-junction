@@ -8,7 +8,7 @@ use wasmtime::component::{
     Component, Linker, LinkerInstance, ResourceType, Type, Val as WasmtimeVal,
 };
 
-use crate::engine::{StoreData, lift_resource, lower_resource};
+use crate::engine::{StoreData, lift_future, lift_resource, lower_future, lower_resource};
 use crate::streams::{lift_stream, lower_stream};
 use crate::values::{LiftValue, LowerValue, from_wasmtime, to_wasmtime};
 
@@ -135,6 +135,9 @@ fn define_concurrent(
                     LiftValue::Resource(resource) => accessor
                         .with(|store| lift_resource(resource, store))
                         .map(Val::Resource),
+                    LiftValue::Future(future) => accessor
+                        .with(|mut store| lift_future(future, store.data_mut()))
+                        .map(Val::Future),
                     LiftValue::Stream(stream) => accessor
                         .with(|store| lift_stream(stream, store))
                         .map(Val::Stream),
@@ -154,6 +157,9 @@ fn define_concurrent(
                     LowerValue::Resource(resource, expected) => accessor
                         .with(|store| lower_resource(&resource, expected, store))
                         .map(WasmtimeVal::Resource),
+                    LowerValue::Future(future) => accessor
+                        .with(|mut store| lower_future(&future, store.data_mut()))
+                        .map(WasmtimeVal::Future),
                     LowerValue::Stream(stream) => accessor
                         .with(|store| lower_stream(stream, store))
                         .map(WasmtimeVal::Stream),
@@ -181,6 +187,9 @@ fn define_plain(
                     LiftValue::Resource(resource) => {
                         lift_resource(resource, store.as_context_mut()).map(Val::Resource)
                     }
+                    LiftValue::Future(future) => {
+                        lift_future(future, store.data_mut()).map(Val::Future)
+                    }
                     LiftValue::Stream(stream) => {
                         lift_stream(stream, store.as_context_mut()).map(Val::Stream)
                     }
@@ -201,6 +210,9 @@ fn define_plain(
                     LowerValue::Resource(resource, expected) => {
                         lower_resource(&resource, expected, store.as_context_mut())
                             .map(WasmtimeVal::Resource)
+                    }
+                    LowerValue::Future(future) => {
+                        lower_future(&future, store.data_mut()).map(WasmtimeVal::Future)
                     }
                     LowerValue::Stream(stream) => {
                         lower_stream(stream, store.as_context_mut()).map(WasmtimeVal::Stream)

@@ -13,6 +13,7 @@
 #![warn(missing_docs)]
 
 mod engine;
+mod futures;
 mod imports;
 mod streams;
 mod values;

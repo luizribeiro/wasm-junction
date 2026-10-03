@@ -9,11 +9,12 @@ use std::task::{Context, Poll, Waker};
 #[cfg(feature = "wasi")]
 use wasm_junction_core::WASI_PROVIDER_NAME;
 use wasm_junction_core::{
-    BoxFuture, CallError, CompiledComponent, Engine, EngineError, ImportDispatcher,
+    BoxFuture, CallError, CompiledComponent, Engine, EngineError, FutureHandle, ImportDispatcher,
     InvocationContext, Resource, StreamHandle, Val, Vals, WasiSettings, validate_resource_lowering,
 };
 use wasmtime::component::{
-    Component, InstancePre, Linker, ResourceAny, ResourceDynamic, ResourceType, Val as WasmtimeVal,
+    Component, FutureAny, InstancePre, Linker, ResourceAny, ResourceDynamic, ResourceType,
+    Val as WasmtimeVal,
 };
 use wasmtime::{AsContextMut, Config, Engine as RuntimeEngine, Store};
 #[cfg(feature = "wasi")]
@@ -21,6 +22,7 @@ use wasmtime_wasi::{WasiCtxBuilder, WasiCtxView, WasiView};
 
 #[cfg(feature = "wasi")]
 use crate::WASI_INTERFACES;
+use crate::futures::ActiveFutures;
 use crate::imports::{ResourceDefinition, define_imports};
 use crate::streams::lower_stream;
 use crate::values::{ExpectedResource, LiftValue, LowerValue, from_wasmtime, to_wasmtime};
@@ -36,6 +38,7 @@ pub(crate) struct StoreData {
     pub(crate) resources: Arc<[ResourceDefinition]>,
     pub(crate) owned_resources: HashSet<Resource>,
     pub(crate) active_streams: crate::streams::ActiveStreams,
+    pub(crate) active_futures: ActiveFutures<FutureAny>,
 }
 
 #[cfg(feature = "wasi")]
@@ -263,6 +266,7 @@ impl CompiledComponent for Compiled {
 }
 
 impl Compiled {
+    #[allow(clippy::too_many_lines)]
     async fn call_export(
         &self,
         imports: Arc<dyn ImportDispatcher>,
@@ -285,6 +289,7 @@ impl Compiled {
                 resources: self.resources.clone(),
                 owned_resources: HashSet::new(),
                 active_streams: Arc::new(std::sync::Mutex::new(HashMap::new())),
+                active_futures: ActiveFutures::default(),
             },
         );
         let result = async {
@@ -321,6 +326,9 @@ impl Compiled {
                                     LowerValue::Stream(stream) => accessor
                                         .with(|store| lower_stream(stream, store))
                                         .map(WasmtimeVal::Stream),
+                                    LowerValue::Future(future) => accessor
+                                        .with(|mut store| lower_future(&future, store.data_mut()))
+                                        .map(WasmtimeVal::Future),
                                 },
                             )
                         })
@@ -337,6 +345,12 @@ impl Compiled {
                                 LiftValue::Resource(resource) => accessor
                                     .with(|store| lift_resource(resource, store))
                                     .map(Val::Resource),
+                                LiftValue::Future(mut future) => accessor.with(|mut store| {
+                                    future.close(store.as_context_mut())?;
+                                    Err(wasmtime::Error::new(CallError::refused(
+                                        "guest-created futures cannot be returned because the Wasmtime store ends with each call",
+                                    )))
+                                }),
                                 LiftValue::Stream(stream) => {
                                     let reader = stream.try_into_stream_reader::<u8>()?;
                                     accessor.with(|mut store| {
@@ -371,6 +385,34 @@ impl Compiled {
             },
         }
     }
+}
+
+pub(crate) fn lift_future(
+    future: FutureAny,
+    store: &mut StoreData,
+) -> Result<FutureHandle, wasmtime::Error> {
+    let invocation = store
+        .context
+        .invocation_id()
+        .ok_or_else(|| wasmtime::Error::msg("component future has no invocation id"))?;
+    store
+        .active_futures
+        .insert(future, invocation)
+        .map_err(wasmtime::Error::new)
+}
+
+pub(crate) fn lower_future(
+    future: &FutureHandle,
+    store: &mut StoreData,
+) -> Result<FutureAny, wasmtime::Error> {
+    let invocation = store
+        .context
+        .invocation_id()
+        .ok_or_else(|| wasmtime::Error::msg("component future has no invocation id"))?;
+    store
+        .active_futures
+        .take(future, invocation)
+        .map_err(wasmtime::Error::new)
 }
 
 pub(crate) fn lift_resource(

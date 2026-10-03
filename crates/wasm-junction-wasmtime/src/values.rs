@@ -1,5 +1,7 @@
-use wasm_junction_core::{Resource, ResourceOwnership, StreamHandle, Val};
-use wasmtime::component::{ResourceAny, ResourceType, StreamAny, Type, Val as WasmtimeVal};
+use wasm_junction_core::{FutureHandle, Resource, ResourceOwnership, StreamHandle, Val};
+use wasmtime::component::{
+    FutureAny, ResourceAny, ResourceType, StreamAny, Type, Val as WasmtimeVal,
+};
 
 #[derive(Clone, Copy)]
 pub(crate) struct ExpectedResource {
@@ -8,11 +10,13 @@ pub(crate) struct ExpectedResource {
 }
 
 pub(crate) enum LiftValue {
+    Future(FutureAny),
     Resource(ResourceAny),
     Stream(StreamAny),
 }
 
 pub(crate) enum LowerValue {
+    Future(FutureHandle),
     Resource(Resource, Option<ExpectedResource>),
     Stream(StreamHandle),
 }
@@ -105,6 +109,7 @@ pub(crate) fn from_wasmtime(
                 .transpose()?),
         })),
         WasmtimeVal::Resource(value) => store(LiftValue::Resource(value)),
+        WasmtimeVal::Future(value) => store(LiftValue::Future(value)),
         WasmtimeVal::Stream(value) => store(LiftValue::Stream(value)),
         other => Err(wasmtime::Error::msg(format!(
             "unsupported component value: {other:?}"
@@ -211,6 +216,7 @@ pub(crate) fn to_wasmtime(
                 .transpose()?),
         })),
         Val::Resource(value) => store(LowerValue::Resource(value, expected_resource(expected))),
+        Val::Future(value) => store(LowerValue::Future(value)),
         Val::Stream(value) => store(LowerValue::Stream(value)),
         other => Err(wasmtime::Error::msg(format!(
             "unsupported framework value: {other:?}"
