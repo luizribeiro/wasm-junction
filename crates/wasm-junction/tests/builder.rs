@@ -54,6 +54,24 @@ fn wasi_settings_require_the_wasi_provider() {
     );
 }
 
+#[cfg(feature = "wasi-http")]
+#[test]
+fn outgoing_http_provider_requires_engine_support() {
+    let error = App::builder()
+        .engine(FakeEngine)
+        .provide(wasm_junction::wasi::http::provider())
+        .build()
+        .err()
+        .unwrap();
+
+    assert_eq!(
+        error,
+        wasm_junction::BuildError::UnsupportedEngineProvider {
+            provider: "WASI HTTP"
+        }
+    );
+}
+
 #[cfg(not(any(
     all(feature = "wasmtime", not(target_family = "wasm")),
     all(feature = "jco", target_family = "wasm", target_os = "unknown")

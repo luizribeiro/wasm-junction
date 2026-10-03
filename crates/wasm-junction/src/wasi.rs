@@ -23,3 +23,19 @@ use crate::{Provided, WASI_PROVIDER_NAME};
 pub const fn provider() -> Provided {
     Provided::engine(WASI_PROVIDER_NAME)
 }
+
+/// Outgoing HTTP support implemented by the selected component engine.
+#[cfg(feature = "wasi-http")]
+pub mod http {
+    use crate::{Provided, WASI_HTTP_PROVIDER_NAME};
+
+    /// Registers the selected engine's WASI Preview 3 outgoing HTTP implementation.
+    ///
+    /// Use this together with [`super::provider`] for components that import
+    /// `wasi:http/client@0.3.0` or `wasi:http/types@0.3.0`. An engine without outgoing HTTP
+    /// support returns [`BuildError::UnsupportedEngineProvider`](crate::BuildError::UnsupportedEngineProvider).
+    #[must_use]
+    pub const fn provider() -> Provided {
+        Provided::engine(WASI_HTTP_PROVIDER_NAME)
+    }
+}

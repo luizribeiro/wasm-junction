@@ -15,7 +15,7 @@ use crate::{
     BoxFuture, Call, CallContext, CallError, Caller, CompiledComponent, Component, Engine,
     EngineError, EngineEvent, Event, Extensions, HostBound, ImportDispatcher, ImportTarget,
     InvocationContext, InvocationId, Middleware, Provided, Provider, Resource, Val, Vals,
-    WASI_PROVIDER_NAME, WasiSettings,
+    WASI_HTTP_PROVIDER_NAME, WASI_PROVIDER_NAME, WasiSettings,
 };
 
 mod lifecycle;
@@ -1656,7 +1656,7 @@ impl AppBuilder {
                         register_location(&mut locations, interface, registration.location)?;
                         engine_interfaces.push(interface);
                     }
-                    wasi_provider |= name == WASI_PROVIDER_NAME;
+                    wasi_provider |= matches!(name, WASI_PROVIDER_NAME | WASI_HTTP_PROVIDER_NAME);
                 }
             }
         }

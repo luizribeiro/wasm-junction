@@ -7,6 +7,9 @@ use crate::{BoxFuture, CallError, HostBound, InvocationContext, InvocationId, Re
 /// Name shared by applications and engines for the built-in WASI provider.
 pub const WASI_PROVIDER_NAME: &str = "WASI";
 
+/// Name shared by applications and engines for the built-in WASI HTTP provider.
+pub const WASI_HTTP_PROVIDER_NAME: &str = "WASI HTTP";
+
 /// Engine-neutral WASI settings for one component.
 ///
 /// Nothing from the host environment is visible unless it is added explicitly.
