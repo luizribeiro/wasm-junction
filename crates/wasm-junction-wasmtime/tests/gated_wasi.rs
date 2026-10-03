@@ -19,7 +19,9 @@ struct RecordGates(Arc<Mutex<BTreeSet<(String, String)>>>);
 
 impl Middleware for RecordGates {
     async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        tokio::task::yield_now().await;
         if call.interface.starts_with("wasi:") {
+            validate_io_call(&call);
             self.0
                 .lock()
                 .unwrap()
@@ -31,6 +33,58 @@ impl Middleware for RecordGates {
             return Err(CallError::refused("fixture write denied"));
         }
         next.run(call).await
+    }
+}
+
+fn validate_io_call(call: &Call) {
+    let function = call.function.as_ref();
+    let expected = match function {
+        "[method]input-stream.read"
+        | "[method]input-stream.blocking-read"
+        | "[method]input-stream.skip"
+        | "[method]input-stream.blocking-skip" => &["input-stream", "u64"][..],
+        "[method]input-stream.subscribe" => &["input-stream"][..],
+        "[method]output-stream.write" | "[method]output-stream.blocking-write-and-flush" => {
+            &["output-stream", "bytes"][..]
+        }
+        "[method]output-stream.check-write"
+        | "[method]output-stream.flush"
+        | "[method]output-stream.blocking-flush"
+        | "[method]output-stream.subscribe" => &["output-stream"][..],
+        "[method]output-stream.write-zeroes"
+        | "[method]output-stream.blocking-write-zeroes-and-flush" => &["output-stream", "u64"][..],
+        "[method]output-stream.splice" | "[method]output-stream.blocking-splice" => {
+            &["output-stream", "input-stream", "u64"][..]
+        }
+        "[method]error.to-debug-string" => &["error"][..],
+        "[drop]input-stream" => &["own input-stream"][..],
+        "[drop]output-stream" => &["own output-stream"][..],
+        "[drop]error" => &["own error"][..],
+        _ => return,
+    };
+    assert_eq!(
+        call.args.len(),
+        expected.len(),
+        "wrong arguments for {function}"
+    );
+    for (value, expected) in call.args.iter().zip(expected) {
+        match (value, *expected) {
+            (Val::U64(_), "u64") | (Val::Bytes(_), "bytes") => {}
+            (Val::Resource(resource), expected) => {
+                let (ownership, name) = expected.strip_prefix("own ").map_or(
+                    (wasm_junction::ResourceOwnership::Borrow, expected),
+                    |name| (wasm_junction::ResourceOwnership::Own, name),
+                );
+                assert_eq!(resource.name(), name, "wrong resource for {function}");
+                assert_eq!(
+                    resource.ownership(),
+                    ownership,
+                    "wrong ownership for {function}"
+                );
+                assert_eq!(resource.invocation_id(), Some(call.invocation_id()));
+            }
+            _ => panic!("wrong value for {function}: {value:?}"),
+        }
     }
 }
 
