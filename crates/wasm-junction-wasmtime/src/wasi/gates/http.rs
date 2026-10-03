@@ -1,5 +1,5 @@
 use super::*;
-use wasmtime::component::{ComponentType, FutureReader, StreamReader};
+use wasmtime::component::{Access, ComponentType, FutureReader, StreamReader};
 use wasmtime::{AsContextMut, StoreContextMut};
 use wasmtime_wasi_http::p3::bindings::http::types::{
     DnsErrorPayload, ErrorCode, FieldSizePayload, Fields, HeaderError, Method, Request,
@@ -99,6 +99,9 @@ fn lower_optional_stream_plain(
         })
         .transpose()
 }
+
+type TransferResult = Result<(), ErrorCode>;
+type TrailersResult = Result<Option<Resource<Fields>>, ErrorCode>;
 
 fn drop_request_options(
     store: &mut StoreData,
@@ -242,6 +245,96 @@ pub(super) fn add(linker: &mut Linker<crate::engine::StoreData>) -> wasmtime::Re
         Response,
         HostResponseWithStore::drop
     );
+    add_request_new(linker)?;
+    Ok(())
+}
+
+fn add_request_new(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    use wasmtime_wasi_http::p3::bindings::http::types::HostRequestWithStore;
+    use wasmtime_wasi_http::{WasiHttp, WasiHttpView};
+
+    linker.instance(TYPES)?.func_wrap_async(
+        "[static]request.new",
+        |mut store,
+         (headers, contents, trailers, options): (
+            Resource<Fields>,
+            Option<StreamReader<u8>>,
+            FutureReader<TrailersResult>,
+            Option<Resource<RequestOptions>>,
+        )| {
+            Box::new(async move {
+                let invocation = store
+                    .data()
+                    .context
+                    .invocation_id()
+                    .ok_or_else(|| wasmtime::Error::msg("WASI call has no invocation id"))?;
+                let args = vec![
+                    scope(headers.to_val(), invocation),
+                    lift_optional_stream_plain(&mut store, contents)?,
+                    lift_future_plain(&mut store, trailers)?,
+                    scope(options.to_val(), invocation),
+                ];
+                let real: Real = |mut store, args| {
+                    Box::pin(async move {
+                        let [headers, contents, trailers, options] = <[Val; 4]>::try_from(args)
+                            .map_err(|_| shape("request.new arguments"))?;
+                        let Val::Resource(header_resource) = &headers else {
+                            return Err(shape(FIELDS_NAME));
+                        };
+                        validate_owned::<Fields>(header_resource, store.data_mut())?;
+                        match &options {
+                            Val::Option(None) => {}
+                            Val::Option(Some(options)) => {
+                                let Val::Resource(options) = options.as_ref() else {
+                                    return Err(shape(REQUEST_OPTIONS_NAME));
+                                };
+                                validate_owned::<RequestOptions>(options, store.data_mut())?;
+                            }
+                            _ => return Err(shape("option")),
+                        }
+                        let headers = Resource::<Fields>::from_val(headers)?;
+                        let contents = lower_optional_stream_plain(&mut store, contents)
+                            .map_err(|error| CallError::trap(error.to_string()))?;
+                        let trailers = lower_future_plain(&mut store, trailers)
+                            .map_err(|error| CallError::trap(error.to_string()))?;
+                        let options = Option::<Resource<RequestOptions>>::from_val(options)?;
+                        let access = Access::<StoreData, WasiHttp>::new(
+                            store.as_context_mut(),
+                            WasiHttpView::http,
+                        );
+                        let (request, transferred) =
+                            HostRequestWithStore::new(access, headers, contents, trailers, options)
+                                .map_err(|error| CallError::trap(error.to_string()))?;
+                        let invocation = store
+                            .data()
+                            .context
+                            .invocation_id()
+                            .ok_or_else(|| CallError::trap("WASI call has no invocation id"))?;
+                        Ok(vec![Val::Tuple(vec![
+                            scope(request.to_val(), invocation),
+                            lift_future_plain(&mut store, transferred)
+                                .map_err(|error| CallError::trap(error.to_string()))?,
+                        ])])
+                    })
+                };
+                let outcome =
+                    trampoline::gate(&mut store, TYPES, "[static]request.new", args, real)
+                        .await
+                        .map_err(wasmtime::Error::new)?;
+                let [Val::Tuple(values)] = outcome.as_slice() else {
+                    return Err(wasmtime::Error::new(shape("resource and future")));
+                };
+                let [request, transferred] = values.as_slice() else {
+                    return Err(wasmtime::Error::new(shape("resource and future")));
+                };
+                let request =
+                    Resource::<Request>::from_val(request.clone()).map_err(wasmtime::Error::new)?;
+                let transferred: FutureReader<TransferResult> =
+                    lower_future_plain(&mut store, transferred.clone())?;
+                Ok(((request, transferred),))
+            })
+        },
+    )?;
     Ok(())
 }
 
