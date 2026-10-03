@@ -1,0 +1,15 @@
+[workspace]
+resolver = "3"
+members = ["http"]
+
+[workspace.package]
+edition = "2024"
+version = "0.0.0"
+publish = false
+
+[workspace.dependencies]
+wasip3 = { version = "=0.9.0", features = ["async-spawn"] }
+wit-bindgen = { version = "=0.62.0", default-features = false, features = ["async", "macros", "realloc"] }
+
+[profile.release]
+panic = "abort"

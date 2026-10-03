@@ -1,0 +1,22 @@
+[package]
+name = "wasm-junction-example-http"
+description = "Self-contained WASI Preview 3 outgoing HTTP example"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+publish = false
+build = "build.rs"
+
+[[bin]]
+name = "wasm-junction-example-http"
+path = "src/main.rs"
+test = false
+
+[lints]
+workspace = true
+
+[dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
+wasm-junction = { path = "../../crates/wasm-junction", version = "=0.0.0", features = ["wasi-http"] }

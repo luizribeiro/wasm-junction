@@ -1,0 +1,9 @@
+package example:http@0.1.0;
+
+interface client {
+  fetch: async func(authority: string, path: string) -> string;
+}
+
+world plugin {
+  export client;
+}
