@@ -654,7 +654,7 @@ macro_rules! gate {
 }
 
 macro_rules! gate_drop {
-    ($linker:ident, $iface:ident, $name:ident, $drop:literal, $ty:ty, $direction:expr,
+    ($linker:ident, $iface:ident, $name:ident, $drop:literal, $ty:ty, $view:ident, $direction:expr,
      $method:path $(, $await:ident)?) => {
         $linker.instance($iface)?.resource_async(
             $name,
@@ -681,7 +681,7 @@ macro_rules! gate_drop {
                     validate_resource_for_invocation(
                         &resource, $iface, $name, ResourceOwnership::Own, invocation,
                     )?;
-                    $method(views::io(store.data_mut()), Resource::<$ty>::new_own(resource.id()))
+                    $method(views::$view(store.data_mut()), Resource::<$ty>::new_own(resource.id()))
                         $(.$await)?
                         .map_err(|error| CallError::trap(error.to_string()))?;
                     Ok(Vec::new())
@@ -789,6 +789,7 @@ pub(super) fn add_streams(linker: &mut Linker<StoreData>) -> wasmtime::Result<()
         INPUT_STREAM,
         "[drop]input-stream",
         DynInputStream,
+        io,
         Some(ChannelDirection::HostToGuest),
         HostInputStream::drop,
         await
@@ -799,6 +800,7 @@ pub(super) fn add_streams(linker: &mut Linker<StoreData>) -> wasmtime::Result<()
         OUTPUT_STREAM,
         "[drop]output-stream",
         DynOutputStream,
+        io,
         Some(ChannelDirection::GuestToHost),
         HostOutputStream::drop,
         await
@@ -852,6 +854,7 @@ pub(super) fn add_error(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> 
         ERROR,
         "[drop]error",
         IoError,
+        io,
         None,
         HostError::drop
     );
@@ -867,6 +870,7 @@ pub(super) fn add_poll(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         POLLABLE,
         "[drop]pollable",
         DynPollable,
+        io,
         None,
         wasmtime_wasi::p2::bindings::io::poll::HostPollable::drop
     );
