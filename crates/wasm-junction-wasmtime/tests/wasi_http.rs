@@ -100,3 +100,41 @@ fn variant(case: &str) -> Val {
         value: None,
     }
 }
+
+struct SendPolicy {
+    deny: bool,
+}
+
+impl Middleware for SendPolicy {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        if self.deny
+            && call.interface.as_ref() == "wasi:http/client@0.3.0"
+            && call.function.as_ref() == "send"
+        {
+            return Err(CallError::refused("origin denied"));
+        }
+        next.run(call).await
+    }
+}
+
+fn request(app: &App) -> Vals {
+    block_on(app.call(
+        "http",
+        EXPORT,
+        "request",
+        vec![Val::from("127.0.0.1:9"), Val::from("/denied")],
+    ))
+    .unwrap()
+}
+
+#[test]
+fn middleware_refusal_becomes_the_http_denied_error() {
+    let app = load(SendPolicy { deny: true }, true);
+    assert_eq!(request(&app), [Val::from("denied")]);
+}
+
+#[test]
+fn disabled_network_becomes_the_http_denied_error() {
+    let app = load(SendPolicy { deny: false }, false);
+    assert_eq!(request(&app), [Val::from("denied")]);
+}
