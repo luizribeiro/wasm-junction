@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use wasmtime::component::{Linker, ResourceTable};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
@@ -12,6 +14,7 @@ pub(crate) use linker::add_ungated_interfaces;
 pub(crate) struct WasiState {
     pub(crate) context: WasiCtx,
     pub(crate) table: ResourceTable,
+    channels: HashSet<u32>,
 }
 
 impl WasiState {
@@ -19,7 +22,16 @@ impl WasiState {
         Self {
             context,
             table: ResourceTable::new(),
+            channels: HashSet::new(),
         }
+    }
+
+    pub(crate) fn open_channel(&mut self, id: u32) -> bool {
+        self.channels.insert(id)
+    }
+
+    pub(crate) fn close_channel(&mut self, id: u32) -> bool {
+        self.channels.remove(&id)
     }
 }
 
@@ -37,4 +49,20 @@ pub(crate) fn add_gates(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> 
     gates::add_wall_clock(linker)?;
     gates::add_monotonic_clock(linker)?;
     gates::add_poll(linker)
+}
+
+#[cfg(test)]
+mod tests {
+    use wasmtime_wasi::WasiCtxBuilder;
+
+    use super::WasiState;
+
+    #[test]
+    fn channels_open_once_and_close_once() {
+        let mut state = WasiState::new(WasiCtxBuilder::new().build());
+        assert!(state.open_channel(7));
+        assert!(!state.open_channel(7));
+        assert!(state.close_channel(7));
+        assert!(!state.close_channel(7));
+    }
 }

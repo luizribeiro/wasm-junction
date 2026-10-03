@@ -53,6 +53,22 @@ impl StoreData {
     pub(crate) fn wasi_table(&mut self) -> &mut wasmtime::component::ResourceTable {
         &mut self.wasi.table
     }
+
+    #[expect(
+        dead_code,
+        reason = "channel lifetimes are driven by gated stream calls"
+    )]
+    pub(crate) fn open_wasi_channel(&mut self, id: u32) -> bool {
+        self.wasi.open_channel(id)
+    }
+
+    #[expect(
+        dead_code,
+        reason = "channel lifetimes are driven by gated stream calls"
+    )]
+    pub(crate) fn close_wasi_channel(&mut self, id: u32) -> bool {
+        self.wasi.close_channel(id)
+    }
 }
 
 /// A native component engine backed by Wasmtime.
