@@ -34,6 +34,11 @@ pub mod http {
     /// Use this together with [`super::provider`] for components that import
     /// `wasi:http/client@0.3.0` or `wasi:http/types@0.3.0`. An engine without outgoing HTTP
     /// support returns [`BuildError::UnsupportedEngineProvider`](crate::BuildError::UnsupportedEngineProvider).
+    ///
+    /// Middleware sees `client.send` arguments as the owned request handle followed by method,
+    /// optional scheme, optional authority, optional path-with-query, and a list of `(name,
+    /// bytes)` headers. Changes to those metadata arguments are applied to the request before
+    /// network I/O starts.
     #[must_use]
     pub const fn provider() -> Provided {
         Provided::engine(WASI_HTTP_PROVIDER_NAME)

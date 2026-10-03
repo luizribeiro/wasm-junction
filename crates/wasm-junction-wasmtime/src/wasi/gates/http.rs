@@ -110,8 +110,86 @@ fn lower_stream_plain(
     StreamReader::try_from_stream_any(stream)
 }
 
+fn validate_owned_arg<T: WitResource>(
+    value: &Val,
+    accessor: &wasmtime::component::Accessor<StoreData>,
+) -> Result<(), CallError> {
+    let Val::Resource(resource) = value else {
+        return Err(shape(T::NAME));
+    };
+    accessor.with(|mut access| validate_owned::<T>(resource, access.get()))
+}
+
 type TransferResult = Result<(), ErrorCode>;
 type TrailersResult = Result<Option<Resource<Fields>>, ErrorCode>;
+type Headers = Vec<(String, Vec<u8>)>;
+
+fn request_context(
+    store: &mut StoreData,
+    request: &Resource<Request>,
+) -> wasmtime::Result<(
+    Method,
+    Option<Scheme>,
+    Option<String>,
+    Option<String>,
+    Headers,
+)> {
+    use wasmtime_wasi_http::p3::bindings::http::types::{HostFields, HostRequest};
+
+    let id = request.rep();
+    let mut view = views::http(store);
+    let method = HostRequest::get_method(&mut view, Resource::new_borrow(id))?;
+    let scheme = HostRequest::get_scheme(&mut view, Resource::new_borrow(id))?;
+    let authority = HostRequest::get_authority(&mut view, Resource::new_borrow(id))?;
+    let path = HostRequest::get_path_with_query(&mut view, Resource::new_borrow(id))?;
+    let fields = HostRequest::get_headers(&mut view, Resource::new_borrow(id))?;
+    let headers = HostFields::copy_all(&mut view, Resource::new_borrow(fields.rep()))?;
+    HostFields::drop(&mut view, fields)?;
+    Ok((method, scheme, authority, path, headers))
+}
+
+fn apply_request_context(
+    store: &mut StoreData,
+    request: &Resource<Request>,
+    method: Method,
+    scheme: Option<Scheme>,
+    authority: Option<String>,
+    path: Option<String>,
+    headers: Headers,
+) -> wasmtime::Result<()> {
+    use wasmtime_wasi_http::p3::bindings::http::types::{HostFields, HostRequest};
+
+    let id = request.rep();
+    let mut view = views::http(store);
+    let valid = HostRequest::set_method(&mut view, Resource::new_borrow(id), method)?
+        .and(HostRequest::set_scheme(
+            &mut view,
+            Resource::new_borrow(id),
+            scheme,
+        )?)
+        .and(HostRequest::set_authority(
+            &mut view,
+            Resource::new_borrow(id),
+            authority,
+        )?)
+        .and(HostRequest::set_path_with_query(
+            &mut view,
+            Resource::new_borrow(id),
+            path,
+        )?);
+    if valid.is_err() {
+        return Err(wasmtime::Error::msg(
+            "middleware produced invalid HTTP request metadata",
+        ));
+    }
+    let fields = HostFields::from_list(&mut view, headers)
+        .map_err(|error| wasmtime::Error::msg(error.to_string()))?;
+    let fields = view.table.delete(fields)?;
+    view.table
+        .get_mut(&Resource::<Request>::new_borrow(id))?
+        .headers = fields;
+    Ok(())
+}
 
 fn drop_request_options(
     store: &mut StoreData,
@@ -259,6 +337,7 @@ pub(super) fn add(linker: &mut Linker<crate::engine::StoreData>) -> wasmtime::Re
     add_request_consume(linker)?;
     add_response_new(linker)?;
     add_response_consume(linker)?;
+    add_send(linker)?;
     Ok(())
 }
 
@@ -560,6 +639,105 @@ fn add_response_consume(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> 
             })
         },
     )?;
+    Ok(())
+}
+
+fn add_send(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    use wasm_junction_core::WasiSettings;
+    use wasmtime_wasi_http::p3::bindings::http::client::HostWithStore;
+    use wasmtime_wasi_http::{WasiHttp, WasiHttpView};
+
+    linker
+        .instance("wasi:http/client@0.3.0")?
+        .func_wrap_concurrent("send", |accessor, (request,): (Resource<Request>,)| {
+            Box::pin(async move {
+                let (invocation, method, scheme, authority, path, headers) =
+                    accessor.with(|mut access| -> wasmtime::Result<_> {
+                        let store = access.get();
+                        let invocation = store.context.invocation_id().ok_or_else(|| {
+                            wasmtime::Error::msg("WASI call has no invocation id")
+                        })?;
+                        let (method, scheme, authority, path, headers) =
+                            request_context(store, &request)?;
+                        Ok((invocation, method, scheme, authority, path, headers))
+                    })?;
+                let args = scope_values(
+                    vec![
+                        request.to_val(),
+                        method.to_val(),
+                        scheme.to_val(),
+                        authority.to_val(),
+                        path.to_val(),
+                        headers.to_val(),
+                    ],
+                    invocation,
+                );
+                let real: RealConcurrent = |accessor, args| {
+                    Box::pin(async move {
+                        let [request, method, scheme, authority, path, headers] =
+                            <[Val; 6]>::try_from(args).map_err(|_| shape("send context"))?;
+                        validate_owned_arg::<Request>(&request, accessor)?;
+                        let request = Resource::<Request>::from_val(request)?;
+                        let method = Method::from_val(method)?;
+                        let scheme = Option::<Scheme>::from_val(scheme)?;
+                        let authority = Option::<String>::from_val(authority)?;
+                        let path = Option::<String>::from_val(path)?;
+                        let headers = Headers::from_val(headers)?;
+                        let enabled = accessor.with(|mut access| {
+                            access
+                                .get()
+                                .context
+                                .settings()
+                                .get::<WasiSettings>()
+                                .is_some_and(WasiSettings::network_enabled)
+                        });
+                        if !enabled {
+                            return Err(CallError::refused("outgoing HTTP is disabled"));
+                        }
+                        accessor
+                            .with(|mut access| {
+                                apply_request_context(
+                                    access.get(),
+                                    &request,
+                                    method,
+                                    scheme,
+                                    authority,
+                                    path,
+                                    headers,
+                                )
+                            })
+                            .map_err(|error| CallError::trap(error.to_string()))?;
+                        let view = accessor.with_getter::<WasiHttp>(WasiHttpView::http);
+                        let result = HostWithStore::send(&view, request).await;
+                        let result = convert_trappable(result)?;
+                        let invocation = accessor
+                            .with(|mut access| access.get().context.invocation_id())
+                            .ok_or_else(|| CallError::trap("WASI call has no invocation id"))?;
+                        Ok(scope_values(vec![p3_result_value(result)], invocation))
+                    })
+                };
+                let outcome = trampoline::gate_concurrent(
+                    accessor,
+                    "wasi:http/client@0.3.0",
+                    "send",
+                    args,
+                    real,
+                )
+                .await;
+                if let Ok(values) = &outcome
+                    && let [Val::Result(Ok(Some(response)))] = values.as_slice()
+                {
+                    validate_owned_arg::<Response>(response, accessor)
+                        .map_err(wasmtime::Error::new)?;
+                }
+                let result = finish_p3_error(
+                    outcome,
+                    ErrorCode::HttpRequestDenied,
+                    decode_p3_result::<Resource<Response>, ErrorCode>,
+                )?;
+                Ok((result,))
+            })
+        })?;
     Ok(())
 }
 
