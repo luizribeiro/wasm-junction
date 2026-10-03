@@ -259,3 +259,10 @@ fn http_imports_are_missing_without_the_http_provider() {
         ["wasi:http/client@0.3.0", "wasi:http/types@0.3.0"]
     );
 }
+
+#[test]
+fn every_http_type_shape_completes() {
+    let app = load(SendPolicy { deny: false }, false);
+    let result = block_on(app.call("http", EXPORT, "coverage", Vec::new())).unwrap();
+    assert_eq!(result, [Val::from("ok")]);
+}
