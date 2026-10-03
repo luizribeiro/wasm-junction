@@ -4,15 +4,19 @@
 
 use std::future::Future;
 #[cfg(feature = "wasi-p3")]
-use std::sync::Arc;
-#[cfg(feature = "wasi-p3")]
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(feature = "wasi-p3")]
+use std::sync::{Arc, Mutex};
+#[cfg(feature = "wasi-p3")]
+use std::{collections::BTreeSet, path::Path, process::Command};
 
 #[cfg(not(feature = "wasi-p3"))]
 use wasm_junction::LoadError;
 use wasm_junction::{App, Component};
 #[cfg(feature = "wasi-p3")]
 use wasm_junction::{Call, CallError, CallErrorKind, Middleware, Next, Val, Vals};
+#[cfg(feature = "wasi-p3")]
+use wasm_junction_wasmtime::WASI_INTERFACES;
 use wasm_junction_wasmtime::WasmtimeEngine;
 
 const COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wasi-p3-test.wasm"));
@@ -103,4 +107,71 @@ fn refusal_of_a_p3_function_without_an_error_result_traps() {
     let error = block_on(app.call("p3", EXPORT, "coverage", Vec::new())).unwrap_err();
     assert_eq!(error.kind(), CallErrorKind::Refused);
     assert_eq!(error.to_string(), "p3 wait denied");
+}
+
+#[cfg(feature = "wasi-p3")]
+struct RecordGates(Arc<Mutex<BTreeSet<(String, String)>>>);
+
+#[cfg(feature = "wasi-p3")]
+impl Middleware for RecordGates {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.interface.starts_with("wasi:") {
+            self.0
+                .lock()
+                .unwrap()
+                .insert((call.interface.to_string(), call.function.to_string()));
+        }
+        next.run(call).await
+    }
+}
+
+#[test]
+#[cfg(feature = "wasi-p3")]
+fn every_function_in_each_gated_p3_interface_has_a_gate() {
+    let seen = Arc::new(Mutex::new(BTreeSet::new()));
+    let app = p3_app(RecordGates(seen.clone()));
+    block_on(app.call("p3", EXPORT, "coverage", Vec::new())).unwrap();
+
+    assert_eq!(*seen.lock().unwrap(), p3_wit_functions());
+}
+
+#[cfg(feature = "wasi-p3")]
+fn p3_wit_functions() -> BTreeSet<(String, String)> {
+    let output = Command::new("cargo")
+        .args(["metadata", "--format-version", "1", "--locked"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "cargo metadata failed");
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let manifests: Vec<_> = metadata["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|package| package["name"] == "wasmtime-wasi")
+        .map(|package| package["manifest_path"].as_str().unwrap())
+        .collect();
+    assert_eq!(manifests.len(), 1, "expected one resolved wasmtime-wasi");
+    let wit = Path::new(manifests[0]).parent().unwrap().join("src/p3/wit");
+    let mut resolve = wit_parser::Resolve::default();
+    resolve.push_dir(wit).unwrap();
+
+    resolve
+        .packages
+        .iter()
+        .flat_map(|(_, package)| {
+            package.interfaces.iter().filter_map(|(name, interface)| {
+                let name = package.name.interface_id(name);
+                WASI_INTERFACES
+                    .contains(&name.as_str())
+                    .then_some((name, &resolve.interfaces[*interface]))
+            })
+        })
+        .flat_map(|(interface, definition)| {
+            definition
+                .functions
+                .keys()
+                .map(move |function| (interface.clone(), function.clone()))
+        })
+        .collect()
 }
