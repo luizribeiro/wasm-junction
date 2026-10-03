@@ -56,6 +56,9 @@ impl exports::test::wasi::environment::Guest for Component {
         let _ = wasi::random::insecure::get_insecure_random_bytes(5);
         let _ = wasi::random::insecure::get_insecure_random_u64();
         let _ = wasi::random::insecure_seed::insecure_seed();
+        drop(wasi::cli::terminal_stdin::get_terminal_stdin());
+        drop(wasi::cli::terminal_stdout::get_terminal_stdout());
+        drop(wasi::cli::terminal_stderr::get_terminal_stderr());
 
         let input = wasi::cli::stdin::get_stdin();
         let _ = input.read(0);
@@ -125,8 +128,13 @@ impl exports::test::wasi::environment::Guest for Component {
         let _ = wasi::random::random::get_random_u64();
         let _ = wasi::random::insecure::get_insecure_random_u64();
         let _ = wasi::random::insecure_seed::insecure_seed();
+        let terminals = (
+            wasi::cli::terminal_stdin::get_terminal_stdin().is_some(),
+            wasi::cli::terminal_stdout::get_terminal_stdout().is_some(),
+            wasi::cli::terminal_stderr::get_terminal_stderr().is_some(),
+        );
         format!(
-            "{environment:?}|{arguments:?}|{cwd:?}|{}:{}|{monotonic}|{}|{}|{timers_ordered}|{stream}|{}:{}",
+            "{environment:?}|{arguments:?}|{cwd:?}|{}:{}|{monotonic}|{}|{}|{timers_ordered}|{stream}|{}:{}|{terminals:?}",
             wall.seconds,
             wall.nanoseconds,
             wall_now.seconds > 0,
@@ -184,6 +192,12 @@ impl exports::test::wasi::environment::Guest for Component {
 
     fn exit_code() {
         wasi::cli::exit::exit_with_code(7);
+    }
+
+    fn terminal_handles() {
+        drop(wasi::cli::terminal_stdin::get_terminal_stdin());
+        drop(wasi::cli::terminal_stdout::get_terminal_stdout());
+        drop(wasi::cli::terminal_stderr::get_terminal_stderr());
     }
 
     fn benchmark_write(bytes: Vec<u8>) -> Vec<u8> {

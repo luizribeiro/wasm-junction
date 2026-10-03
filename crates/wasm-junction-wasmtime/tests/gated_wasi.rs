@@ -28,12 +28,33 @@ impl Middleware for RecordGates {
                 .unwrap()
                 .insert((call.interface.to_string(), call.function.to_string()));
         }
+        if matches!(
+            call.function.as_ref(),
+            "[drop]terminal-input" | "[drop]terminal-output"
+        ) {
+            return Ok(Vec::new());
+        }
         if call.function.as_ref() == "[method]output-stream.write"
             && call.args.get(1) == Some(&Val::Bytes(vec![0xfa]))
         {
             return Err(CallError::refused("fixture write denied"));
         }
-        next.run(call).await
+        let invocation = call.invocation_id();
+        let function = call.function.clone();
+        let mut values = next.run(call).await?;
+        let terminal = match function.as_ref() {
+            "get-terminal-stdin" => Some(("wasi:cli/terminal-input@0.2.12", "terminal-input", 10)),
+            "get-terminal-stdout" | "get-terminal-stderr" => {
+                Some(("wasi:cli/terminal-output@0.2.12", "terminal-output", 11))
+            }
+            _ => None,
+        };
+        if let Some((interface, name, id)) = terminal {
+            values = vec![Val::Option(Some(Box::new(Val::Resource(
+                Resource::__owned_for_invocation(interface, name, id, invocation),
+            ))))];
+        }
+        Ok(values)
     }
 }
 
@@ -61,6 +82,8 @@ fn validate_io_call(call: &Call) {
         "[drop]input-stream" => &["own input-stream"][..],
         "[drop]output-stream" => &["own output-stream"][..],
         "[drop]error" => &["own error"][..],
+        "[drop]terminal-input" => &["own terminal-input"][..],
+        "[drop]terminal-output" => &["own terminal-output"][..],
         "get-random-bytes" | "get-insecure-random-bytes" => &["u64"][..],
         "exit" => &["result"][..],
         "exit-with-code" => &["u8"][..],
@@ -439,6 +462,11 @@ fn gated_wasi_set_changes_only_deliberately() {
             "wasi:cli/stderr@0.2.12",
             "wasi:cli/stdin@0.2.12",
             "wasi:cli/stdout@0.2.12",
+            "wasi:cli/terminal-input@0.2.12",
+            "wasi:cli/terminal-output@0.2.12",
+            "wasi:cli/terminal-stderr@0.2.12",
+            "wasi:cli/terminal-stdin@0.2.12",
+            "wasi:cli/terminal-stdout@0.2.12",
             "wasi:clocks/monotonic-clock@0.2.12",
             "wasi:clocks/wall-clock@0.2.12",
             "wasi:io/error@0.2.12",
@@ -486,13 +514,8 @@ fn refused_exit_is_observed_and_ends_the_invocation() {
 }
 
 #[test]
-fn advertised_wasi_set_excludes_ungated_filesystem_and_sockets() {
-    assert!(
-        WASI_INTERFACES
-            .iter()
-            .all(|interface| !interface.starts_with("wasi:filesystem/")
-                && !interface.starts_with("wasi:sockets/"))
-    );
+fn every_advertised_wasi_interface_is_gated() {
+    assert_eq!(WASI_INTERFACES, GATED_WASI_INTERFACES);
 }
 
 #[test]
@@ -810,6 +833,14 @@ fn wit_functions() -> BTreeSet<(String, String)> {
                 .map(move |function| (interface_name.clone(), function.clone()))
         })
         .chain([
+            (
+                "wasi:cli/terminal-input@0.2.12".to_owned(),
+                "[drop]terminal-input".to_owned(),
+            ),
+            (
+                "wasi:cli/terminal-output@0.2.12".to_owned(),
+                "[drop]terminal-output".to_owned(),
+            ),
             ("wasi:io/error@0.2.12".to_owned(), "[drop]error".to_owned()),
             (
                 "wasi:io/poll@0.2.12".to_owned(),

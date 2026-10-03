@@ -3,6 +3,8 @@ use wasm_junction_core::{
     Resource as JunctionResource, ResourceOwnership, Val, Vals, validate_resource_for_invocation,
 };
 use wasmtime::component::{Linker, Resource};
+use wasmtime_wasi::p2::bindings::cli::terminal_input::TerminalInput;
+use wasmtime_wasi::p2::bindings::cli::terminal_output::TerminalOutput;
 use wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime;
 use wasmtime_wasi::p2::bindings::io::error::HostError;
 use wasmtime_wasi::p2::bindings::io::streams::{
@@ -151,6 +153,26 @@ fn get_stderr(store: &mut StoreData) -> wasmtime::Result<Resource<DynOutputStrea
     Ok(stream)
 }
 
+fn drop_terminal_input(
+    store: &mut StoreData,
+    resource: Resource<TerminalInput>,
+) -> wasmtime::Result<()> {
+    wasmtime_wasi::p2::bindings::cli::terminal_input::HostTerminalInput::drop(
+        &mut views::cli(store),
+        resource,
+    )
+}
+
+fn drop_terminal_output(
+    store: &mut StoreData,
+    resource: Resource<TerminalOutput>,
+) -> wasmtime::Result<()> {
+    wasmtime_wasi::p2::bindings::cli::terminal_output::HostTerminalOutput::drop(
+        &mut views::cli(store),
+        resource,
+    )
+}
+
 fn close_channel(store: &mut StoreData, id: u32, direction: Option<ChannelDirection>) {
     let Some(direction) = direction else { return };
     if store.close_wasi_channel(id)
@@ -274,6 +296,10 @@ const INPUT_STREAM: &str = "input-stream";
 const OUTPUT_STREAM: &str = "output-stream";
 const ERROR_INTERFACE: &str = "wasi:io/error@0.2.12";
 const ERROR: &str = "error";
+const TERMINAL_INPUT_INTERFACE: &str = "wasi:cli/terminal-input@0.2.12";
+const TERMINAL_INPUT: &str = "terminal-input";
+const TERMINAL_OUTPUT_INTERFACE: &str = "wasi:cli/terminal-output@0.2.12";
+const TERMINAL_OUTPUT: &str = "terminal-output";
 
 impl WitResource for DynPollable {
     const INTERFACE: &'static str = POLLABLE_INTERFACE;
@@ -293,6 +319,16 @@ impl WitResource for DynOutputStream {
 impl WitResource for IoError {
     const INTERFACE: &'static str = ERROR_INTERFACE;
     const NAME: &'static str = ERROR;
+}
+
+impl WitResource for TerminalInput {
+    const INTERFACE: &'static str = TERMINAL_INPUT_INTERFACE;
+    const NAME: &'static str = TERMINAL_INPUT;
+}
+
+impl WitResource for TerminalOutput {
+    const INTERFACE: &'static str = TERMINAL_OUTPUT_INTERFACE;
+    const NAME: &'static str = TERMINAL_OUTPUT;
 }
 
 impl<T: WitResource> ToVal for Resource<T> {
@@ -734,6 +770,39 @@ pub(super) fn add_exit(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     gate!(linker, "wasi:cli/exit@0.2.12", "exit-with-code", cli,
         wasmtime_wasi::p2::bindings::cli::exit::Host::exit_with_code,
         plain, (status_code: u8) -> ());
+    Ok(())
+}
+
+pub(super) fn add_terminal(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    gate_drop!(
+        linker,
+        TERMINAL_INPUT_INTERFACE,
+        TERMINAL_INPUT,
+        "[drop]terminal-input",
+        TerminalInput,
+        store,
+        None,
+        drop_terminal_input
+    );
+    gate_drop!(
+        linker,
+        TERMINAL_OUTPUT_INTERFACE,
+        TERMINAL_OUTPUT,
+        "[drop]terminal-output",
+        TerminalOutput,
+        store,
+        None,
+        drop_terminal_output
+    );
+    gate!(linker, "wasi:cli/terminal-stdin@0.2.12", "get-terminal-stdin", cli,
+        wasmtime_wasi::p2::bindings::cli::terminal_stdin::Host::get_terminal_stdin,
+        resource, () -> Option<Resource<TerminalInput>>);
+    gate!(linker, "wasi:cli/terminal-stdout@0.2.12", "get-terminal-stdout", cli,
+        wasmtime_wasi::p2::bindings::cli::terminal_stdout::Host::get_terminal_stdout,
+        resource, () -> Option<Resource<TerminalOutput>>);
+    gate!(linker, "wasi:cli/terminal-stderr@0.2.12", "get-terminal-stderr", cli,
+        wasmtime_wasi::p2::bindings::cli::terminal_stderr::Host::get_terminal_stderr,
+        resource, () -> Option<Resource<TerminalOutput>>);
     Ok(())
 }
 

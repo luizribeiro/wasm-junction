@@ -1,8 +1,7 @@
 //! A native wasm-junction engine powered by Wasmtime.
 //!
 //! With the default `wasi` feature, WASI Preview 2 interfaces are available through the explicit
-//! provider. Calls to [`GATED_WASI_INTERFACES`] are intercepted by application middleware; the
-//! remaining WASI interfaces use wasmtime-wasi directly.
+//! provider. Every supplied WASI call is intercepted by application middleware.
 //!
 //! The default `parallel-compilation` feature lets Wasmtime compile functions across every
 //! available core. Disable default features when predictable CPU use matters more than load and
@@ -45,19 +44,7 @@ pub const WASI_INTERFACES: &[&str] = &[
 ];
 
 /// WASI Preview 2 interfaces intercepted by the application middleware chain.
+///
+/// Every interface supplied by the provider is gated.
 #[cfg(feature = "wasi")]
-pub const GATED_WASI_INTERFACES: &[&str] = &[
-    "wasi:cli/environment@0.2.12",
-    "wasi:cli/exit@0.2.12",
-    "wasi:cli/stderr@0.2.12",
-    "wasi:cli/stdin@0.2.12",
-    "wasi:cli/stdout@0.2.12",
-    "wasi:clocks/monotonic-clock@0.2.12",
-    "wasi:clocks/wall-clock@0.2.12",
-    "wasi:io/error@0.2.12",
-    "wasi:io/poll@0.2.12",
-    "wasi:io/streams@0.2.12",
-    "wasi:random/insecure-seed@0.2.12",
-    "wasi:random/insecure@0.2.12",
-    "wasi:random/random@0.2.12",
-];
+pub const GATED_WASI_INTERFACES: &[&str] = WASI_INTERFACES;

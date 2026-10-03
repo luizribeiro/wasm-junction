@@ -6,10 +6,7 @@ use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 use crate::engine::StoreData;
 
 mod gates;
-mod linker;
 mod trampoline;
-
-pub(crate) use linker::add_ungated_interfaces;
 
 pub(crate) struct WasiState {
     pub(crate) context: WasiCtx,
@@ -47,6 +44,7 @@ impl WasiView for WasiState {
 pub(crate) fn add_gates(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     gates::add_environment(linker)?;
     gates::add_exit(linker)?;
+    gates::add_terminal(linker)?;
     gates::add_wall_clock(linker)?;
     gates::add_monotonic_clock(linker)?;
     gates::add_stdio(linker)?;

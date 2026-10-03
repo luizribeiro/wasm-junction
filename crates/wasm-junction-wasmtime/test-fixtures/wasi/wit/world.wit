@@ -18,6 +18,7 @@ interface environment {
   random-bytes: func() -> list<u8>;
   exit-success: func();
   exit-code: func();
+  terminal-handles: func();
   benchmark-write: func(bytes: list<u8>) -> list<u8>;
 }
 

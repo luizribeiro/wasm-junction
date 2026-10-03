@@ -25,7 +25,7 @@ use crate::imports::{ResourceDefinition, define_imports};
 use crate::streams::lower_stream;
 use crate::values::{ExpectedResource, LiftValue, LowerValue, from_wasmtime, to_wasmtime};
 #[cfg(feature = "wasi")]
-use crate::wasi::{WasiState, add_gates, add_ungated_interfaces};
+use crate::wasi::{WasiState, add_gates};
 
 pub(crate) struct StoreData {
     pub(crate) imports: Arc<dyn ImportDispatcher>,
@@ -87,7 +87,6 @@ impl WasmtimeEngine {
         #[cfg(feature = "wasi")]
         let linker = {
             let mut linker = linker;
-            add_ungated_interfaces(&mut linker)?;
             add_gates(&mut linker)?;
             linker
         };
