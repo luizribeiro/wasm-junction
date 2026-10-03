@@ -1,11 +1,11 @@
 use wasm_junction_core::{
-    CallError, EngineEvent, InvocationId, Resource as JunctionResource, ResourceOwnership, Val,
-    Vals, validate_resource_for_invocation,
+    CallError, CallErrorKind, EngineEvent, InvocationId, Resource as JunctionResource,
+    ResourceOwnership, Val, Vals, validate_resource_for_invocation,
 };
 use wasmtime::component::{Linker, Resource};
 use wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime;
-use wasmtime_wasi::p2::bindings::io::streams::StreamError;
-use wasmtime_wasi::p2::{DynInputStream, DynOutputStream, DynPollable, IoError};
+use wasmtime_wasi::p2::bindings::io::streams::{self, StreamError};
+use wasmtime_wasi::p2::{DynInputStream, DynOutputStream, DynPollable, IoError, StreamResult};
 
 use super::trampoline::{self, Real};
 use crate::engine::StoreData;
@@ -370,6 +370,19 @@ impl<T: FromVal> FromVal for Result<T, StreamError> {
     }
 }
 
+#[expect(dead_code, reason = "called by stream gate expansions")]
+fn convert_stream<T>(
+    store: &mut StoreData,
+    result: StreamResult<T>,
+) -> Result<Result<T, StreamError>, CallError> {
+    match result {
+        Ok(value) => Ok(Ok(value)),
+        Err(error) => streams::Host::convert_stream_error(store.wasi_table(), error)
+            .map(Err)
+            .map_err(|error| CallError::trap(error.to_string())),
+    }
+}
+
 fn finish<T: FromVal>(outcome: Result<Vals, CallError>) -> wasmtime::Result<T> {
     let values = outcome.map_err(wasmtime::Error::new)?;
     let [value] = <[Val; 1]>::try_from(values).map_err(|_| shape("one result"))?;
@@ -383,6 +396,24 @@ fn finish_unit(outcome: Result<Vals, CallError>) -> wasmtime::Result<()> {
     } else {
         Err(wasmtime::Error::new(shape("no results")))
     }
+}
+
+#[expect(dead_code, reason = "called by stream gate expansions")]
+fn finish_stream<T: FromVal>(
+    store: &mut StoreData,
+    outcome: Result<Vals, CallError>,
+) -> wasmtime::Result<Result<T, StreamError>> {
+    let outcome = match outcome {
+        Ok(values) => Ok(values),
+        Err(error) if error.kind() == CallErrorKind::Refused => {
+            let error = store
+                .wasi_table()
+                .push(wasmtime::Error::msg(error.to_string()))?;
+            return Ok(Err(StreamError::LastOperationFailed(error)));
+        }
+        Err(error) => Err(error),
+    };
+    finish(outcome)
 }
 
 macro_rules! gate {
@@ -402,6 +433,31 @@ macro_rules! gate {
     ($linker:ident, $iface:literal, $name:literal, $view:ident, $method:path, borrowed,
      $signature:tt -> $ok:ty) => {
         gate!(@define $linker, $iface, $name, $view, $method, validate_pollable_borrows, await,
+            $signature -> $ok, one);
+    };
+    ($linker:ident, $iface:literal, $name:literal, $method:path, input,
+     $($await:ident)?, $signature:tt -> $ok:ty) => {
+        gate!(@stream $linker, $iface, $name, $method, validate_input_borrow, $($await)?,
+            $signature -> $ok);
+    };
+    ($linker:ident, $iface:literal, $name:literal, $method:path, output,
+     $($await:ident)?, $signature:tt -> $ok:ty) => {
+        gate!(@stream $linker, $iface, $name, $method, validate_output_borrow, $($await)?,
+            $signature -> $ok);
+    };
+    ($linker:ident, $iface:literal, $name:literal, $method:path, splice,
+     $($await:ident)?, $signature:tt -> $ok:ty) => {
+        gate!(@stream $linker, $iface, $name, $method, validate_splice_borrows, $($await)?,
+            $signature -> $ok);
+    };
+    ($linker:ident, $iface:literal, $name:literal, $view:ident, $method:path, input_plain,
+     $signature:tt -> $ok:ty) => {
+        gate!(@define $linker, $iface, $name, $view, $method, validate_input_borrow, ,
+            $signature -> $ok, one);
+    };
+    ($linker:ident, $iface:literal, $name:literal, $view:ident, $method:path, output_plain,
+     $signature:tt -> $ok:ty) => {
+        gate!(@define $linker, $iface, $name, $view, $method, validate_output_borrow, ,
             $signature -> $ok, one);
     };
     (@define $linker:ident, $iface:literal, $name:literal, $view:ident, $method:path,
@@ -427,6 +483,32 @@ macro_rules! gate {
                 });
                 let outcome = trampoline::gate(&mut store, $iface, $name, args, real).await;
                 gate!(@return outcome, $ok, $shape)
+            }),
+        )?;
+    };
+    (@stream $linker:ident, $iface:literal, $name:literal, $method:path, $validate:ident,
+     $($await:ident)?, ($($arg:ident: $ty:ty),*) -> $ok:ty) => {
+        $linker.instance($iface)?.func_wrap_async(
+            $name,
+            |mut store, ($($arg,)*): ($($ty,)*)| Box::new(async move {
+                let invocation = store.data().context.invocation_id()
+                    .ok_or_else(|| wasmtime::Error::msg("WASI call has no invocation id"))?;
+                let args = scope_values(vec![$($arg.to_val()),*], invocation);
+                let real: Real = |mut store, args| Box::pin(async move {
+                    $validate(&args, store.data_mut())?;
+                    #[allow(unused_mut, unused_variables)]
+                    let mut args = args.into_iter();
+                    $(let $arg = <$ty>::from_val(
+                        args.next().ok_or_else(|| shape("another argument"))?
+                    )?;)*
+                    let result = $method(views::io(store.data_mut()) $(, $arg)*) $(.$await)?;
+                    let result = convert_stream(store.data_mut(), result)?;
+                    let invocation = store.data().context.invocation_id()
+                        .ok_or_else(|| CallError::trap("WASI call has no invocation id"))?;
+                    Ok(scope_values(vec![result.to_val()], invocation))
+                });
+                let outcome = trampoline::gate(&mut store, $iface, $name, args, real).await;
+                Ok((finish_stream::<$ok>(store.data_mut(), outcome)?,))
             }),
         )?;
     };
