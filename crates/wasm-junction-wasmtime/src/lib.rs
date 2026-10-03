@@ -56,4 +56,7 @@ pub const GATED_WASI_INTERFACES: &[&str] = &[
     "wasi:io/error@0.2.12",
     "wasi:io/poll@0.2.12",
     "wasi:io/streams@0.2.12",
+    "wasi:random/insecure-seed@0.2.12",
+    "wasi:random/insecure@0.2.12",
+    "wasi:random/random@0.2.12",
 ];

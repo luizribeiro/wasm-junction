@@ -8,7 +8,8 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use wasm_junction::{
-    App, Call, CallError, Component, Event, InvocationId, Middleware, Next, Resource, Val, Vals,
+    App, Call, CallError, CallErrorKind, Component, Event, InvocationId, Middleware, Next,
+    Resource, Val, Vals,
 };
 use wasm_junction_wasmtime::{GATED_WASI_INTERFACES, WASI_INTERFACES};
 
@@ -60,6 +61,7 @@ fn validate_io_call(call: &Call) {
         "[drop]input-stream" => &["own input-stream"][..],
         "[drop]output-stream" => &["own output-stream"][..],
         "[drop]error" => &["own error"][..],
+        "get-random-bytes" | "get-insecure-random-bytes" => &["u64"][..],
         _ => return,
     };
     assert_eq!(
@@ -84,6 +86,32 @@ fn validate_io_call(call: &Call) {
                 assert_eq!(resource.invocation_id(), Some(call.invocation_id()));
             }
             _ => panic!("wrong value for {function}: {value:?}"),
+        }
+    }
+}
+
+struct RewriteRandom;
+
+impl Middleware for RewriteRandom {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        let rewrites = call.interface.as_ref() == "wasi:random/random@0.2.12"
+            && call.function.as_ref() == "get-random-bytes";
+        let mut values = next.run(call).await?;
+        if rewrites {
+            values = vec![Val::Bytes(vec![3, 1, 4, 1])];
+        }
+        Ok(values)
+    }
+}
+
+struct RefuseRandom;
+
+impl Middleware for RefuseRandom {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.function.as_ref() == "get-random-bytes" {
+            Err(CallError::refused("random denied by policy"))
+        } else {
+            next.run(call).await
         }
     }
 }
@@ -397,8 +425,30 @@ fn gated_wasi_set_changes_only_deliberately() {
             "wasi:io/error@0.2.12",
             "wasi:io/poll@0.2.12",
             "wasi:io/streams@0.2.12",
+            "wasi:random/insecure-seed@0.2.12",
+            "wasi:random/insecure@0.2.12",
+            "wasi:random/random@0.2.12",
         ]
     );
+}
+
+#[test]
+fn random_bytes_can_be_rewritten() {
+    let (app, runtime) = checked_app(RewriteRandom);
+    let values = runtime
+        .block_on(app.call("checked", EXPORT, "random-bytes", Vec::new()))
+        .unwrap();
+    assert_eq!(values, [Val::Bytes(vec![3, 1, 4, 1])]);
+}
+
+#[test]
+fn random_refusal_traps_with_its_kind() {
+    let (app, runtime) = checked_app(RefuseRandom);
+    let error = runtime
+        .block_on(app.call("checked", EXPORT, "random-bytes", Vec::new()))
+        .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert_eq!(error.to_string(), "random denied by policy");
 }
 
 #[test]

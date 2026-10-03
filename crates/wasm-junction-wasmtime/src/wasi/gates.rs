@@ -717,6 +717,25 @@ pub(super) fn add_monotonic_clock(linker: &mut Linker<StoreData>) -> wasmtime::R
     Ok(())
 }
 
+pub(super) fn add_random(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    gate!(linker, "wasi:random/random@0.2.12", "get-random-bytes", random,
+        wasmtime_wasi::p2::bindings::random::random::Host::get_random_bytes,
+        plain, (len: u64) -> Vec<u8>);
+    gate!(linker, "wasi:random/random@0.2.12", "get-random-u64", random,
+        wasmtime_wasi::p2::bindings::random::random::Host::get_random_u64,
+        plain, () -> u64);
+    gate!(linker, "wasi:random/insecure@0.2.12", "get-insecure-random-bytes", random,
+        wasmtime_wasi::p2::bindings::random::insecure::Host::get_insecure_random_bytes,
+        plain, (len: u64) -> Vec<u8>);
+    gate!(linker, "wasi:random/insecure@0.2.12", "get-insecure-random-u64", random,
+        wasmtime_wasi::p2::bindings::random::insecure::Host::get_insecure_random_u64,
+        plain, () -> u64);
+    gate!(linker, "wasi:random/insecure-seed@0.2.12", "insecure-seed", random,
+        wasmtime_wasi::p2::bindings::random::insecure_seed::Host::insecure_seed,
+        plain, () -> (u64, u64));
+    Ok(())
+}
+
 pub(super) fn add_streams(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     gate_drop!(
         linker,
@@ -820,6 +839,7 @@ pub(super) fn add_poll(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 mod views {
     use wasmtime_wasi::cli::WasiCliView;
     use wasmtime_wasi::clocks::WasiClocksView;
+    use wasmtime_wasi::random::WasiRandomView;
 
     use crate::engine::StoreData;
 
@@ -833,6 +853,10 @@ mod views {
 
     pub(super) fn io(store: &mut StoreData) -> &mut wasmtime::component::ResourceTable {
         store.wasi_table()
+    }
+
+    pub(super) fn random(store: &mut StoreData) -> &mut wasmtime_wasi::random::WasiRandomCtx {
+        store.random()
     }
 
     pub(super) const fn store(store: &mut StoreData) -> &mut StoreData {

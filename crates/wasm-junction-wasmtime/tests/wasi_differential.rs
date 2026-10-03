@@ -67,7 +67,7 @@ async fn plain() -> String {
 }
 
 #[test]
-fn gated_and_plain_wasi_match_for_environment_clocks_and_streams() {
+fn gated_and_plain_wasi_match_for_standard_interfaces() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .build()

@@ -15,6 +15,7 @@ interface environment {
   rewritten-write: func() -> bool;
   splice-first: func();
   stdout-channel: func();
+  random-bytes: func() -> list<u8>;
   benchmark-write: func(bytes: list<u8>) -> list<u8>;
 }
 

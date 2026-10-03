@@ -51,6 +51,11 @@ impl exports::test::wasi::environment::Guest for Component {
         let _ = pollable.ready();
         pollable.block();
         let _ = wasi::io::poll::poll(&[&pollable]);
+        let _ = wasi::random::random::get_random_bytes(4);
+        let _ = wasi::random::random::get_random_u64();
+        let _ = wasi::random::insecure::get_insecure_random_bytes(5);
+        let _ = wasi::random::insecure::get_insecure_random_u64();
+        let _ = wasi::random::insecure_seed::insecure_seed();
 
         let input = wasi::cli::stdin::get_stdin();
         let _ = input.read(0);
@@ -115,12 +120,19 @@ impl exports::test::wasi::environment::Guest for Component {
             output.blocking_write_and_flush(&[]),
             output.subscribe().ready(),
         );
+        let random = wasi::random::random::get_random_bytes(4);
+        let insecure = wasi::random::insecure::get_insecure_random_bytes(5);
+        let _ = wasi::random::random::get_random_u64();
+        let _ = wasi::random::insecure::get_insecure_random_u64();
+        let _ = wasi::random::insecure_seed::insecure_seed();
         format!(
-            "{environment:?}|{arguments:?}|{cwd:?}|{}:{}|{monotonic}|{}|{}|{timers_ordered}|{stream}",
+            "{environment:?}|{arguments:?}|{cwd:?}|{}:{}|{monotonic}|{}|{}|{timers_ordered}|{stream}|{}:{}",
             wall.seconds,
             wall.nanoseconds,
             wall_now.seconds > 0,
-            second >= first
+            second >= first,
+            random.len(),
+            insecure.len(),
         )
     }
 
@@ -160,6 +172,10 @@ impl exports::test::wasi::environment::Guest for Component {
 
     fn stdout_channel() {
         drop(wasi::cli::stdout::get_stdout());
+    }
+
+    fn random_bytes() -> Vec<u8> {
+        wasi::random::random::get_random_bytes(4)
     }
 
     fn benchmark_write(bytes: Vec<u8>) -> Vec<u8> {
