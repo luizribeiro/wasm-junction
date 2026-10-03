@@ -56,6 +56,27 @@ fn scope(value: Val, invocation: InvocationId) -> Val {
                 .map(|value| scope(value, invocation))
                 .collect(),
         ),
+        Val::Tuple(values) => Val::Tuple(
+            values
+                .into_iter()
+                .map(|value| scope(value, invocation))
+                .collect(),
+        ),
+        Val::Option(value) => Val::Option(value.map(|value| Box::new(scope(*value, invocation)))),
+        Val::Result(result) => Val::Result(match result {
+            Ok(value) => Ok(value.map(|value| Box::new(scope(*value, invocation)))),
+            Err(value) => Err(value.map(|value| Box::new(scope(*value, invocation)))),
+        }),
+        Val::Variant { case, value } => Val::Variant {
+            case,
+            value: value.map(|value| Box::new(scope(*value, invocation))),
+        },
+        Val::Record(fields) => Val::Record(
+            fields
+                .into_iter()
+                .map(|(name, value)| (name, scope(value, invocation)))
+                .collect(),
+        ),
         value => value,
     }
 }
@@ -1378,6 +1399,26 @@ mod tests {
         };
         assert!(error.owned());
         assert_eq!(error.rep(), 17);
+    }
+
+    #[test]
+    fn nested_resources_receive_invocation_provenance() {
+        let invocation = InvocationId::__from_counter(9);
+        let value = scope(
+            Val::Result(Ok(Some(Box::new(Val::Resource(JunctionResource::owned(
+                "test:api/types",
+                "item",
+                4,
+            )))))),
+            invocation,
+        );
+        let Val::Result(Ok(Some(value))) = value else {
+            panic!("result shape changed");
+        };
+        let Val::Resource(resource) = *value else {
+            panic!("resource shape changed");
+        };
+        assert_eq!(resource.invocation_id(), Some(invocation));
     }
 
     #[test]
