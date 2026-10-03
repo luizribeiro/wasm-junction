@@ -104,6 +104,7 @@
               cargo check -p wasm-junction-wasmtime --no-default-features --locked
               cargo check -p wasm-junction --no-default-features --features wasmtime --locked
               cargo check -p wasm-junction --no-default-features --features wasmtime,wasi-p3 --locked
+              cargo check -p wasm-junction --no-default-features --features wasmtime,wasi-http --locked
             '';
           };
           cargo-deny = cargoHook {
@@ -121,6 +122,8 @@
               cargo nextest run -p wasm-junction --no-default-features --features wasmtime --locked
               cargo nextest run -p wasm-junction-wasmtime --features wasi-p3 --locked
               cargo nextest run -p wasm-junction --no-default-features --features wasmtime,wasi-p3 --locked
+              cargo nextest run -p wasm-junction-wasmtime --features wasi-http --locked
+              cargo nextest run -p wasm-junction --no-default-features --features wasmtime,wasi-http --locked
             '';
             stages = [ "pre-push" ];
           };

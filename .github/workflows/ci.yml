@@ -35,6 +35,10 @@ jobs:
         run: |
           nix develop -c cargo nextest run -p wasm-junction-wasmtime --features wasi-p3 --locked
           nix develop -c cargo nextest run -p wasm-junction --no-default-features --features wasmtime,wasi-p3 --locked
+      - name: Test outgoing HTTP
+        run: |
+          nix develop -c cargo nextest run -p wasm-junction-wasmtime --features wasi-http --locked
+          nix develop -c cargo nextest run -p wasm-junction --no-default-features --features wasmtime,wasi-http --locked
       - name: Read Playwright version
         id: playwright
         run: |
