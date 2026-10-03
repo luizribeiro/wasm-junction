@@ -3,8 +3,8 @@ use wasm_junction_core::{
     Vals, validate_resource_for_invocation,
 };
 use wasmtime::component::{Linker, Resource};
-use wasmtime_wasi::p2::DynPollable;
 use wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime;
+use wasmtime_wasi::p2::{DynInputStream, DynOutputStream, DynPollable, IoError};
 
 use super::trampoline::{self, Real};
 use crate::engine::StoreData;
@@ -15,6 +15,11 @@ trait ToVal {
 
 trait FromVal: Sized {
     fn from_val(value: Val) -> Result<Self, CallError>;
+}
+
+trait WitResource: 'static {
+    const INTERFACE: &'static str;
+    const NAME: &'static str;
 }
 
 fn shape(expected: &str) -> CallError {
@@ -152,44 +157,93 @@ impl FromVal for u32 {
 
 const POLLABLE_INTERFACE: &str = "wasi:io/poll@0.2.12";
 const POLLABLE: &str = "pollable";
+const STREAMS_INTERFACE: &str = "wasi:io/streams@0.2.12";
+const INPUT_STREAM: &str = "input-stream";
+const OUTPUT_STREAM: &str = "output-stream";
+const ERROR_INTERFACE: &str = "wasi:io/error@0.2.12";
+const ERROR: &str = "error";
 
-impl ToVal for Resource<DynPollable> {
+impl WitResource for DynPollable {
+    const INTERFACE: &'static str = POLLABLE_INTERFACE;
+    const NAME: &'static str = POLLABLE;
+}
+
+impl WitResource for DynInputStream {
+    const INTERFACE: &'static str = STREAMS_INTERFACE;
+    const NAME: &'static str = INPUT_STREAM;
+}
+
+impl WitResource for DynOutputStream {
+    const INTERFACE: &'static str = STREAMS_INTERFACE;
+    const NAME: &'static str = OUTPUT_STREAM;
+}
+
+impl WitResource for IoError {
+    const INTERFACE: &'static str = ERROR_INTERFACE;
+    const NAME: &'static str = ERROR;
+}
+
+impl<T: WitResource> ToVal for Resource<T> {
     fn to_val(self) -> Val {
         Val::Resource(if self.owned() {
-            JunctionResource::owned(POLLABLE_INTERFACE, POLLABLE, self.rep())
+            JunctionResource::owned(T::INTERFACE, T::NAME, self.rep())
         } else {
-            JunctionResource::borrowed(POLLABLE_INTERFACE, POLLABLE, self.rep())
+            JunctionResource::borrowed(T::INTERFACE, T::NAME, self.rep())
         })
     }
 }
 
-impl FromVal for Resource<DynPollable> {
+impl<T: WitResource> FromVal for Resource<T> {
     fn from_val(value: Val) -> Result<Self, CallError> {
         match value {
             Val::Resource(resource)
-                if resource.interface() == POLLABLE_INTERFACE && resource.name() == POLLABLE =>
+                if resource.interface() == T::INTERFACE && resource.name() == T::NAME =>
             {
                 Ok(match resource.ownership() {
                     ResourceOwnership::Own => Self::new_own(resource.id()),
                     ResourceOwnership::Borrow => Self::new_borrow(resource.id()),
                 })
             }
-            _ => Err(shape(POLLABLE)),
+            _ => Err(shape(T::NAME)),
         }
     }
 }
 
-impl<T: ToVal> ToVal for Vec<T> {
+macro_rules! list_value {
+    ($ty:ty) => {
+        impl ToVal for Vec<$ty> {
+            fn to_val(self) -> Val {
+                Val::List(self.into_iter().map(ToVal::to_val).collect())
+            }
+        }
+
+        impl FromVal for Vec<$ty> {
+            fn from_val(value: Val) -> Result<Self, CallError> {
+                match value {
+                    Val::List(items) => items.into_iter().map(FromVal::from_val).collect(),
+                    _ => Err(shape("list")),
+                }
+            }
+        }
+    };
+}
+
+list_value!(String);
+list_value!((String, String));
+list_value!(u32);
+list_value!(Resource<DynPollable>);
+
+impl ToVal for Vec<u8> {
     fn to_val(self) -> Val {
-        Val::List(self.into_iter().map(ToVal::to_val).collect())
+        Val::Bytes(self)
     }
 }
 
-impl<T: FromVal> FromVal for Vec<T> {
+impl FromVal for Vec<u8> {
     fn from_val(value: Val) -> Result<Self, CallError> {
         match value {
-            Val::List(items) => items.into_iter().map(T::from_val).collect(),
-            _ => Err(shape("list")),
+            Val::Bytes(bytes) => Ok(bytes),
+            _ => Err(shape("bytes")),
         }
     }
 }
