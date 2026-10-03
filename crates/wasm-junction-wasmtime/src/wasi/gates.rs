@@ -1023,22 +1023,24 @@ macro_rules! gate_drop {
                     resource: resource.clone(),
                 });
                 let real: Real = |mut store, args| Box::pin(async move {
-                    let [Val::Resource(resource)] = <[Val; 1]>::try_from(args)
-                        .map_err(|_| shape($name))?
+                    validate_handle_contexts(&args, store.data())?;
+                    let Some(Val::Resource(resource)) = args.first()
                     else {
                         return Err(shape($name));
                     };
-                    validate_owned::<$ty>(&resource, store.data_mut())?;
+                    validate_owned::<$ty>(resource, store.data_mut())?;
                     $method(views::$view(store.data_mut()), Resource::<$ty>::new_own(resource.id()))
                         $(.$await)?
                         .map_err(|error| CallError::trap(error.to_string()))?;
                     Ok(Vec::new())
                 });
+                let mut args = vec![Val::Resource(resource)];
+                add_handle_contexts(&mut args, store.data());
                 let values = trampoline::gate(
                     &mut store,
                     $iface,
                     $drop,
-                    vec![Val::Resource(resource)],
+                    args,
                     real,
                 )
                 .await
