@@ -7,7 +7,9 @@ mod support;
 use std::sync::{Arc, Mutex};
 
 use support::HttpServer;
-use wasm_junction::{App, Call, CallError, Component, Middleware, Next, Val, Vals, WasiSettings};
+use wasm_junction::{
+    App, Call, CallError, Component, Middleware, Next, Resource, Val, Vals, WasiSettings,
+};
 use wasm_junction_wasmtime::WasmtimeEngine;
 
 const COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wasi-http-test.wasm"));
@@ -137,4 +139,105 @@ fn middleware_refusal_becomes_the_http_denied_error() {
 fn disabled_network_becomes_the_http_denied_error() {
     let app = load(SendPolicy { deny: false }, false);
     assert_eq!(request(&app), [Val::from("denied")]);
+}
+
+#[derive(Clone, Copy)]
+enum HandleFault {
+    Foreign,
+    Mistyped,
+    Unscoped,
+}
+
+struct CorruptHandle {
+    fault: HandleFault,
+    previous: Mutex<Option<Resource>>,
+}
+
+impl Middleware for CorruptHandle {
+    async fn call(&self, mut call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.interface.as_ref() != "wasi:http/client@0.3.0" || call.function.as_ref() != "send" {
+            return next.run(call).await;
+        }
+        let Val::Resource(current) = &call.args[0] else {
+            return Err(CallError::trap("send request had the wrong shape"));
+        };
+        let replacement = match self.fault {
+            HandleFault::Foreign => {
+                let mut previous = self.previous.lock().unwrap();
+                let Some(resource) = previous.clone() else {
+                    *previous = Some(current.clone());
+                    return Err(CallError::refused("saved for another invocation"));
+                };
+                resource
+            }
+            HandleFault::Mistyped => Resource::owned(current.interface(), "fields", current.id()),
+            HandleFault::Unscoped => {
+                Resource::owned(current.interface(), current.name(), current.id())
+            }
+        };
+        call.args[0] = Val::Resource(replacement);
+        next.run(call).await
+    }
+}
+
+#[test]
+fn invalid_http_handles_are_refused() {
+    for fault in [
+        HandleFault::Foreign,
+        HandleFault::Mistyped,
+        HandleFault::Unscoped,
+    ] {
+        let app = load(
+            CorruptHandle {
+                fault,
+                previous: Mutex::new(None),
+            },
+            true,
+        );
+        if matches!(fault, HandleFault::Foreign) {
+            assert_eq!(request(&app), [Val::from("denied")]);
+        }
+        assert_eq!(request(&app), [Val::from("denied")]);
+    }
+}
+
+struct ReuseTrailerFuture(Mutex<Option<Val>>);
+
+impl Middleware for ReuseTrailerFuture {
+    async fn call(&self, mut call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.interface.as_ref() != "wasi:http/types@0.3.0"
+            || call.function.as_ref() != "[static]request.new"
+        {
+            return next.run(call).await;
+        }
+        {
+            let mut previous = self.0.lock().unwrap();
+            if let Some(stale) = previous.take() {
+                call.args[2] = stale;
+            } else {
+                *previous = Some(call.args[2].clone());
+            }
+        }
+        next.run(call).await
+    }
+}
+
+#[test]
+fn trailer_future_cannot_be_reused_after_its_invocation() {
+    let app = load(ReuseTrailerFuture(Mutex::new(None)), false);
+    assert_eq!(request(&app), [Val::from("denied")]);
+
+    let error = block_on(app.call(
+        "http",
+        EXPORT,
+        "request",
+        vec![Val::from("127.0.0.1:9"), Val::from("/stale")],
+    ))
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("does not belong to this invocation"),
+        "{error:#}"
+    );
 }
