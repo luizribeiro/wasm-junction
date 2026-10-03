@@ -5,14 +5,17 @@ use wasmtime_wasi::p2::bindings::filesystem::types::{
     PathFlags,
 };
 
-use super::{FromVal, ToVal, WitResource, finish_unit, open_channel, shape, validate_owned};
+use super::{
+    FromVal, ToVal, WitResource, finish_unit, open_channel, shape, validate_error_borrow,
+    validate_owned,
+};
 use wasm_junction_core::{
     CallError, ChannelDirection, EngineEvent, Resource as JunctionResource, Val,
 };
 use wasmtime::component::Linker;
 use wasmtime_wasi::p2::FsResult;
 use wasmtime_wasi::p2::bindings::filesystem::preopens;
-use wasmtime_wasi::p2::{DynInputStream, DynOutputStream, FsError};
+use wasmtime_wasi::p2::{DynInputStream, DynOutputStream, FsError, IoError};
 
 use super::{Real, finish, scope_values, trampoline, views};
 use crate::engine::StoreData;
@@ -503,9 +506,55 @@ fn add_drops(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     Ok(())
 }
 
-pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
-    add_drops(linker)?;
-    add_directory_entry_stream(linker)?;
+fn add_is_same_object(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    linker.instance(INTERFACE)?.func_wrap_async(
+        "[method]descriptor.is-same-object",
+        |mut store,
+         (descriptor, other): (Resource<types::Descriptor>, Resource<types::Descriptor>)| {
+            Box::new(async move {
+                let invocation = store
+                    .data()
+                    .context
+                    .invocation_id()
+                    .ok_or_else(|| wasmtime::Error::msg("WASI call has no invocation id"))?;
+                let mut args = scope_values(vec![descriptor.to_val(), other.to_val()], invocation);
+                add_context(&mut args, &[0, 1], store.data_mut()).map_err(wasmtime::Error::new)?;
+                let real: Real = |mut store, args| {
+                    Box::pin(async move {
+                        validate_context(&args, &[0, 1], store.data_mut())?;
+                        let mut args = args.into_iter();
+                        let descriptor = Resource::<types::Descriptor>::from_val(
+                            args.next().ok_or_else(|| shape(DESCRIPTOR))?,
+                        )?;
+                        let other = Resource::<types::Descriptor>::from_val(
+                            args.next().ok_or_else(|| shape(DESCRIPTOR))?,
+                        )?;
+                        let same = HostDescriptor::is_same_object(
+                            &mut views::filesystem(store.data_mut()),
+                            descriptor,
+                            other,
+                        )
+                        .await
+                        .map_err(|error| CallError::trap(error.to_string()))?;
+                        Ok(vec![same.to_val()])
+                    })
+                };
+                let outcome = trampoline::gate(
+                    &mut store,
+                    INTERFACE,
+                    "[method]descriptor.is-same-object",
+                    args,
+                    real,
+                )
+                .await;
+                Ok((finish::<bool>(outcome)?,))
+            })
+        },
+    )?;
+    Ok(())
+}
+
+fn add_preopens(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     linker
         .instance("wasi:filesystem/preopens@0.2.12")?
         .func_wrap_async("get-directories", |mut store, (): ()| {
@@ -542,6 +591,17 @@ pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 )?,))
             })
         })?;
+    Ok(())
+}
+
+pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    add_drops(linker)?;
+    add_directory_entry_stream(linker)?;
+    add_is_same_object(linker)?;
+    add_preopens(linker)?;
+    gate!(linker, "wasi:filesystem/types@0.2.12", "filesystem-error-code", filesystem,
+        types::Host::filesystem_error_code, error_borrowed,
+        (error: Resource<IoError>) -> Option<ErrorCode>);
     gate_fs!(linker, "[method]descriptor.stat", HostDescriptor::stat, async,
         [0], (descriptor: Resource<types::Descriptor>) -> DescriptorStat);
     gate_fs!(linker, "[method]descriptor.open-at", open_at, store_async,
