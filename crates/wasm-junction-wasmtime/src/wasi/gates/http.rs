@@ -6,6 +6,7 @@ use wasmtime_wasi_http::p3::bindings::http::types::{
 
 const TYPES: &str = "wasi:http/types@0.3.0";
 const FIELDS_NAME: &str = "fields";
+const REQUEST_OPTIONS_NAME: &str = "request-options";
 
 macro_rules! resource {
     ($ty:ty, $name:literal) => {
@@ -30,8 +31,23 @@ fn drop_fields(store: &mut StoreData, fields: Resource<Fields>) -> wasmtime::Res
     wasmtime_wasi_http::p3::bindings::http::types::HostFields::drop(&mut view, fields)
 }
 
+fn validate_request_options(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
+    validate_borrowed::<RequestOptions>(
+        values.first().ok_or_else(|| shape(REQUEST_OPTIONS_NAME))?,
+        store,
+    )
+}
+
+fn drop_request_options(
+    store: &mut StoreData,
+    options: Resource<RequestOptions>,
+) -> wasmtime::Result<()> {
+    let mut view = views::http(store);
+    wasmtime_wasi_http::p3::bindings::http::types::HostRequestOptions::drop(&mut view, options)
+}
+
 pub(super) fn add(linker: &mut Linker<crate::engine::StoreData>) -> wasmtime::Result<()> {
-    use wasmtime_wasi_http::p3::bindings::http::types::HostFields;
+    use wasmtime_wasi_http::p3::bindings::http::types::{HostFields, HostRequestOptions};
 
     gate_drop!(
         linker,
@@ -70,6 +86,42 @@ pub(super) fn add(linker: &mut Linker<crate::engine::StoreData>) -> wasmtime::Re
         (fields: Resource<Fields>) -> Vec<(String, Vec<u8>)>);
     gate!(linker, "wasi:http/types@0.3.0", "[method]fields.clone", http, HostFields::clone,
         plain_with[validate_fields], (fields: Resource<Fields>) -> Resource<Fields>);
+    gate_drop!(
+        linker,
+        TYPES,
+        REQUEST_OPTIONS_NAME,
+        "[drop]request-options",
+        RequestOptions,
+        store,
+        None,
+        drop_request_options
+    );
+    gate!(linker, "wasi:http/types@0.3.0", "[constructor]request-options", http,
+        HostRequestOptions::new, plain, () -> Resource<RequestOptions>);
+    gate!(linker, "wasi:http/types@0.3.0", "[method]request-options.get-connect-timeout", http,
+        HostRequestOptions::get_connect_timeout, plain_with[validate_request_options],
+        (options: Resource<RequestOptions>) -> Option<u64>);
+    gate!(linker, "wasi:http/types@0.3.0", "[method]request-options.set-connect-timeout", http,
+        HostRequestOptions::set_connect_timeout,
+        plain_result_with[validate_request_options, RequestOptionsError::NotSupported],
+        (options: Resource<RequestOptions>, duration: Option<u64>) -> Result<(), RequestOptionsError>);
+    gate!(linker, "wasi:http/types@0.3.0", "[method]request-options.get-first-byte-timeout", http,
+        HostRequestOptions::get_first_byte_timeout, plain_with[validate_request_options],
+        (options: Resource<RequestOptions>) -> Option<u64>);
+    gate!(linker, "wasi:http/types@0.3.0", "[method]request-options.set-first-byte-timeout", http,
+        HostRequestOptions::set_first_byte_timeout,
+        plain_result_with[validate_request_options, RequestOptionsError::NotSupported],
+        (options: Resource<RequestOptions>, duration: Option<u64>) -> Result<(), RequestOptionsError>);
+    gate!(linker, "wasi:http/types@0.3.0", "[method]request-options.get-between-bytes-timeout", http,
+        HostRequestOptions::get_between_bytes_timeout, plain_with[validate_request_options],
+        (options: Resource<RequestOptions>) -> Option<u64>);
+    gate!(linker, "wasi:http/types@0.3.0", "[method]request-options.set-between-bytes-timeout", http,
+        HostRequestOptions::set_between_bytes_timeout,
+        plain_result_with[validate_request_options, RequestOptionsError::NotSupported],
+        (options: Resource<RequestOptions>, duration: Option<u64>) -> Result<(), RequestOptionsError>);
+    gate!(linker, "wasi:http/types@0.3.0", "[method]request-options.clone", http,
+        HostRequestOptions::clone, plain_with[validate_request_options],
+        (options: Resource<RequestOptions>) -> Resource<RequestOptions>);
     Ok(())
 }
 
