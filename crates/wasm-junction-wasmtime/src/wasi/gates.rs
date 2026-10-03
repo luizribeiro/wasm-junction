@@ -988,6 +988,66 @@ macro_rules! gate_drop {
 }
 
 #[cfg(feature = "wasi-http")]
+macro_rules! gate_concurrent_drop {
+    ($linker:ident, $iface:ident, $name:ident, $drop:literal, $ty:ty, $method:path) => {
+        $linker.instance($iface)?.resource_concurrent(
+            $name,
+            wasmtime::component::ResourceType::host::<$ty>(),
+            |accessor, id| {
+                Box::pin(async move {
+                    let (invocation, imports) = accessor.with(|mut access| {
+                        let store = access.get();
+                        (store.context.invocation_id(), store.imports.clone())
+                    });
+                    let invocation = invocation
+                        .ok_or_else(|| wasmtime::Error::msg("WASI drop has no invocation id"))?;
+                    let resource =
+                        JunctionResource::__owned_for_invocation($iface, $name, id, invocation);
+                    imports.emit(EngineEvent::ResourceDrop {
+                        invocation,
+                        resource: resource.clone(),
+                    });
+                    let real: RealConcurrent = |accessor, args| {
+                        Box::pin(async move {
+                            let [Val::Resource(resource)] =
+                                <[Val; 1]>::try_from(args).map_err(|_| shape($name))?
+                            else {
+                                return Err(shape($name));
+                            };
+                            accessor.with(|mut access| {
+                                validate_owned::<$ty>(&resource, access.get())
+                            })?;
+                            let view = accessor.with_getter::<wasmtime_wasi_http::WasiHttp>(
+                                wasmtime_wasi_http::WasiHttpView::http,
+                            );
+                            view.with(|access| {
+                                $method(access, Resource::<$ty>::new_own(resource.id()))
+                            })
+                            .map_err(|error| CallError::trap(error.to_string()))?;
+                            Ok(Vec::new())
+                        })
+                    };
+                    let values = trampoline::gate_concurrent(
+                        accessor,
+                        $iface,
+                        $drop,
+                        vec![Val::Resource(resource)],
+                        real,
+                    )
+                    .await
+                    .map_err(wasmtime::Error::new)?;
+                    if values.is_empty() {
+                        Ok(())
+                    } else {
+                        Err(wasmtime::Error::new(shape("no results")))
+                    }
+                })
+            },
+        )?;
+    };
+}
+
+#[cfg(feature = "wasi-http")]
 mod http;
 
 #[cfg(feature = "wasi-http")]

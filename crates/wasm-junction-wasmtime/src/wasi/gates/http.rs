@@ -7,6 +7,8 @@ use wasmtime_wasi_http::p3::bindings::http::types::{
 const TYPES: &str = "wasi:http/types@0.3.0";
 const FIELDS_NAME: &str = "fields";
 const REQUEST_OPTIONS_NAME: &str = "request-options";
+const REQUEST_NAME: &str = "request";
+const RESPONSE_NAME: &str = "response";
 
 macro_rules! resource {
     ($ty:ty, $name:literal) => {
@@ -56,7 +58,8 @@ fn drop_request_options(
 
 pub(super) fn add(linker: &mut Linker<crate::engine::StoreData>) -> wasmtime::Result<()> {
     use wasmtime_wasi_http::p3::bindings::http::types::{
-        HostFields, HostRequest, HostRequestOptions, HostResponse,
+        HostFields, HostRequest, HostRequestOptions, HostRequestWithStore, HostResponse,
+        HostResponseWithStore,
     };
 
     gate_drop!(
@@ -171,6 +174,22 @@ pub(super) fn add(linker: &mut Linker<crate::engine::StoreData>) -> wasmtime::Re
     gate!(linker, "wasi:http/types@0.3.0", "[method]response.get-headers", http,
         HostResponse::get_headers, plain_with[validate_response],
         (response: Resource<Response>) -> Resource<Fields>);
+    gate_concurrent_drop!(
+        linker,
+        TYPES,
+        REQUEST_NAME,
+        "[drop]request",
+        Request,
+        HostRequestWithStore::drop
+    );
+    gate_concurrent_drop!(
+        linker,
+        TYPES,
+        RESPONSE_NAME,
+        "[drop]response",
+        Response,
+        HostResponseWithStore::drop
+    );
     Ok(())
 }
 
