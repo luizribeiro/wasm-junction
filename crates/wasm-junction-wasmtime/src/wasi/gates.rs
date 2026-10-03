@@ -1068,6 +1068,7 @@ macro_rules! gate_concurrent_drop {
     };
 }
 
+mod filesystem;
 #[cfg(feature = "wasi-http")]
 mod http;
 
