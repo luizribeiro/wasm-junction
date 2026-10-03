@@ -7,6 +7,7 @@ mod context;
 mod engine;
 mod error;
 mod future;
+mod future_value;
 mod invocation;
 mod resource;
 mod stream;
@@ -19,6 +20,7 @@ pub use engine::{
 };
 pub use error::{CallError, CallErrorKind};
 pub use future::{BoxFuture, HostBound, MaybeSend};
+pub use future_value::FutureHandle;
 pub use invocation::InvocationId;
 pub use resource::{
     Resource, ResourceOwnership, ResourceTable, validate_resource_for_invocation,

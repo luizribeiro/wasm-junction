@@ -1,6 +1,6 @@
 //! Round-trip tests for plain WIT values.
 
-use wasm_junction::{TypeError, Val};
+use wasm_junction::{FutureHandle, InvocationId, TypeError, Val};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Note {
@@ -209,6 +209,18 @@ fn primitive_shapes_round_trip() {
 fn primitive_shape_mismatches_are_type_errors() {
     let error: TypeError = u32::try_from(Val::Bool(true)).unwrap_err();
     assert_eq!(error.to_string(), "expected u32");
+}
+
+#[test]
+fn future_values_preserve_their_invocation_scope() {
+    let invocation = InvocationId::__from_counter(23);
+    let value = Val::Future(FutureHandle::__for_invocation(41, invocation));
+    let Val::Future(handle) = value.clone() else {
+        panic!("future value changed kind");
+    };
+    assert_eq!(handle.id(), 41);
+    assert_eq!(handle.invocation_id(), invocation);
+    assert_eq!(value, Val::Future(handle));
 }
 
 #[test]

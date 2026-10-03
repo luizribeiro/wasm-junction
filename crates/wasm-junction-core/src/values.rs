@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt::{self, Display};
 
-use crate::{Resource, StreamHandle};
+use crate::{FutureHandle, Resource, StreamHandle};
 
 /// An engine-neutral representation of a plain WIT value.
 ///
@@ -63,6 +63,8 @@ pub enum Val {
     Resource(Resource),
     /// A WIT `stream<u8>` handle.
     Stream(StreamHandle),
+    /// An invocation-scoped WIT `future<T>` handle.
+    Future(FutureHandle),
 }
 
 /// A sequence of engine-neutral WIT values used for call arguments and results.
