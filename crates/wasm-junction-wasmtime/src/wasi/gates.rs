@@ -1,10 +1,12 @@
 use wasm_junction_core::{
-    CallError, CallErrorKind, EngineEvent, InvocationId, Resource as JunctionResource,
-    ResourceOwnership, Val, Vals, validate_resource_for_invocation,
+    CallError, CallErrorKind, ChannelDirection, EngineEvent, InvocationId,
+    Resource as JunctionResource, ResourceOwnership, Val, Vals, validate_resource_for_invocation,
 };
 use wasmtime::component::{Linker, Resource};
 use wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime;
-use wasmtime_wasi::p2::bindings::io::streams::{self, StreamError};
+use wasmtime_wasi::p2::bindings::io::streams::{
+    self, HostInputStream, HostOutputStream, StreamError,
+};
 use wasmtime_wasi::p2::{DynInputStream, DynOutputStream, DynPollable, IoError, StreamResult};
 
 use super::trampoline::{self, Real};
@@ -66,6 +68,81 @@ fn scope_values(values: Vals, invocation: InvocationId) -> Vals {
 )]
 fn no_resource_validation(_values: &[Val], _store: &mut StoreData) -> Result<(), CallError> {
     Ok(())
+}
+
+fn validate_borrowed<T: WitResource>(value: &Val, store: &mut StoreData) -> Result<(), CallError> {
+    let Val::Resource(resource) = value else {
+        return Err(CallError::refused(format!("expected {} handle", T::NAME)));
+    };
+    let invocation = store
+        .context
+        .invocation_id()
+        .ok_or_else(|| CallError::trap("WASI call has no invocation id"))?;
+    validate_resource_for_invocation(
+        resource,
+        T::INTERFACE,
+        T::NAME,
+        ResourceOwnership::Borrow,
+        invocation,
+    )?;
+    store
+        .wasi_table()
+        .get(&Resource::<T>::new_borrow(resource.id()))
+        .map_err(|_| CallError::refused(format!("unknown {} handle {}", T::NAME, resource.id())))?;
+    Ok(())
+}
+
+fn validate_input_borrow(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
+    let value = values.first().ok_or_else(|| shape("input-stream"))?;
+    validate_borrowed::<DynInputStream>(value, store)?;
+    open_channel(value, store, ChannelDirection::HostToGuest)
+}
+
+fn validate_output_borrow(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
+    let value = values.first().ok_or_else(|| shape("output-stream"))?;
+    validate_borrowed::<DynOutputStream>(value, store)?;
+    open_channel(value, store, ChannelDirection::GuestToHost)
+}
+
+fn validate_splice_borrows(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
+    validate_output_borrow(&values[..1], store)?;
+    validate_input_borrow(&values[1..], store)
+}
+
+fn open_channel(
+    value: &Val,
+    store: &mut StoreData,
+    direction: ChannelDirection,
+) -> Result<(), CallError> {
+    let Val::Resource(resource) = value else {
+        return Err(shape("stream resource"));
+    };
+    // Standard-stream getters are not gated yet, so first use is the earliest observable opening.
+    if store.open_wasi_channel(resource.id()) {
+        let invocation = store
+            .context
+            .invocation_id()
+            .ok_or_else(|| CallError::trap("WASI call has no invocation id"))?;
+        store.imports.emit(EngineEvent::ChannelOpen {
+            invocation,
+            stream: u64::from(resource.id()),
+            direction,
+        });
+    }
+    Ok(())
+}
+
+fn close_channel(store: &mut StoreData, id: u32, direction: Option<ChannelDirection>) {
+    let Some(direction) = direction else { return };
+    if store.close_wasi_channel(id)
+        && let Some(invocation) = store.context.invocation_id()
+    {
+        store.imports.emit(EngineEvent::ChannelClose {
+            invocation,
+            stream: u64::from(id),
+            direction,
+        });
+    }
 }
 
 fn validate_pollable_borrows(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
@@ -370,7 +447,6 @@ impl<T: FromVal> FromVal for Result<T, StreamError> {
     }
 }
 
-#[expect(dead_code, reason = "called by stream gate expansions")]
 fn convert_stream<T>(
     store: &mut StoreData,
     result: StreamResult<T>,
@@ -398,7 +474,6 @@ fn finish_unit(outcome: Result<Vals, CallError>) -> wasmtime::Result<()> {
     }
 }
 
-#[expect(dead_code, reason = "called by stream gate expansions")]
 fn finish_stream<T: FromVal>(
     store: &mut StoreData,
     outcome: Result<Vals, CallError>,
@@ -534,6 +609,7 @@ macro_rules! gate_drop {
                     invocation,
                     resource: resource.clone(),
                 });
+                close_channel(store.data_mut(), id, $direction);
                 let real: Real = |mut store, args| Box::pin(async move {
                     let [Val::Resource(resource)] = <[Val; 1]>::try_from(args)
                         .map_err(|_| shape($name))?
@@ -604,6 +680,69 @@ pub(super) fn add_monotonic_clock(linker: &mut Linker<StoreData>) -> wasmtime::R
     gate!(linker, "wasi:clocks/monotonic-clock@0.2.12", "resolution", clocks,
         wasmtime_wasi::p2::bindings::clocks::monotonic_clock::Host::resolution,
         plain, () -> u64);
+    Ok(())
+}
+
+pub(super) fn add_streams(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    gate_drop!(
+        linker,
+        STREAMS_INTERFACE,
+        INPUT_STREAM,
+        "[drop]input-stream",
+        DynInputStream,
+        Some(ChannelDirection::HostToGuest),
+        HostInputStream::drop,
+        await
+    );
+    gate_drop!(
+        linker,
+        STREAMS_INTERFACE,
+        OUTPUT_STREAM,
+        "[drop]output-stream",
+        DynOutputStream,
+        Some(ChannelDirection::GuestToHost),
+        HostOutputStream::drop,
+        await
+    );
+    gate!(linker, "wasi:io/streams@0.2.12", "[method]input-stream.read",
+        HostInputStream::read, input, , (stream: Resource<DynInputStream>, len: u64) -> Vec<u8>);
+    gate!(linker, "wasi:io/streams@0.2.12", "[method]input-stream.blocking-read",
+        HostInputStream::blocking_read, input, await,
+        (stream: Resource<DynInputStream>, len: u64) -> Vec<u8>);
+    gate!(linker, "wasi:io/streams@0.2.12", "[method]input-stream.skip",
+        HostInputStream::skip, input, , (stream: Resource<DynInputStream>, len: u64) -> u64);
+    gate!(linker, "wasi:io/streams@0.2.12", "[method]input-stream.blocking-skip",
+        HostInputStream::blocking_skip, input, await,
+        (stream: Resource<DynInputStream>, len: u64) -> u64);
+    gate!(linker, "wasi:io/streams@0.2.12", "[method]input-stream.subscribe", io,
+        HostInputStream::subscribe, input_plain,
+        (stream: Resource<DynInputStream>) -> Resource<DynPollable>);
+    gate!(linker, "wasi:io/streams@0.2.12", "[method]output-stream.check-write",
+        HostOutputStream::check_write, output, , (stream: Resource<DynOutputStream>) -> u64);
+    gate!(linker, "wasi:io/streams@0.2.12", "[method]output-stream.write",
+        HostOutputStream::write, output, ,
+        (stream: Resource<DynOutputStream>, bytes: Vec<u8>) -> ());
+    gate!(linker, "wasi:io/streams@0.2.12", "[method]output-stream.blocking-write-and-flush",
+        HostOutputStream::blocking_write_and_flush, output, await,
+        (stream: Resource<DynOutputStream>, bytes: Vec<u8>) -> ());
+    gate!(linker, "wasi:io/streams@0.2.12", "[method]output-stream.flush",
+        HostOutputStream::flush, output, , (stream: Resource<DynOutputStream>) -> ());
+    gate!(linker, "wasi:io/streams@0.2.12", "[method]output-stream.blocking-flush",
+        HostOutputStream::blocking_flush, output, await, (stream: Resource<DynOutputStream>) -> ());
+    gate!(linker, "wasi:io/streams@0.2.12", "[method]output-stream.subscribe", io,
+        HostOutputStream::subscribe, output_plain,
+        (stream: Resource<DynOutputStream>) -> Resource<DynPollable>);
+    gate!(linker, "wasi:io/streams@0.2.12", "[method]output-stream.write-zeroes",
+        HostOutputStream::write_zeroes, output, , (stream: Resource<DynOutputStream>, len: u64) -> ());
+    gate!(linker, "wasi:io/streams@0.2.12", "[method]output-stream.blocking-write-zeroes-and-flush",
+        HostOutputStream::blocking_write_zeroes_and_flush, output, await,
+        (stream: Resource<DynOutputStream>, len: u64) -> ());
+    gate!(linker, "wasi:io/streams@0.2.12", "[method]output-stream.splice",
+        HostOutputStream::splice, splice, ,
+        (stream: Resource<DynOutputStream>, input: Resource<DynInputStream>, len: u64) -> u64);
+    gate!(linker, "wasi:io/streams@0.2.12", "[method]output-stream.blocking-splice",
+        HostOutputStream::blocking_splice, splice, await,
+        (stream: Resource<DynOutputStream>, input: Resource<DynInputStream>, len: u64) -> u64);
     Ok(())
 }
 

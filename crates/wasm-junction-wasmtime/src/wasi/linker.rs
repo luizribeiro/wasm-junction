@@ -14,7 +14,6 @@ impl HasData for HasIo {
 
 pub(crate) fn add_ungated_interfaces(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     io::error::add_to_linker::<StoreData, HasIo>(linker, |state| state.ctx().table)?;
-    io::streams::add_to_linker::<StoreData, HasIo>(linker, |state| state.ctx().table)?;
     random::random::add_to_linker::<StoreData, WasiRandom>(linker, WasiRandomView::random)?;
     random::insecure::add_to_linker::<StoreData, WasiRandom>(linker, WasiRandomView::random)?;
     random::insecure_seed::add_to_linker::<StoreData, WasiRandom>(linker, WasiRandomView::random)?;
