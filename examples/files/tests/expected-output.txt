@@ -1,0 +1,10 @@
+call host → files example:files/files@0.1.0.read()
+call files → host wasi:filesystem/preopens@0.2.12.get-directories()
+call files → host wasi:filesystem/types@0.2.12.[method]descriptor.open-at()
+policy allow preopen /allowed
+allowed: a readable note
+call host → files example:files/files@0.1.0.read()
+call files → host wasi:filesystem/preopens@0.2.12.get-directories()
+call files → host wasi:filesystem/types@0.2.12.[method]descriptor.open-at()
+policy deny preopen /blocked
+blocked: PermissionDenied
