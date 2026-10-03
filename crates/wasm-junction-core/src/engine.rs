@@ -38,12 +38,14 @@ struct Preopen {
 ///     .env("MODE", "preview")
 ///     .arg("notes.txt")
 ///     .preopen("./notes", "/notes", Access::ReadOnly)
-///     .network(true);
+///     .network(true)
+///     .sockets(true);
 /// # use wasm_junction_core::Access;
 /// assert_eq!(settings.environment().collect::<Vec<_>>(), [("MODE", "preview")]);
 /// assert_eq!(settings.arguments().collect::<Vec<_>>(), ["notes.txt"]);
 /// assert_eq!(settings.preopens().count(), 1);
 /// assert!(settings.network_enabled());
+/// assert!(settings.sockets_enabled());
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WasiSettings {
@@ -51,6 +53,7 @@ pub struct WasiSettings {
     arguments: Vec<String>,
     preopens: Vec<Preopen>,
     network: bool,
+    sockets: bool,
 }
 
 impl WasiSettings {
@@ -62,6 +65,7 @@ impl WasiSettings {
             arguments: Vec::new(),
             preopens: Vec::new(),
             network: false,
+            sockets: false,
         }
     }
 
@@ -109,6 +113,16 @@ impl WasiSettings {
         self
     }
 
+    /// Enables or disables raw TCP, UDP, and name lookup for the component.
+    ///
+    /// Socket access is disabled by default and is independent of [`Self::network`]. Middleware
+    /// remains responsible for policy such as allowed addresses.
+    #[must_use]
+    pub const fn sockets(mut self, enabled: bool) -> Self {
+        self.sockets = enabled;
+        self
+    }
+
     /// Returns the configured environment variables in name order.
     #[must_use]
     pub fn environment(&self) -> impl ExactSizeIterator<Item = (&str, &str)> {
@@ -141,6 +155,12 @@ impl WasiSettings {
     pub const fn network_enabled(&self) -> bool {
         self.network
     }
+
+    /// Reports whether raw sockets and name lookup are enabled.
+    #[must_use]
+    pub const fn sockets_enabled(&self) -> bool {
+        self.sockets
+    }
 }
 
 #[cfg(test)]
@@ -167,6 +187,14 @@ mod wasi_settings_tests {
                 .network(false)
                 .network_enabled()
         );
+    }
+
+    #[test]
+    fn sockets_are_off_by_default_and_independent_from_http() {
+        assert!(!WasiSettings::new().sockets_enabled());
+        assert!(!WasiSettings::new().network(true).sockets_enabled());
+        assert!(WasiSettings::new().sockets(true).sockets_enabled());
+        assert!(!WasiSettings::new().sockets(true).network_enabled());
     }
 }
 

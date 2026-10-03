@@ -614,6 +614,13 @@ fn wasi_context(settings: &WasiSettings) -> wasmtime::Result<WasiState> {
         };
         builder.preopened_dir(host_path, guest_path, permissions)?;
     }
+    if settings.sockets_enabled() {
+        builder
+            .inherit_network()
+            .allow_ip_name_lookup(true)
+            .allow_tcp(true)
+            .allow_udp(true);
+    }
     Ok(WasiState::new(builder.build()))
 }
 
