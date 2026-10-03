@@ -352,6 +352,47 @@ fn decode_request_error(
     Some(decoded)
 }
 
+fn decode_response_error(
+    case: &str,
+    value: Option<Box<Val>>,
+) -> Option<Result<ErrorCode, CallError>> {
+    let decoded = match case {
+        "HTTP-response-incomplete" => {
+            no_payload(&value).map(|()| ErrorCode::HttpResponseIncomplete)
+        }
+        "HTTP-response-header-section-size" => {
+            payload(value, "header section size").map(ErrorCode::HttpResponseHeaderSectionSize)
+        }
+        "HTTP-response-header-size" => value
+            .ok_or_else(|| shape("header size"))
+            .and_then(|value| field_size_from_val(*value))
+            .map(ErrorCode::HttpResponseHeaderSize),
+        "HTTP-response-body-size" => {
+            payload(value, "body size").map(ErrorCode::HttpResponseBodySize)
+        }
+        "HTTP-response-trailer-section-size" => {
+            payload(value, "trailer section size").map(ErrorCode::HttpResponseTrailerSectionSize)
+        }
+        "HTTP-response-trailer-size" => value
+            .ok_or_else(|| shape("trailer size"))
+            .and_then(|value| field_size_from_val(*value))
+            .map(ErrorCode::HttpResponseTrailerSize),
+        "HTTP-response-transfer-coding" => {
+            payload(value, "transfer coding").map(ErrorCode::HttpResponseTransferCoding)
+        }
+        "HTTP-response-content-coding" => {
+            payload(value, "content coding").map(ErrorCode::HttpResponseContentCoding)
+        }
+        "HTTP-response-timeout" => no_payload(&value).map(|()| ErrorCode::HttpResponseTimeout),
+        "HTTP-upgrade-failed" => no_payload(&value).map(|()| ErrorCode::HttpUpgradeFailed),
+        "HTTP-protocol-error" => no_payload(&value).map(|()| ErrorCode::HttpProtocolError),
+        "loop-detected" => no_payload(&value).map(|()| ErrorCode::LoopDetected),
+        "configuration-error" => no_payload(&value).map(|()| ErrorCode::ConfigurationError),
+        _ => return None,
+    };
+    Some(decoded)
+}
+
 impl FromVal for ErrorCode {
     fn from_val(value: Val) -> Result<Self, CallError> {
         let Val::Variant { case, value } = value else {
@@ -361,6 +402,9 @@ impl FromVal for ErrorCode {
             return decoded;
         }
         if let Some(decoded) = decode_request_error(&case, value.clone()) {
+            return decoded;
+        }
+        if let Some(decoded) = decode_response_error(&case, value.clone()) {
             return decoded;
         }
         match case.as_str() {
@@ -431,6 +475,11 @@ mod tests {
                 field_size: Some(99),
                 ..
             }))
+        ));
+        let body = ErrorCode::HttpResponseBodySize(Some(4_096));
+        assert!(matches!(
+            ErrorCode::from_val(body.to_val()).unwrap(),
+            ErrorCode::HttpResponseBodySize(Some(4_096))
         ));
     }
 }
