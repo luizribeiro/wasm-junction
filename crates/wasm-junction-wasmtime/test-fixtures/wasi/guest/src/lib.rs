@@ -279,6 +279,25 @@ impl exports::test::wasi::environment::Guest for Component {
     fn write_file(path: String, contents: String) -> Result<(), String> {
         std::fs::write(path, contents).map_err(|error| format!("{:?}", error.kind()))
     }
+
+    fn stat_preopen() -> Result<(), String> {
+        let Some((directory, _)) = wasi::filesystem::preopens::get_directories().into_iter().next()
+        else {
+            return Err("no preopen".to_owned());
+        };
+        directory
+            .stat()
+            .map(|_| ())
+            .map_err(|error| format!("{error:?}"))
+    }
+    fn link_preopens() {
+        use wasi::filesystem::types::PathFlags;
+
+        let mut directories = wasi::filesystem::preopens::get_directories().into_iter();
+        let (source, _) = directories.next().unwrap();
+        let (target, _) = directories.next().unwrap();
+        let _ = source.link_at(PathFlags::empty(), "note.txt", &target, "linked.txt");
+    }
 }
 
 export!(Component);

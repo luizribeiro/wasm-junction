@@ -24,6 +24,8 @@ interface environment {
   directories: func() -> list<string>;
   read-file: func(path: string) -> result<string, string>;
   write-file: func(path: string, contents: string) -> result<_, string>;
+  stat-preopen: func() -> result<_, string>;
+  link-preopens: func();
 }
 
 world fixture {
