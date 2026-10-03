@@ -39,6 +39,10 @@ pub struct Call {
     pub function: Arc<str>,
     /// The function arguments in declaration order.
     #[cfg_attr(
+        feature = "wasi",
+        doc = "\nWASI filesystem calls append policy context as described by [`wasi::provider`](crate::wasi::provider)."
+    )]
+    #[cfg_attr(
         feature = "wasi-http",
         doc = "\nFor the `wasi:http/client.send` layout, see [`wasi::http::provider`](crate::wasi::http::provider)."
     )]
