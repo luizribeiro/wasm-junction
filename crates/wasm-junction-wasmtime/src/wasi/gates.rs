@@ -17,6 +17,9 @@ use super::trampoline::RealConcurrent;
 use super::trampoline::{self, Real};
 use crate::engine::StoreData;
 
+#[cfg(feature = "wasi-http")]
+mod http;
+
 trait ToVal {
     fn to_val(self) -> Val;
 }
