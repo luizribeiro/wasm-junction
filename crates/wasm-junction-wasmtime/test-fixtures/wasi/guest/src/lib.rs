@@ -128,6 +128,13 @@ impl exports::test::wasi::environment::Guest for Component {
             other => format!("unexpected result: {other:?}"),
         }
     }
+
+    fn rewritten_write() -> bool {
+        let output = wasi::cli::stdout::get_stdout();
+        output
+            .blocking_write_and_flush(&vec![0; 4097])
+            .is_ok()
+    }
 }
 
 export!(Component);

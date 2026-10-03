@@ -12,6 +12,7 @@ interface environment {
   differential: func() -> string;
   refused-write: func() -> string;
   input-read: func() -> string;
+  rewritten-write: func() -> bool;
 }
 
 world fixture {

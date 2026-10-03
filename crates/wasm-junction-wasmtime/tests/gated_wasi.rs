@@ -46,6 +46,33 @@ impl Middleware for RefuseWrite {
     }
 }
 
+struct RewriteOversizedWrite;
+
+impl Middleware for RewriteOversizedWrite {
+    async fn call(&self, mut call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.function.as_ref() == "[method]output-stream.blocking-write-and-flush"
+            && matches!(call.args.get(1), Some(Val::Bytes(bytes)) if bytes.len() == 4097)
+        {
+            call.args[1] = Val::Bytes(b"rewritten".to_vec());
+        }
+        next.run(call).await
+    }
+}
+
+struct RecordWriteBytes(Arc<Mutex<Vec<Vec<u8>>>>);
+
+impl Middleware for RecordWriteBytes {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.function.as_ref() == "[method]output-stream.blocking-write-and-flush" {
+            let Some(Val::Bytes(bytes)) = call.args.get(1) else {
+                panic!("blocking write did not receive bytes");
+            };
+            self.0.lock().unwrap().push(bytes.clone());
+        }
+        next.run(call).await
+    }
+}
+
 enum RewriteOutputStream {
     Foreign(Mutex<Option<Resource>>),
     Mistyped,
@@ -352,6 +379,30 @@ fn refused_write_is_a_guest_stream_error() {
         panic!("refused write returned the wrong shape");
     };
     assert!(message.contains("write denied by policy"));
+}
+
+#[test]
+fn rewritten_write_bytes_reach_wasmtime_wasi() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let app = App::builder()
+        .engine(wasm_junction_wasmtime::WasmtimeEngine::new().unwrap())
+        .provide(wasm_junction::wasi::provider())
+        .middleware(RewriteOversizedWrite)
+        .middleware(RecordWriteBytes(seen.clone()))
+        .build()
+        .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(app.load(Component::from_bytes(COMPONENT).unwrap().named("rewrite")))
+        .unwrap();
+    let values = runtime
+        .block_on(app.call("rewrite", EXPORT, "rewritten-write", Vec::new()))
+        .unwrap();
+    assert_eq!(values, [Val::Bool(true)]);
+    assert_eq!(*seen.lock().unwrap(), [b"rewritten".to_vec()]);
 }
 
 #[test]
