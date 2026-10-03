@@ -60,6 +60,46 @@ pub(super) fn validate_context(
     Ok(())
 }
 
+pub(super) fn add_directory_stream_context(
+    args: &mut Vals,
+    store: &mut StoreData,
+) -> Result<(), CallError> {
+    let Some(Val::Resource(resource)) = args.first() else {
+        return Err(CallError::refused("expected directory-entry-stream handle"));
+    };
+    validate_borrowed::<types::DirectoryEntryStream>(&args[0], store)?;
+    let preopen = store
+        .directory_stream_preopen(resource.id())
+        .ok_or_else(|| {
+            CallError::refused(format!(
+                "unknown directory-entry-stream handle {}",
+                resource.id()
+            ))
+        })?
+        .to_owned();
+    args.push(Val::String(preopen));
+    Ok(())
+}
+
+pub(super) fn validate_directory_stream_context(
+    args: &[Val],
+    store: &mut StoreData,
+) -> Result<(), CallError> {
+    let Some(Val::String(context)) = args.last() else {
+        return Err(CallError::refused(
+            "missing directory-entry-stream preopen context",
+        ));
+    };
+    let mut expected = args[..1].to_vec();
+    add_directory_stream_context(&mut expected, store)?;
+    match expected.last() {
+        Some(Val::String(expected)) if expected == context => Ok(()),
+        _ => Err(CallError::refused(
+            "directory-entry-stream preopen context does not match",
+        )),
+    }
+}
+
 pub(super) fn convert<T>(
     store: &mut StoreData,
     result: FsResult<T>,

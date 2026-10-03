@@ -1,7 +1,8 @@
 use wasmtime::component::Resource;
 use wasmtime_wasi::p2::bindings::filesystem::types::{
     self, Advice, DescriptorFlags, DescriptorStat, DescriptorType, DirectoryEntry, ErrorCode,
-    HostDescriptor, MetadataHashValue, NewTimestamp, OpenFlags, PathFlags,
+    HostDescriptor, HostDirectoryEntryStream, MetadataHashValue, NewTimestamp, OpenFlags,
+    PathFlags,
 };
 
 use super::{FromVal, ToVal, WitResource, open_channel, shape};
@@ -16,7 +17,10 @@ use crate::engine::StoreData;
 
 mod gate;
 
-use gate::{add_context, convert, finish_result, gate_fs, validate_context};
+use gate::{
+    add_context, add_directory_stream_context, convert, finish_result, gate_fs, validate_context,
+    validate_directory_stream_context,
+};
 
 const INTERFACE: &str = "wasi:filesystem/types@0.2.12";
 const DESCRIPTOR: &str = "descriptor";
@@ -366,7 +370,52 @@ fn append_via_stream(
     Ok(stream)
 }
 
+fn add_directory_entry_stream(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    linker.instance(INTERFACE)?.func_wrap_async(
+        "[method]directory-entry-stream.read-directory-entry",
+        |mut store, (stream,): (Resource<types::DirectoryEntryStream>,)| {
+            Box::new(async move {
+                let invocation = store
+                    .data()
+                    .context
+                    .invocation_id()
+                    .ok_or_else(|| wasmtime::Error::msg("WASI call has no invocation id"))?;
+                let mut args = scope_values(vec![stream.to_val()], invocation);
+                add_directory_stream_context(&mut args, store.data_mut())
+                    .map_err(wasmtime::Error::new)?;
+                let real: Real = |mut store, args| {
+                    Box::pin(async move {
+                        validate_directory_stream_context(&args, store.data_mut())?;
+                        let stream = Resource::<types::DirectoryEntryStream>::from_val(
+                            args.into_iter()
+                                .next()
+                                .ok_or_else(|| shape(DIRECTORY_ENTRY_STREAM))?,
+                        )?;
+                        let result = HostDirectoryEntryStream::read_directory_entry(
+                            &mut views::filesystem(store.data_mut()),
+                            stream,
+                        )
+                        .await;
+                        Ok(vec![convert(store.data_mut(), result)?.to_val()])
+                    })
+                };
+                let outcome = trampoline::gate(
+                    &mut store,
+                    INTERFACE,
+                    "[method]directory-entry-stream.read-directory-entry",
+                    args,
+                    real,
+                )
+                .await;
+                Ok((finish_result::<Option<DirectoryEntry>>(outcome)?,))
+            })
+        },
+    )?;
+    Ok(())
+}
+
 pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    add_directory_entry_stream(linker)?;
     linker
         .instance("wasi:filesystem/preopens@0.2.12")?
         .func_wrap_async("get-directories", |mut store, (): ()| {
