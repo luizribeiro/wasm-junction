@@ -264,6 +264,21 @@ impl exports::test::wasi::environment::Guest for Component {
         let _ = directory.metadata_hash();
         let _ = directory.metadata_hash_at(PathFlags::empty(), "note.txt");
     }
+
+    fn directories() -> Vec<String> {
+        wasi::filesystem::preopens::get_directories()
+            .into_iter()
+            .map(|(_, path)| path)
+            .collect()
+    }
+
+    fn read_file(path: String) -> Result<String, String> {
+        std::fs::read_to_string(path).map_err(|error| format!("{:?}", error.kind()))
+    }
+
+    fn write_file(path: String, contents: String) -> Result<(), String> {
+        std::fs::write(path, contents).map_err(|error| format!("{:?}", error.kind()))
+    }
 }
 
 export!(Component);

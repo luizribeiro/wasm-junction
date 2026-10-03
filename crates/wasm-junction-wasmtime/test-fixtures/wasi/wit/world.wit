@@ -21,6 +21,9 @@ interface environment {
   terminal-handles: func();
   benchmark-write: func(bytes: list<u8>) -> list<u8>;
   filesystem-coverage: func();
+  directories: func() -> list<string>;
+  read-file: func(path: string) -> result<string, string>;
+  write-file: func(path: string, contents: string) -> result<_, string>;
 }
 
 world fixture {
