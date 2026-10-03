@@ -21,6 +21,8 @@ use wasmtime::component::{
 use wasmtime::{AsContextMut, Config, Engine as RuntimeEngine, Store};
 #[cfg(feature = "wasi")]
 use wasmtime_wasi::{WasiCtxBuilder, WasiCtxView, WasiView};
+#[cfg(feature = "wasi-http")]
+use wasmtime_wasi_http::{WasiHttpCtxView, WasiHttpView, default_hooks};
 
 #[cfg(feature = "wasi-http")]
 use crate::WASI_HTTP_INTERFACES;
@@ -51,6 +53,17 @@ impl WasiView for StoreData {
         WasiCtxView {
             ctx: &mut self.wasi.context,
             table: &mut self.wasi.table,
+        }
+    }
+}
+
+#[cfg(feature = "wasi-http")]
+impl WasiHttpView for StoreData {
+    fn http(&mut self) -> WasiHttpCtxView<'_> {
+        WasiHttpCtxView {
+            hooks: default_hooks(),
+            table: &mut self.wasi.table,
+            ctx: &mut self.wasi.http,
         }
     }
 }

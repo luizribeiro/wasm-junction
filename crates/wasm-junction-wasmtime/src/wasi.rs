@@ -2,6 +2,8 @@ use std::collections::HashSet;
 
 use wasmtime::component::{Linker, ResourceTable};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
+#[cfg(feature = "wasi-http")]
+use wasmtime_wasi_http::WasiHttpCtx;
 
 use crate::engine::StoreData;
 
@@ -11,6 +13,8 @@ mod trampoline;
 pub(crate) struct WasiState {
     pub(crate) context: WasiCtx,
     pub(crate) table: ResourceTable,
+    #[cfg(feature = "wasi-http")]
+    pub(crate) http: WasiHttpCtx,
     channels: HashSet<u32>,
 }
 
@@ -19,6 +23,8 @@ impl WasiState {
         Self {
             context,
             table: ResourceTable::new(),
+            #[cfg(feature = "wasi-http")]
+            http: WasiHttpCtx::new(),
             channels: HashSet::new(),
         }
     }
