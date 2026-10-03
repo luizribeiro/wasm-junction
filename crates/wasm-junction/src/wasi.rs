@@ -1,4 +1,9 @@
 //! WASI providers implemented by the selected component engine.
+//!
+#![cfg_attr(
+    not(feature = "wasi-http"),
+    doc = "Outgoing HTTP is absent unless its feature is enabled:\n\n```compile_fail\nlet _ = wasm_junction::wasi::http::provider();\n```"
+)]
 
 use crate::{Provided, WASI_PROVIDER_NAME};
 
