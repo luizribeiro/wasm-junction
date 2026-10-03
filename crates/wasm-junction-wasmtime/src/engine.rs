@@ -11,8 +11,9 @@ use wasm_junction_core::WASI_HTTP_PROVIDER_NAME;
 #[cfg(feature = "wasi")]
 use wasm_junction_core::WASI_PROVIDER_NAME;
 use wasm_junction_core::{
-    BoxFuture, CallError, CompiledComponent, Engine, EngineError, FutureHandle, ImportDispatcher,
-    InvocationContext, Resource, StreamHandle, Val, Vals, WasiSettings, validate_resource_lowering,
+    Access, BoxFuture, CallError, CompiledComponent, Engine, EngineError, FutureHandle,
+    ImportDispatcher, InvocationContext, Resource, StreamHandle, Val, Vals, WasiSettings,
+    validate_resource_lowering,
 };
 use wasmtime::component::{
     Component, FutureAny, InstancePre, Linker, ResourceAny, ResourceDynamic, ResourceType,
@@ -20,7 +21,7 @@ use wasmtime::component::{
 };
 use wasmtime::{AsContextMut, Config, Engine as RuntimeEngine, Store};
 #[cfg(feature = "wasi")]
-use wasmtime_wasi::{WasiCtxBuilder, WasiCtxView, WasiView};
+use wasmtime_wasi::{FsPerms, WasiCtxBuilder, WasiCtxView, WasiView};
 #[cfg(feature = "wasi-http")]
 use wasmtime_wasi_http::{WasiHttpCtxView, WasiHttpView, default_hooks};
 
@@ -307,7 +308,7 @@ impl Compiled {
                 context,
                 component,
                 #[cfg(feature = "wasi")]
-                wasi: wasi_context(&wasi),
+                wasi: wasi_context(&wasi)?,
                 resources: self.resources.clone(),
                 owned_resources: HashSet::new(),
                 active_streams: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -574,7 +575,7 @@ fn wasi_settings(context: &InvocationContext) -> WasiSettings {
 }
 
 #[cfg(feature = "wasi")]
-fn wasi_context(settings: &WasiSettings) -> WasiState {
+fn wasi_context(settings: &WasiSettings) -> wasmtime::Result<WasiState> {
     let mut builder = WasiCtxBuilder::new();
     for (name, value) in settings.environment() {
         builder.env(name, value);
@@ -582,7 +583,14 @@ fn wasi_context(settings: &WasiSettings) -> WasiState {
     for argument in settings.arguments() {
         builder.arg(argument);
     }
-    WasiState::new(builder.build())
+    for (host_path, guest_path, access) in settings.preopens() {
+        let permissions = match access {
+            Access::ReadOnly => FsPerms::ReadOnly,
+            Access::ReadWrite => FsPerms::ReadWrite,
+        };
+        builder.preopened_dir(host_path, guest_path, permissions)?;
+    }
+    Ok(WasiState::new(builder.build()))
 }
 
 #[cfg(test)]
