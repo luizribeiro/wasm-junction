@@ -4,12 +4,16 @@
 
 mod support;
 
+use std::collections::BTreeSet;
+use std::path::Path;
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use support::HttpServer;
 use wasm_junction::{
     App, Call, CallError, Component, LoadError, Middleware, Next, Resource, Val, Vals, WasiSettings,
 };
+use wasm_junction_wasmtime::WASI_HTTP_INTERFACES;
 use wasm_junction_wasmtime::WasmtimeEngine;
 
 const COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wasi-http-test.wasm"));
@@ -265,4 +269,79 @@ fn every_http_type_shape_completes() {
     let app = load(SendPolicy { deny: false }, false);
     let result = block_on(app.call("http", EXPORT, "coverage", Vec::new())).unwrap();
     assert_eq!(result, [Val::from("ok")]);
+}
+
+struct RecordHttp(Arc<Mutex<BTreeSet<(String, String)>>>);
+
+impl Middleware for RecordHttp {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.interface.starts_with("wasi:http/") {
+            self.0
+                .lock()
+                .unwrap()
+                .insert((call.interface.to_string(), call.function.to_string()));
+        }
+        next.run(call).await
+    }
+}
+
+#[test]
+fn every_function_in_the_resolved_http_wit_has_a_gate() {
+    let seen = Arc::new(Mutex::new(BTreeSet::new()));
+    let app = load(RecordHttp(seen.clone()), true);
+    block_on(app.call("http", EXPORT, "coverage", Vec::new())).unwrap();
+    let server = HttpServer::start(b"coverage");
+    block_on(app.call(
+        "http",
+        EXPORT,
+        "request",
+        vec![Val::from(server.authority()), Val::from("/coverage")],
+    ))
+    .unwrap();
+    server.finish();
+
+    assert_eq!(*seen.lock().unwrap(), http_wit_functions());
+}
+
+fn http_wit_functions() -> BTreeSet<(String, String)> {
+    let output = Command::new("cargo")
+        .args(["metadata", "--format-version", "1", "--locked"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "cargo metadata failed");
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let manifests: Vec<_> = metadata["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|package| package["name"] == "wasmtime-wasi-http")
+        .map(|package| package["manifest_path"].as_str().unwrap())
+        .collect();
+    assert_eq!(manifests.len(), 1, "expected one resolved HTTP package");
+    let wit = Path::new(manifests[0]).parent().unwrap().join("src/p3/wit");
+    let mut resolve = wit_parser::Resolve::default();
+    resolve.push_dir(wit).unwrap();
+    let mut functions = BTreeSet::new();
+    for (_, package) in &resolve.packages {
+        for (name, interface) in &package.interfaces {
+            let interface_name = package.name.interface_id(name);
+            if !WASI_HTTP_INTERFACES.contains(&interface_name.as_str()) {
+                continue;
+            }
+            let definition = &resolve.interfaces[*interface];
+            for function in definition.functions.keys() {
+                functions.insert((interface_name.clone(), function.clone()));
+            }
+            for (name, type_id) in &definition.types {
+                if matches!(
+                    resolve.types[*type_id].kind,
+                    wit_parser::TypeDefKind::Resource
+                ) {
+                    functions.insert((interface_name.clone(), format!("[drop]{name}")));
+                }
+            }
+        }
+    }
+    functions
 }

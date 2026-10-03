@@ -59,6 +59,10 @@ fn exercise_options() -> Result<(), ErrorCode> {
 }
 
 async fn exercise_request() -> Result<(), ErrorCode> {
+    let (unused_trailers, trailers) = wit_future::new(|| Ok(None));
+    drop(unused_trailers);
+    let (unused, completion) = Request::new(Fields::new(), None, trailers, None);
+    drop((unused, completion));
     let (trailers_writer, trailers_reader) = wit_future::new(|| Ok(None));
     drop(trailers_writer);
     let (request, completion) = Request::new(Fields::new(), None, trailers_reader, None);
@@ -87,6 +91,10 @@ async fn consume_request(
 }
 
 async fn exercise_response() -> Result<(), ErrorCode> {
+    let (unused_trailers, trailers) = wit_future::new(|| Ok(None));
+    drop(unused_trailers);
+    let (unused, completion) = Response::new(Fields::new(), None, trailers);
+    drop((unused, completion));
     let (trailers_writer, trailers_reader) = wit_future::new(|| Ok(None));
     drop(trailers_writer);
     let (response, completion) = Response::new(Fields::new(), None, trailers_reader);
