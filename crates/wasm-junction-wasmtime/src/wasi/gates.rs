@@ -687,6 +687,22 @@ fn p3_result_value<T: ToVal, E: ToVal>(result: Result<T, E>) -> Val {
     })
 }
 
+#[cfg(feature = "wasi-p3")]
+fn convert_trappable<T, E>(
+    result: Result<T, wasmtime_wasi::TrappableError<E>>,
+) -> Result<Result<T, E>, CallError>
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    match result {
+        Ok(value) => Ok(Ok(value)),
+        Err(error) => match error.downcast() {
+            Ok(error) => Ok(Err(error)),
+            Err(error) => Err(CallError::trap(error.to_string())),
+        },
+    }
+}
+
 fn finish_stream<T: FromVal>(
     store: &mut StoreData,
     outcome: Result<Vals, CallError>,
@@ -705,6 +721,31 @@ fn finish_stream<T: FromVal>(
 }
 
 macro_rules! gate {
+    ($linker:ident, $iface:literal, $name:literal, $view:ident, $method:path,
+     plain_result[$denied:expr],
+     ($($arg:ident: $ty:ty),*) -> Result<$ok:ty, $error:ty>) => {
+        $linker.instance($iface)?.func_wrap_async(
+            $name,
+            |mut store, ($($arg,)*): ($($ty,)*)| Box::new(async move {
+                let invocation = store.data().context.invocation_id()
+                    .ok_or_else(|| wasmtime::Error::msg("WASI call has no invocation id"))?;
+                let args = scope_values(vec![$($arg.to_val()),*], invocation);
+                let real: Real = |mut store, args| Box::pin(async move {
+                    #[allow(unused_mut, unused_variables)]
+                    let mut args = args.into_iter();
+                    $(let $arg = <$ty>::from_val(
+                        args.next().ok_or_else(|| shape("another argument"))?
+                    )?;)*
+                    let result = $method(&mut views::$view(store.data_mut()) $(, $arg)*);
+                    Ok(vec![p3_result_value(convert_trappable(result)?)])
+                });
+                let outcome = trampoline::gate(&mut store, $iface, $name, args, real).await;
+                Ok((finish_p3_error(
+                    outcome, $denied, decode_p3_result::<$ok, $error>,
+                )?,))
+            }),
+        )?;
+    };
     ($linker:ident, $iface:literal, $name:literal, $method:path,
      concurrent_result[$data:ty, $getter:path, $denied:expr],
      ($($arg:ident: $ty:ty),*) -> Result<$ok:ty, $error:ty>) => {
@@ -1213,6 +1254,17 @@ mod tests {
         store
     }
 
+    #[cfg(feature = "wasi-http")]
+    fn test_plain_result(
+        _store: &mut StoreData,
+        value: u64,
+    ) -> Result<
+        u64,
+        wasmtime_wasi::TrappableError<wasmtime_wasi_http::p3::bindings::http::types::HeaderError>,
+    > {
+        Ok(value)
+    }
+
     #[test]
     fn stream_errors_round_trip_through_middleware_values() {
         let closed = StreamError::from_val(StreamError::Closed.to_val()).unwrap();
@@ -1286,6 +1338,19 @@ mod tests {
         gate!(linker, "test:p3/error@0.1.0", "probe", test_result_gate,
             concurrent_result[wasmtime::component::HasSelf<StoreData>, store_data, 403_u64],
             (value: u64) -> Result<u64, u64>);
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "wasi-http")]
+    fn plain_p3_error_gates_register() -> wasmtime::Result<()> {
+        use wasmtime_wasi_http::p3::bindings::http::types::HeaderError;
+
+        let engine = wasmtime::Engine::default();
+        let mut linker = Linker::<StoreData>::new(&engine);
+        gate!(linker, "test:p3/error@0.1.0", "probe", store, test_plain_result,
+            plain_result[HeaderError::Forbidden],
+            (value: u64) -> Result<u64, HeaderError>);
         Ok(())
     }
 }
