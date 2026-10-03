@@ -38,6 +38,14 @@ fn validate_request_options(values: &[Val], store: &mut StoreData) -> Result<(),
     )
 }
 
+fn validate_request(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
+    validate_borrowed::<Request>(values.first().ok_or_else(|| shape("request"))?, store)
+}
+
+fn validate_response(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
+    validate_borrowed::<Response>(values.first().ok_or_else(|| shape("response"))?, store)
+}
+
 fn drop_request_options(
     store: &mut StoreData,
     options: Resource<RequestOptions>,
@@ -47,7 +55,9 @@ fn drop_request_options(
 }
 
 pub(super) fn add(linker: &mut Linker<crate::engine::StoreData>) -> wasmtime::Result<()> {
-    use wasmtime_wasi_http::p3::bindings::http::types::{HostFields, HostRequestOptions};
+    use wasmtime_wasi_http::p3::bindings::http::types::{
+        HostFields, HostRequest, HostRequestOptions, HostResponse,
+    };
 
     gate_drop!(
         linker,
@@ -122,6 +132,45 @@ pub(super) fn add(linker: &mut Linker<crate::engine::StoreData>) -> wasmtime::Re
     gate!(linker, "wasi:http/types@0.3.0", "[method]request-options.clone", http,
         HostRequestOptions::clone, plain_with[validate_request_options],
         (options: Resource<RequestOptions>) -> Resource<RequestOptions>);
+    gate!(linker, "wasi:http/types@0.3.0", "[method]request.get-method", http,
+        HostRequest::get_method, plain_with[validate_request],
+        (request: Resource<Request>) -> Method);
+    gate!(linker, "wasi:http/types@0.3.0", "[method]request.set-method", http,
+        HostRequest::set_method, plain_with[validate_request],
+        (request: Resource<Request>, method: Method) -> Result<(), ()>);
+    gate!(linker, "wasi:http/types@0.3.0", "[method]request.get-path-with-query", http,
+        HostRequest::get_path_with_query, plain_with[validate_request],
+        (request: Resource<Request>) -> Option<String>);
+    gate!(linker, "wasi:http/types@0.3.0", "[method]request.set-path-with-query", http,
+        HostRequest::set_path_with_query, plain_with[validate_request],
+        (request: Resource<Request>, path: Option<String>) -> Result<(), ()>);
+    gate!(linker, "wasi:http/types@0.3.0", "[method]request.get-scheme", http,
+        HostRequest::get_scheme, plain_with[validate_request],
+        (request: Resource<Request>) -> Option<Scheme>);
+    gate!(linker, "wasi:http/types@0.3.0", "[method]request.set-scheme", http,
+        HostRequest::set_scheme, plain_with[validate_request],
+        (request: Resource<Request>, scheme: Option<Scheme>) -> Result<(), ()>);
+    gate!(linker, "wasi:http/types@0.3.0", "[method]request.get-authority", http,
+        HostRequest::get_authority, plain_with[validate_request],
+        (request: Resource<Request>) -> Option<String>);
+    gate!(linker, "wasi:http/types@0.3.0", "[method]request.set-authority", http,
+        HostRequest::set_authority, plain_with[validate_request],
+        (request: Resource<Request>, authority: Option<String>) -> Result<(), ()>);
+    gate!(linker, "wasi:http/types@0.3.0", "[method]request.get-options", http,
+        HostRequest::get_options, plain_with[validate_request],
+        (request: Resource<Request>) -> Option<Resource<RequestOptions>>);
+    gate!(linker, "wasi:http/types@0.3.0", "[method]request.get-headers", http,
+        HostRequest::get_headers, plain_with[validate_request],
+        (request: Resource<Request>) -> Resource<Fields>);
+    gate!(linker, "wasi:http/types@0.3.0", "[method]response.get-status-code", http,
+        HostResponse::get_status_code, plain_with[validate_response],
+        (response: Resource<Response>) -> u16);
+    gate!(linker, "wasi:http/types@0.3.0", "[method]response.set-status-code", http,
+        HostResponse::set_status_code, plain_with[validate_response],
+        (response: Resource<Response>, status: u16) -> Result<(), ()>);
+    gate!(linker, "wasi:http/types@0.3.0", "[method]response.get-headers", http,
+        HostResponse::get_headers, plain_with[validate_response],
+        (response: Resource<Response>) -> Resource<Fields>);
     Ok(())
 }
 
