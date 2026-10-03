@@ -1,0 +1,15 @@
+package test:wasi-p3@0.1.0;
+
+interface probe {
+  coverage: async func() -> string;
+}
+
+world fixture {
+  import wasi:clocks/types@0.3.0;
+  import wasi:clocks/monotonic-clock@0.3.0;
+  import wasi:clocks/system-clock@0.3.0;
+  import wasi:random/random@0.3.0;
+  import wasi:random/insecure@0.3.0;
+  import wasi:random/insecure-seed@0.3.0;
+  export probe;
+}
