@@ -1,4 +1,6 @@
 use super::*;
+use wasmtime::component::{ComponentType, FutureReader, StreamReader};
+use wasmtime::{AsContextMut, StoreContextMut};
 use wasmtime_wasi_http::p3::bindings::http::types::{
     DnsErrorPayload, ErrorCode, FieldSizePayload, Fields, HeaderError, Method, Request,
     RequestOptions, RequestOptionsError, Response, Scheme, TlsAlertReceivedPayload,
@@ -46,6 +48,56 @@ fn validate_request(values: &[Val], store: &mut StoreData) -> Result<(), CallErr
 
 fn validate_response(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
     validate_borrowed::<Response>(values.first().ok_or_else(|| shape("response"))?, store)
+}
+
+fn lift_future_plain<T: ComponentType + 'static>(
+    store: &mut StoreContextMut<'_, StoreData>,
+    future: FutureReader<T>,
+) -> wasmtime::Result<Val> {
+    let future = future.try_into_future_any(store.as_context_mut())?;
+    crate::engine::lift_future(future, store.data_mut()).map(Val::Future)
+}
+
+fn lower_future_plain<T: ComponentType + 'static>(
+    store: &mut StoreContextMut<'_, StoreData>,
+    value: Val,
+) -> wasmtime::Result<FutureReader<T>> {
+    let Val::Future(future) = value else {
+        return Err(wasmtime::Error::new(shape("future")));
+    };
+    let future = crate::engine::lower_future(&future, store.data_mut())?;
+    FutureReader::try_from_future_any(future)
+}
+
+fn lift_optional_stream_plain(
+    store: &mut StoreContextMut<'_, StoreData>,
+    stream: Option<StreamReader<u8>>,
+) -> wasmtime::Result<Val> {
+    stream
+        .map(|stream| {
+            let stream = stream.try_into_stream_any(store.as_context_mut())?;
+            crate::streams::lift_stream(stream, store.as_context_mut()).map(Val::Stream)
+        })
+        .transpose()
+        .map(|stream| Val::Option(stream.map(Box::new)))
+}
+
+fn lower_optional_stream_plain(
+    store: &mut StoreContextMut<'_, StoreData>,
+    value: Val,
+) -> wasmtime::Result<Option<StreamReader<u8>>> {
+    let Val::Option(stream) = value else {
+        return Err(wasmtime::Error::new(shape("optional stream")));
+    };
+    stream
+        .map(|stream| {
+            let Val::Stream(stream) = *stream else {
+                return Err(wasmtime::Error::new(shape("stream")));
+            };
+            let stream = crate::streams::lower_stream(stream, store.as_context_mut())?;
+            StreamReader::try_from_stream_any(stream)
+        })
+        .transpose()
 }
 
 fn drop_request_options(
