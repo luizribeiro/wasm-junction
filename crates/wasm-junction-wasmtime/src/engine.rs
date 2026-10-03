@@ -119,6 +119,14 @@ impl StoreData {
     pub(crate) fn remove_wasi_handle_context(&mut self, id: u32) {
         self.wasi.remove_handle_context(id);
     }
+
+    pub(crate) fn set_socket_local_address(&mut self, id: u32, address: Val) {
+        self.wasi.set_socket_local_address(id, address);
+    }
+
+    pub(crate) fn use_socket_local_address(&mut self, id: u32) -> bool {
+        self.wasi.use_socket_local_address(id)
+    }
 }
 
 /// A native component engine backed by Wasmtime.

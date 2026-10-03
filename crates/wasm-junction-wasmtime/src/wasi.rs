@@ -20,6 +20,7 @@ pub(crate) struct WasiState {
     descriptor_preopens: HashMap<u32, String>,
     directory_stream_preopens: HashMap<u32, String>,
     handle_contexts: HashMap<u32, Val>,
+    socket_local_addresses: HashMap<u32, Val>,
 }
 
 #[allow(dead_code)]
@@ -34,6 +35,7 @@ impl WasiState {
             descriptor_preopens: HashMap::new(),
             directory_stream_preopens: HashMap::new(),
             handle_contexts: HashMap::new(),
+            socket_local_addresses: HashMap::new(),
         }
     }
 
@@ -79,6 +81,20 @@ impl WasiState {
 
     pub(crate) fn remove_handle_context(&mut self, id: u32) {
         self.handle_contexts.remove(&id);
+        self.socket_local_addresses.remove(&id);
+    }
+
+    pub(crate) fn set_socket_local_address(&mut self, id: u32, address: Val) {
+        self.socket_local_addresses.insert(id, address.clone());
+        self.set_handle_context(id, address);
+    }
+
+    pub(crate) fn use_socket_local_address(&mut self, id: u32) -> bool {
+        let Some(address) = self.socket_local_addresses.get(&id).cloned() else {
+            return false;
+        };
+        self.set_handle_context(id, address);
+        true
     }
 }
 
