@@ -70,6 +70,7 @@ impl WasiHttpView for StoreData {
 }
 
 #[cfg(feature = "wasi")]
+#[allow(dead_code)]
 impl StoreData {
     pub(crate) fn wasi_table(&mut self) -> &mut wasmtime::component::ResourceTable {
         &mut self.wasi.table
@@ -105,6 +106,18 @@ impl StoreData {
 
     pub(crate) fn remove_directory_stream_preopen(&mut self, id: u32) {
         self.wasi.remove_directory_stream_preopen(id);
+    }
+
+    pub(crate) fn set_wasi_handle_context(&mut self, id: u32, context: Val) {
+        self.wasi.set_handle_context(id, context);
+    }
+
+    pub(crate) fn wasi_handle_context(&self, id: u32) -> Option<&Val> {
+        self.wasi.handle_context(id)
+    }
+
+    pub(crate) fn remove_wasi_handle_context(&mut self, id: u32) {
+        self.wasi.remove_handle_context(id);
     }
 }
 

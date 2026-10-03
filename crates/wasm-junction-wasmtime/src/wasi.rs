@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use wasm_junction_core::Val;
 use wasmtime::component::{Linker, ResourceTable};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 #[cfg(feature = "wasi-http")]
@@ -18,8 +19,10 @@ pub(crate) struct WasiState {
     channels: HashSet<u32>,
     descriptor_preopens: HashMap<u32, String>,
     directory_stream_preopens: HashMap<u32, String>,
+    handle_contexts: HashMap<u32, Val>,
 }
 
+#[allow(dead_code)]
 impl WasiState {
     pub(crate) fn new(context: WasiCtx) -> Self {
         Self {
@@ -30,6 +33,7 @@ impl WasiState {
             channels: HashSet::new(),
             descriptor_preopens: HashMap::new(),
             directory_stream_preopens: HashMap::new(),
+            handle_contexts: HashMap::new(),
         }
     }
 
@@ -63,6 +67,18 @@ impl WasiState {
 
     pub(crate) fn remove_directory_stream_preopen(&mut self, id: u32) {
         self.directory_stream_preopens.remove(&id);
+    }
+
+    pub(crate) fn set_handle_context(&mut self, id: u32, context: Val) {
+        self.handle_contexts.insert(id, context);
+    }
+
+    pub(crate) fn handle_context(&self, id: u32) -> Option<&Val> {
+        self.handle_contexts.get(&id)
+    }
+
+    pub(crate) fn remove_handle_context(&mut self, id: u32) {
+        self.handle_contexts.remove(&id);
     }
 }
 

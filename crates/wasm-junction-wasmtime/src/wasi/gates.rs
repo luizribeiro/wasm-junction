@@ -142,17 +142,57 @@ fn validate_owned<T: WitResource>(
 
 fn validate_input_borrow(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
     let value = values.first().ok_or_else(|| shape("input-stream"))?;
-    validate_borrowed::<DynInputStream>(value, store)
+    validate_borrowed::<DynInputStream>(value, store)?;
+    validate_handle_contexts(values, store)
 }
 
 fn validate_output_borrow(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
     let value = values.first().ok_or_else(|| shape("output-stream"))?;
-    validate_borrowed::<DynOutputStream>(value, store)
+    validate_borrowed::<DynOutputStream>(value, store)?;
+    validate_handle_contexts(values, store)
+}
+
+pub(super) fn add_handle_contexts(values: &mut Vals, store: &StoreData) {
+    let contexts = values
+        .iter()
+        .filter_map(|value| match value {
+            Val::Resource(resource) => store.wasi_handle_context(resource.id()).cloned(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    values.extend(contexts);
+}
+
+pub(super) fn validate_handle_contexts(values: &[Val], store: &StoreData) -> Result<(), CallError> {
+    let expected = values
+        .iter()
+        .filter_map(|value| match value {
+            Val::Resource(resource) => store.wasi_handle_context(resource.id()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if expected.is_empty() {
+        return Ok(());
+    }
+    let start = values
+        .len()
+        .checked_sub(expected.len())
+        .ok_or_else(|| CallError::refused("missing WASI handle context"))?;
+    (values[start..].iter().eq(expected))
+        .then_some(())
+        .ok_or_else(|| CallError::refused("WASI handle context does not match"))
 }
 
 fn validate_splice_borrows(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
-    validate_output_borrow(&values[..1], store)?;
-    validate_input_borrow(&values[1..], store)
+    validate_borrowed::<DynOutputStream>(
+        values.first().ok_or_else(|| shape("output-stream"))?,
+        store,
+    )?;
+    validate_borrowed::<DynInputStream>(
+        values.get(1).ok_or_else(|| shape("input-stream"))?,
+        store,
+    )?;
+    validate_handle_contexts(values, store)
 }
 
 fn validate_error_borrow(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
@@ -236,9 +276,13 @@ fn validate_pollable_borrows(values: &[Val], store: &mut StoreData) -> Result<()
         .context
         .invocation_id()
         .ok_or_else(|| CallError::trap("WASI call has no invocation id"))?;
-    for value in values {
+    let declared = values.first().ok_or_else(|| shape(POLLABLE))?;
+    let pollables = match declared {
+        Val::List(values) => values.as_slice(),
+        value => std::slice::from_ref(value),
+    };
+    for value in pollables {
         match value {
-            Val::List(values) => validate_pollable_borrows(values, store)?,
             Val::Resource(resource) => {
                 validate_resource_for_invocation(
                     resource,
@@ -257,7 +301,7 @@ fn validate_pollable_borrows(values: &[Val], store: &mut StoreData) -> Result<()
             _ => return Err(shape(POLLABLE)),
         }
     }
-    Ok(())
+    validate_handle_contexts(values, store)
 }
 impl ToVal for String {
     fn to_val(self) -> Val {
@@ -935,7 +979,8 @@ macro_rules! gate {
             |mut store, ($($arg,)*): ($($ty,)*)| Box::new(async move {
                 let invocation = store.data().context.invocation_id()
                     .ok_or_else(|| wasmtime::Error::msg("WASI call has no invocation id"))?;
-                let args = scope_values(vec![$($arg.to_val()),*], invocation);
+                let mut args = scope_values(vec![$($arg.to_val()),*], invocation);
+                add_handle_contexts(&mut args, store.data());
                 let real: Real = |mut store, args| Box::pin(async move {
                     $validate(&args, store.data_mut())?;
                     #[allow(unused_mut, unused_variables)]
@@ -1002,6 +1047,7 @@ macro_rules! gate_drop {
                     return Err(wasmtime::Error::new(shape("no results")));
                 }
                 close_channel(store.data_mut(), id, $direction);
+                store.data_mut().remove_wasi_handle_context(id);
                 Ok(())
             }),
         )?;
