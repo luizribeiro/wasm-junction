@@ -103,6 +103,7 @@
               cargo check -p wasm-junction --test bindgen_calls --test bindgen_handles --test bindgen_resources --test bindgen_streams --test bindgen_with --target wasm32-unknown-unknown --no-default-features --locked
               cargo check -p wasm-junction-wasmtime --no-default-features --locked
               cargo check -p wasm-junction --no-default-features --features wasmtime --locked
+              cargo check -p wasm-junction --no-default-features --features wasmtime,wasi-p3 --locked
             '';
           };
           cargo-deny = cargoHook {
@@ -118,6 +119,8 @@
               cargo nextest run -p wasm-junction --no-default-features --locked
               cargo nextest run -p wasm-junction-wasmtime --no-default-features --locked
               cargo nextest run -p wasm-junction --no-default-features --features wasmtime --locked
+              cargo nextest run -p wasm-junction-wasmtime --features wasi-p3 --locked
+              cargo nextest run -p wasm-junction --no-default-features --features wasmtime,wasi-p3 --locked
             '';
             stages = [ "pre-push" ];
           };

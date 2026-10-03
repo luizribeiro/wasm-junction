@@ -1,7 +1,8 @@
 //! A native wasm-junction engine powered by Wasmtime.
 //!
 //! With the default `wasi` feature, WASI Preview 2 interfaces are available through the explicit
-//! provider. Every supplied WASI call is intercepted by application middleware.
+//! provider. The opt-in `wasi-p3` feature adds the supported Preview 3 interfaces. Every supplied
+//! WASI call is intercepted by application middleware.
 //!
 //! The default `parallel-compilation` feature lets Wasmtime compile functions across every
 //! available core. Disable default features when predictable CPU use matters more than load and
