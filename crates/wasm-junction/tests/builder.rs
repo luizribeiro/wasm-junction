@@ -135,6 +135,19 @@ fn wasi_provider_conflicts_with_an_app_provider() {
     assert!(text.contains(&format!("{}:{second_line}", file!())));
 }
 
+#[cfg(all(
+    feature = "wasi-http",
+    feature = "wasmtime",
+    not(target_family = "wasm")
+))]
+#[test]
+fn outgoing_http_provider_is_supported_by_wasmtime() {
+    App::builder()
+        .provide(wasm_junction::wasi::http::provider())
+        .build()
+        .unwrap();
+}
+
 #[cfg(all(feature = "wasi", feature = "wasmtime", not(target_family = "wasm")))]
 #[test]
 fn wasi_preview_three_import_is_missing_with_the_provider() {

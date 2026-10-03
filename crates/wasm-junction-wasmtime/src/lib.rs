@@ -81,3 +81,7 @@ pub const WASI_INTERFACES: &[&str] = &{
 /// Every interface supplied by the provider is gated.
 #[cfg(feature = "wasi")]
 pub const GATED_WASI_INTERFACES: &[&str] = WASI_INTERFACES;
+
+/// WASI outgoing HTTP interfaces supplied by [`WasmtimeEngine`].
+#[cfg(feature = "wasi-http")]
+pub const WASI_HTTP_INTERFACES: &[&str] = &["wasi:http/client@0.3.0", "wasi:http/types@0.3.0"];

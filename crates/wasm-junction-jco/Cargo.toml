@@ -25,7 +25,7 @@ wasm-bindgen-futures = "=0.4.77"
 [target.'cfg(target_family = "wasm")'.dev-dependencies]
 wasm-bindgen-test = "=0.3.77"
 wasm-encoder = "=0.259.0"
-wasm-junction = { path = "../wasm-junction", version = "=0.0.0" }
+wasm-junction = { path = "../wasm-junction", version = "=0.0.0", features = ["wasi-http"] }
 
 [dev-dependencies]
 wasm-junction-conformance = { path = "../wasm-junction-conformance", version = "=0.0.0" }

@@ -43,6 +43,17 @@ fn wasi_provider_is_rejected_during_build() {
     assert!(error.to_string().contains("does not provide WASI yet"));
 }
 
+#[wasm_bindgen_test]
+fn wasi_http_provider_is_rejected_during_build() {
+    let error = App::builder()
+        .provide(wasm_junction::wasi::http::provider())
+        .build()
+        .err()
+        .unwrap();
+
+    assert!(error.to_string().contains("does not provide WASI HTTP yet"));
+}
+
 #[derive(Clone)]
 struct TrackingEngine {
     inner: JcoEngine,

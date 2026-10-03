@@ -6,6 +6,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
+#[cfg(feature = "wasi-http")]
+use wasm_junction_core::WASI_HTTP_PROVIDER_NAME;
 #[cfg(feature = "wasi")]
 use wasm_junction_core::WASI_PROVIDER_NAME;
 use wasm_junction_core::{
@@ -20,6 +22,8 @@ use wasmtime::{AsContextMut, Config, Engine as RuntimeEngine, Store};
 #[cfg(feature = "wasi")]
 use wasmtime_wasi::{WasiCtxBuilder, WasiCtxView, WasiView};
 
+#[cfg(feature = "wasi-http")]
+use crate::WASI_HTTP_INTERFACES;
 #[cfg(feature = "wasi")]
 use crate::WASI_INTERFACES;
 use crate::futures::ActiveFutures;
@@ -111,7 +115,12 @@ impl Engine for WasmtimeEngine {
     fn provider_interfaces(&self, provider: &str) -> Option<&'static [&'static str]> {
         #[cfg(feature = "wasi")]
         {
-            (provider == WASI_PROVIDER_NAME).then_some(WASI_INTERFACES)
+            match provider {
+                WASI_PROVIDER_NAME => Some(WASI_INTERFACES),
+                #[cfg(feature = "wasi-http")]
+                WASI_HTTP_PROVIDER_NAME => Some(WASI_HTTP_INTERFACES),
+                _ => None,
+            }
         }
         #[cfg(not(feature = "wasi"))]
         {
