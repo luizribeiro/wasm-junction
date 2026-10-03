@@ -46,6 +46,49 @@ impl Middleware for RefuseWrite {
     }
 }
 
+enum RewriteOutputStream {
+    Foreign(Mutex<Option<Resource>>),
+    Mistyped,
+    Unscoped,
+}
+
+impl Middleware for RewriteOutputStream {
+    async fn call(&self, mut call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.function.as_ref() == "[method]output-stream.write" {
+            let invocation = call.invocation_id();
+            let Val::Resource(current) = &call.args[0] else {
+                panic!("write did not receive a stream");
+            };
+            let replacement = match self {
+                Self::Foreign(saved) => {
+                    let mut saved = saved.lock().unwrap();
+                    if let Some(foreign) = saved.as_ref() {
+                        Some(foreign.clone())
+                    } else {
+                        *saved = Some(current.clone());
+                        None
+                    }
+                }
+                Self::Mistyped => Some(Resource::__borrowed_for_invocation(
+                    "wasi:io/streams@0.2.12",
+                    "input-stream",
+                    current.id(),
+                    invocation,
+                )),
+                Self::Unscoped => Some(Resource::borrowed(
+                    current.interface(),
+                    current.name(),
+                    current.id(),
+                )),
+            };
+            if let Some(replacement) = replacement {
+                call.args[0] = Val::Resource(replacement);
+            }
+        }
+        next.run(call).await
+    }
+}
+
 struct RecordResourceScope(Arc<Mutex<Option<(InvocationId, InvocationId)>>>);
 
 impl Middleware for RecordResourceScope {
@@ -261,6 +304,45 @@ fn refused_write_is_a_guest_stream_error() {
         panic!("refused write returned the wrong shape");
     };
     assert!(message.contains("write denied by policy"));
+}
+
+#[test]
+fn foreign_output_stream_is_refused() {
+    let (app, runtime) = checked_app(RewriteOutputStream::Foreign(Mutex::new(None)));
+    runtime
+        .block_on(app.call("checked", EXPORT, "refused-write", Vec::new()))
+        .unwrap();
+    let values = runtime
+        .block_on(app.call("checked", EXPORT, "refused-write", Vec::new()))
+        .unwrap();
+    let [Val::String(message)] = values.as_slice() else {
+        panic!("foreign stream returned the wrong shape");
+    };
+    assert!(message.contains("does not belong to this invocation"));
+}
+
+#[test]
+fn mistyped_output_stream_is_refused() {
+    let (app, runtime) = checked_app(RewriteOutputStream::Mistyped);
+    let values = runtime
+        .block_on(app.call("checked", EXPORT, "refused-write", Vec::new()))
+        .unwrap();
+    let [Val::String(message)] = values.as_slice() else {
+        panic!("mistyped stream returned the wrong shape");
+    };
+    assert!(message.contains("does not match the resource type"));
+}
+
+#[test]
+fn unscoped_output_stream_is_refused() {
+    let (app, runtime) = checked_app(RewriteOutputStream::Unscoped);
+    let values = runtime
+        .block_on(app.call("checked", EXPORT, "refused-write", Vec::new()))
+        .unwrap();
+    let [Val::String(message)] = values.as_slice() else {
+        panic!("unscoped stream returned the wrong shape");
+    };
+    assert!(message.contains("does not belong to this invocation"));
 }
 
 #[test]
