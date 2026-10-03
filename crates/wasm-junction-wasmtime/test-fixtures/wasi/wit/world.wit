@@ -29,6 +29,7 @@ interface environment {
   filesystem-channels: func();
   descriptor-handle: func() -> bool;
   directory-stream-handle: func() -> bool;
+  filesystem-differential: func() -> string;
 }
 
 world fixture {

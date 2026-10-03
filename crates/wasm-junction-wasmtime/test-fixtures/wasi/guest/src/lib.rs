@@ -341,6 +341,13 @@ impl exports::test::wasi::environment::Guest for Component {
             Err(wasi::filesystem::types::ErrorCode::Access)
         )
     }
+
+    fn filesystem_differential() -> String {
+        let before = std::fs::read_to_string("/data/note.txt").unwrap();
+        std::fs::write("/data/output.txt", "written").unwrap();
+        let after = std::fs::read_to_string("/data/output.txt").unwrap();
+        format!("{before}|{after}")
+    }
 }
 
 export!(Component);

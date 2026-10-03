@@ -5,10 +5,12 @@
 #[cfg(feature = "wasi-http")]
 mod support;
 
-use wasm_junction::{App, Component as JunctionComponent, Val, WasiSettings};
+use std::path::PathBuf;
+
+use wasm_junction::{Access, App, Component as JunctionComponent, Val, WasiSettings};
 use wasmtime::component::{Component, Linker, ResourceTable, Val as WasmtimeVal};
 use wasmtime::{Config, Engine, Store};
-use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+use wasmtime_wasi::{FsPerms, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 #[cfg(feature = "wasi-http")]
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpCtxView, WasiHttpView};
 
@@ -23,6 +25,23 @@ const HTTP_COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wasi-htt
 #[cfg(feature = "wasi-http")]
 const HTTP_EXPORT: &str = "test:wasi-http/probe@0.1.0";
 
+struct TestDirectory(PathBuf);
+
+impl TestDirectory {
+    fn new(name: &str) -> Self {
+        let path =
+            std::env::temp_dir().join(format!("wasm-junction-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        Self(path)
+    }
+}
+
+impl Drop for TestDirectory {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 struct State {
     context: WasiCtx,
     table: ResourceTable,
@@ -34,6 +53,19 @@ impl State {
     fn configured() -> Self {
         let mut builder = WasiCtxBuilder::new();
         builder.env("GREETING", "hello").arg("alpha");
+        Self {
+            context: builder.build(),
+            table: ResourceTable::new(),
+            #[cfg(feature = "wasi-http")]
+            http: WasiHttpCtx::new(),
+        }
+    }
+
+    fn with_preopen(path: &std::path::Path) -> Self {
+        let mut builder = WasiCtxBuilder::new();
+        builder
+            .preopened_dir(path, "/data", FsPerms::ReadWrite)
+            .unwrap();
         Self {
             context: builder.build(),
             table: ResourceTable::new(),
@@ -90,6 +122,37 @@ async fn plain() -> String {
         .unwrap();
     let [WasmtimeVal::String(result)] = results.as_slice() else {
         panic!("plain WASI returned the wrong shape")
+    };
+    result.clone()
+}
+
+async fn plain_filesystem(path: &std::path::Path) -> String {
+    let mut config = Config::new();
+    config
+        .wasm_component_model_async(true)
+        .concurrency_support(true);
+    let engine = Engine::new(&config).unwrap();
+    let component = Component::new(&engine, COMPONENT).unwrap();
+    let mut linker = Linker::new(&engine);
+    wasmtime_wasi::p2::add_to_linker_async(&mut linker).unwrap();
+    let pre = linker.instantiate_pre(&component).unwrap();
+    let mut store = Store::new(&engine, State::with_preopen(path));
+    let instance = pre.instantiate_async(&mut store).await.unwrap();
+    let interface = instance.get_export_index(&mut store, None, EXPORT).unwrap();
+    let function = instance
+        .get_export_index(&mut store, Some(&interface), "filesystem-differential")
+        .unwrap();
+    let function = instance.get_func(&mut store, function).unwrap();
+    let mut results = vec![WasmtimeVal::String(String::new())];
+    store
+        .run_concurrent(async |accessor| {
+            function.call_concurrent(accessor, &[], &mut results).await
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    let [WasmtimeVal::String(result)] = results.as_slice() else {
+        panic!("plain filesystem returned the wrong shape")
     };
     result.clone()
 }
@@ -202,6 +265,52 @@ fn gated_and_plain_wasi_match_for_standard_interfaces() {
         panic!("gated WASI returned the wrong shape")
     };
     assert_eq!(gated, &runtime.block_on(plain()));
+}
+
+#[test]
+fn gated_and_plain_filesystems_match_on_temporary_directories() {
+    let root = TestDirectory::new("differential");
+    let gated_dir = root.0.join("gated");
+    let plain_dir = root.0.join("plain");
+    for directory in [&gated_dir, &plain_dir] {
+        std::fs::create_dir_all(directory).unwrap();
+        std::fs::write(directory.join("note.txt"), "note").unwrap();
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let app = App::builder()
+        .engine(wasm_junction_wasmtime::WasmtimeEngine::new().unwrap())
+        .provide(wasm_junction::wasi::provider())
+        .build()
+        .unwrap();
+    app.configure(
+        "gated-files",
+        WasiSettings::new().preopen(&gated_dir, "/data", Access::ReadWrite),
+    )
+    .unwrap();
+    runtime
+        .block_on(
+            app.load(
+                JunctionComponent::from_bytes(COMPONENT)
+                    .unwrap()
+                    .named("gated-files"),
+            ),
+        )
+        .unwrap();
+    let gated = runtime
+        .block_on(app.call("gated-files", EXPORT, "filesystem-differential", Vec::new()))
+        .unwrap();
+    let plain = runtime.block_on(plain_filesystem(&plain_dir));
+    assert_eq!(gated, [Val::from(plain)]);
+    assert_eq!(
+        std::fs::read_to_string(gated_dir.join("output.txt")).unwrap(),
+        "written"
+    );
+    assert_eq!(
+        std::fs::read_to_string(plain_dir.join("output.txt")).unwrap(),
+        "written"
+    );
 }
 
 #[test]
