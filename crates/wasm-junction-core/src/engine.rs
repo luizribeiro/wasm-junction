@@ -17,14 +17,19 @@ pub const WASI_HTTP_PROVIDER_NAME: &str = "WASI HTTP";
 /// ```
 /// use wasm_junction_core::WasiSettings;
 ///
-/// let settings = WasiSettings::new().env("MODE", "preview").arg("notes.txt");
+/// let settings = WasiSettings::new()
+///     .env("MODE", "preview")
+///     .arg("notes.txt")
+///     .network(true);
 /// assert_eq!(settings.environment().collect::<Vec<_>>(), [("MODE", "preview")]);
 /// assert_eq!(settings.arguments().collect::<Vec<_>>(), ["notes.txt"]);
+/// assert!(settings.network_enabled());
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WasiSettings {
     environment: BTreeMap<String, String>,
     arguments: Vec<String>,
+    network: bool,
 }
 
 impl WasiSettings {
@@ -34,6 +39,7 @@ impl WasiSettings {
         Self {
             environment: BTreeMap::new(),
             arguments: Vec::new(),
+            network: false,
         }
     }
 
@@ -51,6 +57,16 @@ impl WasiSettings {
         self
     }
 
+    /// Enables or disables outgoing HTTP connections for the component.
+    ///
+    /// Network access is disabled by default. This per-component switch is checked at each send;
+    /// middleware remains responsible for policy such as allowed origins.
+    #[must_use]
+    pub const fn network(mut self, enabled: bool) -> Self {
+        self.network = enabled;
+        self
+    }
+
     /// Returns the configured environment variables in name order.
     #[must_use]
     pub fn environment(&self) -> impl ExactSizeIterator<Item = (&str, &str)> {
@@ -63,6 +79,29 @@ impl WasiSettings {
     #[must_use]
     pub fn arguments(&self) -> impl ExactSizeIterator<Item = &str> {
         self.arguments.iter().map(String::as_str)
+    }
+
+    /// Reports whether outgoing HTTP connections are enabled.
+    #[must_use]
+    pub const fn network_enabled(&self) -> bool {
+        self.network
+    }
+}
+
+#[cfg(test)]
+mod wasi_settings_tests {
+    use super::WasiSettings;
+
+    #[test]
+    fn network_is_off_by_default_and_can_be_enabled() {
+        assert!(!WasiSettings::new().network_enabled());
+        assert!(WasiSettings::new().network(true).network_enabled());
+        assert!(
+            !WasiSettings::new()
+                .network(true)
+                .network(false)
+                .network_enabled()
+        );
     }
 }
 
