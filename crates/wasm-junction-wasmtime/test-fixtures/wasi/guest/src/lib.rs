@@ -51,6 +51,30 @@ impl exports::test::wasi::environment::Guest for Component {
         let _ = pollable.ready();
         pollable.block();
         let _ = wasi::io::poll::poll(&[&pollable]);
+
+        let input = wasi::cli::stdin::get_stdin();
+        let _ = input.read(0);
+        let _ = input.blocking_read(0);
+        let _ = input.skip(0);
+        let _ = input.blocking_skip(0);
+        drop(input.subscribe());
+
+        let output = wasi::cli::stdout::get_stdout();
+        let _ = output.check_write();
+        let refused = output.write(&[0xfa]);
+        if let Err(wasi::io::streams::StreamError::LastOperationFailed(error)) = refused {
+            let _ = error.to_debug_string();
+            drop(error);
+        }
+        let _ = output.blocking_write_and_flush(&[]);
+        let _ = output.flush();
+        let _ = output.blocking_flush();
+        drop(output.subscribe());
+        let _ = output.check_write();
+        let _ = output.write_zeroes(0);
+        let _ = output.blocking_write_zeroes_and_flush(0);
+        let _ = output.splice(&input, 0);
+        let _ = output.blocking_splice(&input, 0);
     }
 
     fn differential() -> String {

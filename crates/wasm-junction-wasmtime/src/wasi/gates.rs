@@ -4,6 +4,7 @@ use wasm_junction_core::{
 };
 use wasmtime::component::{Linker, Resource};
 use wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime;
+use wasmtime_wasi::p2::bindings::io::error::HostError;
 use wasmtime_wasi::p2::bindings::io::streams::{
     self, HostInputStream, HostOutputStream, StreamError,
 };
@@ -107,6 +108,10 @@ fn validate_output_borrow(values: &[Val], store: &mut StoreData) -> Result<(), C
 fn validate_splice_borrows(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
     validate_output_borrow(&values[..1], store)?;
     validate_input_borrow(&values[1..], store)
+}
+
+fn validate_error_borrow(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
+    validate_borrowed::<IoError>(values.first().ok_or_else(|| shape("error"))?, store)
 }
 
 fn open_channel(
@@ -535,6 +540,11 @@ macro_rules! gate {
         gate!(@define $linker, $iface, $name, $view, $method, validate_output_borrow, ,
             $signature -> $ok, one);
     };
+    ($linker:ident, $iface:literal, $name:literal, $view:ident, $method:path, error_borrowed,
+     $signature:tt -> $ok:ty) => {
+        gate!(@define $linker, $iface, $name, $view, $method, validate_error_borrow, ,
+            $signature -> $ok, one);
+    };
     (@define $linker:ident, $iface:literal, $name:literal, $view:ident, $method:path,
      $validate:ident, $($await:ident)?, ($($arg:ident: $ty:ty),*) -> $ok:ty, $shape:ident) => {
         $linker.instance($iface)?.func_wrap_async(
@@ -743,6 +753,21 @@ pub(super) fn add_streams(linker: &mut Linker<StoreData>) -> wasmtime::Result<()
     gate!(linker, "wasi:io/streams@0.2.12", "[method]output-stream.blocking-splice",
         HostOutputStream::blocking_splice, splice, await,
         (stream: Resource<DynOutputStream>, input: Resource<DynInputStream>, len: u64) -> u64);
+    Ok(())
+}
+
+pub(super) fn add_error(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    gate_drop!(
+        linker,
+        ERROR_INTERFACE,
+        ERROR,
+        "[drop]error",
+        IoError,
+        None,
+        HostError::drop
+    );
+    gate!(linker, "wasi:io/error@0.2.12", "[method]error.to-debug-string", io,
+        HostError::to_debug_string, error_borrowed, (error: Resource<IoError>) -> String);
     Ok(())
 }
 

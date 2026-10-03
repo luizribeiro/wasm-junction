@@ -25,6 +25,11 @@ impl Middleware for RecordGates {
                 .unwrap()
                 .insert((call.interface.to_string(), call.function.to_string()));
         }
+        if call.function.as_ref() == "[method]output-stream.write"
+            && call.args.get(1) == Some(&Val::Bytes(vec![0xfa]))
+        {
+            return Err(CallError::refused("fixture write denied"));
+        }
         next.run(call).await
     }
 }
@@ -151,7 +156,9 @@ fn gated_wasi_set_changes_only_deliberately() {
             "wasi:cli/environment@0.2.12",
             "wasi:clocks/monotonic-clock@0.2.12",
             "wasi:clocks/wall-clock@0.2.12",
+            "wasi:io/error@0.2.12",
             "wasi:io/poll@0.2.12",
+            "wasi:io/streams@0.2.12",
         ]
     );
 }
@@ -323,9 +330,20 @@ fn wit_functions() -> BTreeSet<(String, String)> {
                 .keys()
                 .map(move |function| (interface_name.clone(), function.clone()))
         })
-        .chain([(
-            "wasi:io/poll@0.2.12".to_owned(),
-            "[drop]pollable".to_owned(),
-        )])
+        .chain([
+            ("wasi:io/error@0.2.12".to_owned(), "[drop]error".to_owned()),
+            (
+                "wasi:io/poll@0.2.12".to_owned(),
+                "[drop]pollable".to_owned(),
+            ),
+            (
+                "wasi:io/streams@0.2.12".to_owned(),
+                "[drop]input-stream".to_owned(),
+            ),
+            (
+                "wasi:io/streams@0.2.12".to_owned(),
+                "[drop]output-stream".to_owned(),
+            ),
+        ])
         .collect()
 }
