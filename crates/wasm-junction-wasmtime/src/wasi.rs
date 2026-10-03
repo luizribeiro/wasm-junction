@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use wasmtime::component::{Linker, ResourceTable};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
@@ -16,8 +16,12 @@ pub(crate) struct WasiState {
     #[cfg(feature = "wasi-http")]
     pub(crate) http: WasiHttpCtx,
     channels: HashSet<u32>,
+    descriptor_preopens: HashMap<u32, String>,
+    #[allow(dead_code)]
+    directory_stream_preopens: HashMap<u32, String>,
 }
 
+#[allow(dead_code)]
 impl WasiState {
     pub(crate) fn new(context: WasiCtx) -> Self {
         Self {
@@ -26,6 +30,8 @@ impl WasiState {
             #[cfg(feature = "wasi-http")]
             http: WasiHttpCtx::new(),
             channels: HashSet::new(),
+            descriptor_preopens: HashMap::new(),
+            directory_stream_preopens: HashMap::new(),
         }
     }
 
@@ -35,6 +41,30 @@ impl WasiState {
 
     pub(crate) fn close_channel(&mut self, id: u32) -> bool {
         self.channels.remove(&id)
+    }
+
+    pub(crate) fn set_descriptor_preopen(&mut self, id: u32, guest_path: String) {
+        self.descriptor_preopens.insert(id, guest_path);
+    }
+
+    pub(crate) fn descriptor_preopen(&self, id: u32) -> Option<&str> {
+        self.descriptor_preopens.get(&id).map(String::as_str)
+    }
+
+    pub(crate) fn remove_descriptor_preopen(&mut self, id: u32) {
+        self.descriptor_preopens.remove(&id);
+    }
+
+    pub(crate) fn set_directory_stream_preopen(&mut self, id: u32, guest_path: String) {
+        self.directory_stream_preopens.insert(id, guest_path);
+    }
+
+    pub(crate) fn directory_stream_preopen(&self, id: u32) -> Option<&str> {
+        self.directory_stream_preopens.get(&id).map(String::as_str)
+    }
+
+    pub(crate) fn remove_directory_stream_preopen(&mut self, id: u32) {
+        self.directory_stream_preopens.remove(&id);
     }
 }
 
@@ -58,6 +88,7 @@ pub(crate) fn add_gates(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> 
     gates::add_poll(linker)?;
     gates::add_streams(linker)?;
     gates::add_error(linker)?;
+    gates::add_filesystem(linker)?;
     #[cfg(feature = "wasi-p3")]
     gates::add_p3(linker)?;
     #[cfg(feature = "wasi-http")]

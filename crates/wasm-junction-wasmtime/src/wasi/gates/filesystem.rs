@@ -6,6 +6,11 @@ use wasmtime_wasi::p2::bindings::filesystem::types::{
 
 use super::{FromVal, ToVal, WitResource, shape};
 use wasm_junction_core::{CallError, Val};
+use wasmtime::component::Linker;
+use wasmtime_wasi::p2::bindings::filesystem::preopens;
+
+use super::{Real, finish, scope_values, trampoline, views};
+use crate::engine::StoreData;
 
 const INTERFACE: &str = "wasi:filesystem/types@0.2.12";
 const DESCRIPTOR: &str = "descriptor";
@@ -284,3 +289,43 @@ impl<T: FromVal> FromVal for Result<T, ErrorCode> {
 }
 
 list_value!((Resource<types::Descriptor>, String));
+
+pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    linker
+        .instance("wasi:filesystem/preopens@0.2.12")?
+        .func_wrap_async("get-directories", |mut store, (): ()| {
+            Box::new(async move {
+                let real: Real = |mut store, _args| {
+                    Box::pin(async move {
+                        let directories = preopens::Host::get_directories(&mut views::filesystem(
+                            store.data_mut(),
+                        ))
+                        .map_err(|error| CallError::trap(error.to_string()))?;
+                        for (descriptor, guest_path) in &directories {
+                            store
+                                .data_mut()
+                                .set_descriptor_preopen(descriptor.rep(), guest_path.clone());
+                        }
+                        let invocation = store
+                            .data()
+                            .context
+                            .invocation_id()
+                            .ok_or_else(|| CallError::trap("WASI call has no invocation id"))?;
+                        Ok(scope_values(vec![directories.to_val()], invocation))
+                    })
+                };
+                let outcome = trampoline::gate(
+                    &mut store,
+                    "wasi:filesystem/preopens@0.2.12",
+                    "get-directories",
+                    Vec::new(),
+                    real,
+                )
+                .await;
+                Ok((finish::<Vec<(Resource<types::Descriptor>, String)>>(
+                    outcome,
+                )?,))
+            })
+        })?;
+    Ok(())
+}

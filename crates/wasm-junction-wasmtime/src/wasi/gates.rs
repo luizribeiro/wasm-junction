@@ -1077,6 +1077,10 @@ pub(super) fn add_http(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     http::add(linker)
 }
 
+pub(super) fn add_filesystem(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    filesystem::add(linker)
+}
+
 pub(super) fn add_environment(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     gate!(linker, "wasi:cli/environment@0.2.12", "get-environment", cli,
         wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment,
@@ -1330,6 +1334,7 @@ pub(super) fn add_poll(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 mod views {
     use wasmtime_wasi::cli::WasiCliView;
     use wasmtime_wasi::clocks::WasiClocksView;
+    use wasmtime_wasi::filesystem::WasiFilesystemView;
     use wasmtime_wasi::random::WasiRandomView;
 
     use crate::engine::StoreData;
@@ -1344,6 +1349,12 @@ mod views {
 
     pub(super) fn io(store: &mut StoreData) -> &mut wasmtime::component::ResourceTable {
         store.wasi_table()
+    }
+
+    pub(super) fn filesystem(
+        store: &mut StoreData,
+    ) -> wasmtime_wasi::filesystem::WasiFilesystemCtxView<'_> {
+        store.filesystem()
     }
 
     pub(super) fn random(store: &mut StoreData) -> &mut wasmtime_wasi::random::WasiRandomCtx {

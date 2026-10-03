@@ -70,6 +70,7 @@ impl WasiHttpView for StoreData {
 }
 
 #[cfg(feature = "wasi")]
+#[allow(dead_code)]
 impl StoreData {
     pub(crate) fn wasi_table(&mut self) -> &mut wasmtime::component::ResourceTable {
         &mut self.wasi.table
@@ -81,6 +82,30 @@ impl StoreData {
 
     pub(crate) fn close_wasi_channel(&mut self, id: u32) -> bool {
         self.wasi.close_channel(id)
+    }
+
+    pub(crate) fn set_descriptor_preopen(&mut self, id: u32, guest_path: String) {
+        self.wasi.set_descriptor_preopen(id, guest_path);
+    }
+
+    pub(crate) fn descriptor_preopen(&self, id: u32) -> Option<&str> {
+        self.wasi.descriptor_preopen(id)
+    }
+
+    pub(crate) fn remove_descriptor_preopen(&mut self, id: u32) {
+        self.wasi.remove_descriptor_preopen(id);
+    }
+
+    pub(crate) fn set_directory_stream_preopen(&mut self, id: u32, guest_path: String) {
+        self.wasi.set_directory_stream_preopen(id, guest_path);
+    }
+
+    pub(crate) fn directory_stream_preopen(&self, id: u32) -> Option<&str> {
+        self.wasi.directory_stream_preopen(id)
+    }
+
+    pub(crate) fn remove_directory_stream_preopen(&mut self, id: u32) {
+        self.wasi.remove_directory_stream_preopen(id);
     }
 }
 
