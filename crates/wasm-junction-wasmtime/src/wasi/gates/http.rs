@@ -1,8 +1,8 @@
 use super::{FromVal, ToVal, WitResource, shape};
 use wasm_junction_core::{CallError, Val};
 use wasmtime_wasi_http::p3::bindings::http::types::{
-    ErrorCode, FieldSizePayload, Fields, HeaderError, Method, Request, RequestOptions,
-    RequestOptionsError, Response, Scheme,
+    DnsErrorPayload, ErrorCode, FieldSizePayload, Fields, HeaderError, Method, Request,
+    RequestOptions, RequestOptionsError, Response, Scheme, TlsAlertReceivedPayload,
 };
 
 const TYPES: &str = "wasi:http/types@0.3.0";
@@ -225,6 +225,99 @@ impl ToVal for ErrorCode {
     }
 }
 
+fn payload<T: FromVal>(value: Option<Box<Val>>, expected: &str) -> Result<T, CallError> {
+    value
+        .ok_or_else(|| shape(expected))
+        .and_then(|value| T::from_val(*value))
+}
+
+fn fields<const N: usize>(value: Val, expected: &str) -> Result<[Val; N], CallError> {
+    let Val::Record(fields) = value else {
+        return Err(shape(expected));
+    };
+    fields
+        .into_iter()
+        .map(|(_, value)| value)
+        .collect::<Vec<_>>()
+        .try_into()
+        .map_err(|_| shape(expected))
+}
+
+fn no_payload(value: &Option<Box<Val>>) -> Result<(), CallError> {
+    if value.is_none() {
+        Ok(())
+    } else {
+        Err(shape("payload-free error-code"))
+    }
+}
+
+fn decode_transport_error(
+    case: &str,
+    value: Option<Box<Val>>,
+) -> Option<Result<ErrorCode, CallError>> {
+    let decoded = match case {
+        "DNS-timeout" => no_payload(&value).map(|()| ErrorCode::DnsTimeout),
+        "DNS-error" => (|| {
+            let [rcode, info_code] = fields(
+                *value.ok_or_else(|| shape("DNS-error payload"))?,
+                "DNS-error payload",
+            )?;
+            Ok(ErrorCode::DnsError(DnsErrorPayload {
+                rcode: Option::<String>::from_val(rcode)?,
+                info_code: Option::<u16>::from_val(info_code)?,
+            }))
+        })(),
+        "destination-not-found" => no_payload(&value).map(|()| ErrorCode::DestinationNotFound),
+        "destination-unavailable" => no_payload(&value).map(|()| ErrorCode::DestinationUnavailable),
+        "destination-IP-prohibited" => {
+            no_payload(&value).map(|()| ErrorCode::DestinationIpProhibited)
+        }
+        "destination-IP-unroutable" => {
+            no_payload(&value).map(|()| ErrorCode::DestinationIpUnroutable)
+        }
+        "connection-refused" => no_payload(&value).map(|()| ErrorCode::ConnectionRefused),
+        "connection-terminated" => no_payload(&value).map(|()| ErrorCode::ConnectionTerminated),
+        "connection-timeout" => no_payload(&value).map(|()| ErrorCode::ConnectionTimeout),
+        "connection-read-timeout" => no_payload(&value).map(|()| ErrorCode::ConnectionReadTimeout),
+        "connection-write-timeout" => {
+            no_payload(&value).map(|()| ErrorCode::ConnectionWriteTimeout)
+        }
+        "connection-limit-reached" => {
+            no_payload(&value).map(|()| ErrorCode::ConnectionLimitReached)
+        }
+        "TLS-protocol-error" => no_payload(&value).map(|()| ErrorCode::TlsProtocolError),
+        "TLS-certificate-error" => no_payload(&value).map(|()| ErrorCode::TlsCertificateError),
+        "TLS-alert-received" => (|| {
+            let [alert_id, alert_message] = fields(
+                *value.ok_or_else(|| shape("TLS alert payload"))?,
+                "TLS alert payload",
+            )?;
+            Ok(ErrorCode::TlsAlertReceived(TlsAlertReceivedPayload {
+                alert_id: Option::<u8>::from_val(alert_id)?,
+                alert_message: Option::<String>::from_val(alert_message)?,
+            }))
+        })(),
+        _ => return None,
+    };
+    Some(decoded)
+}
+
+impl FromVal for ErrorCode {
+    fn from_val(value: Val) -> Result<Self, CallError> {
+        let Val::Variant { case, value } = value else {
+            return Err(shape("error-code"));
+        };
+        if let Some(decoded) = decode_transport_error(&case, value.clone()) {
+            return decoded;
+        }
+        match case.as_str() {
+            "HTTP-request-denied" => no_payload(&value).map(|()| Self::HttpRequestDenied),
+            "internal-error" => payload(value, "internal error").map(Self::InternalError),
+            _ => Err(shape("error-code case")),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,5 +360,14 @@ mod tests {
                 ))))),
             )
         );
+        let error = ErrorCode::DnsError(DnsErrorPayload {
+            rcode: Some("refused".to_owned()),
+            info_code: Some(5),
+        });
+        let ErrorCode::DnsError(decoded) = ErrorCode::from_val(error.to_val()).unwrap() else {
+            panic!("DNS error changed case");
+        };
+        assert_eq!(decoded.rcode.as_deref(), Some("refused"));
+        assert_eq!(decoded.info_code, Some(5));
     }
 }
