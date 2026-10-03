@@ -10,7 +10,6 @@ use std::sync::{Arc, Mutex};
 #[cfg(feature = "wasi-p3")]
 use std::{collections::BTreeSet, path::Path, process::Command};
 
-#[cfg(not(feature = "wasi-p3"))]
 use wasm_junction::LoadError;
 use wasm_junction::{App, Component};
 #[cfg(feature = "wasi-p3")]
@@ -18,6 +17,10 @@ use wasm_junction::{Call, CallError, CallErrorKind, Middleware, Next, Val, Vals}
 #[cfg(feature = "wasi-p3")]
 use wasm_junction_wasmtime::WASI_INTERFACES;
 use wasm_junction_wasmtime::WasmtimeEngine;
+#[cfg(feature = "wasi-p3")]
+use wit_component::{ComponentEncoder, StringEncoding, dummy_module, embed_component_metadata};
+#[cfg(feature = "wasi-p3")]
+use wit_parser::{ManglingAndAbi, Resolve};
 
 const COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wasi-p3-test.wasm"));
 #[cfg(feature = "wasi-p3")]
@@ -174,4 +177,47 @@ fn p3_wit_functions() -> BTreeSet<(String, String)> {
                 .map(move |function| (interface.clone(), function.clone()))
         })
         .collect()
+}
+
+#[test]
+#[cfg(feature = "wasi-p3")]
+fn ungated_p3_interfaces_remain_missing() {
+    let app = App::builder()
+        .engine(WasmtimeEngine::new().unwrap())
+        .provide(wasm_junction::wasi::provider())
+        .build()
+        .unwrap();
+
+    for (package, interface) in [
+        ("filesystem", "types"),
+        ("sockets", "tcp"),
+        ("http", "types"),
+    ] {
+        let name = format!("wasi:{package}/{interface}@0.3.0");
+        let component = Component::from_bytes(component_importing(package, interface))
+            .unwrap()
+            .named(package);
+        let LoadError::MissingImports(missing) = block_on(app.load(component)).unwrap_err() else {
+            panic!("expected {name} to remain missing");
+        };
+        assert_eq!(missing.interfaces(), [name]);
+    }
+}
+
+#[cfg(feature = "wasi-p3")]
+fn component_importing(package: &str, interface: &str) -> Vec<u8> {
+    let wit = format!(
+        "package wasi:{package}@0.3.0; interface {interface} {{ probe: func(); }} world fixture {{ import {interface}; }}"
+    );
+    let mut resolve = Resolve::default();
+    let package = resolve.push_str("fixture.wit", &wit).unwrap();
+    let world = resolve.select_world(&[package], Some("fixture")).unwrap();
+    let mut module = dummy_module(&resolve, world, ManglingAndAbi::Standard32);
+    embed_component_metadata(&mut module, &resolve, world, StringEncoding::UTF8).unwrap();
+    ComponentEncoder::default()
+        .module(&module)
+        .unwrap()
+        .validate(true)
+        .encode()
+        .unwrap()
 }
