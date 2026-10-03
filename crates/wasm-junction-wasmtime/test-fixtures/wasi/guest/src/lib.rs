@@ -99,8 +99,23 @@ impl exports::test::wasi::environment::Guest for Component {
         let timers_ordered = ready == [0]
             && timer_elapsed >= 10_000_000
             && timer_elapsed < 5_000_000_000;
+        let input = wasi::cli::stdin::get_stdin();
+        let output = wasi::cli::stdout::get_stdout();
+        let stream = format!(
+            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+            input.read(0),
+            input.skip(0),
+            input.subscribe().ready(),
+            output.check_write(),
+            output.write_zeroes(0),
+            output.flush(),
+            output.blocking_flush(),
+            output.splice(&input, 0),
+            output.blocking_write_and_flush(&[]),
+            output.subscribe().ready(),
+        );
         format!(
-            "{environment:?}|{arguments:?}|{cwd:?}|{}:{}|{monotonic}|{}|{}|{timers_ordered}",
+            "{environment:?}|{arguments:?}|{cwd:?}|{}:{}|{monotonic}|{}|{}|{timers_ordered}|{stream}",
             wall.seconds,
             wall.nanoseconds,
             wall_now.seconds > 0,
