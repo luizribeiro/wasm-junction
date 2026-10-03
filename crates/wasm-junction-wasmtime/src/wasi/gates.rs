@@ -4,6 +4,7 @@ use wasm_junction_core::{
 };
 use wasmtime::component::{Linker, Resource};
 use wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime;
+use wasmtime_wasi::p2::bindings::io::streams::StreamError;
 use wasmtime_wasi::p2::{DynInputStream, DynOutputStream, DynPollable, IoError};
 
 use super::trampoline::{self, Real};
@@ -307,6 +308,68 @@ impl FromVal for Datetime {
     }
 }
 
+impl ToVal for () {
+    fn to_val(self) -> Val {
+        Val::Tuple(Vec::new())
+    }
+}
+
+impl FromVal for () {
+    fn from_val(_value: Val) -> Result<Self, CallError> {
+        Ok(())
+    }
+}
+
+impl ToVal for StreamError {
+    fn to_val(self) -> Val {
+        match self {
+            Self::Closed => Val::Variant {
+                case: "closed".to_owned(),
+                value: None,
+            },
+            Self::LastOperationFailed(error) => Val::Variant {
+                case: "last-operation-failed".to_owned(),
+                value: Some(Box::new(error.to_val())),
+            },
+        }
+    }
+}
+
+impl FromVal for StreamError {
+    fn from_val(value: Val) -> Result<Self, CallError> {
+        match value {
+            Val::Variant { case, value: None } if case == "closed" => Ok(Self::Closed),
+            Val::Variant {
+                case,
+                value: Some(error),
+            } if case == "last-operation-failed" => {
+                Resource::from_val(*error).map(Self::LastOperationFailed)
+            }
+            _ => Err(shape("stream-error")),
+        }
+    }
+}
+
+impl<T: ToVal> ToVal for Result<T, StreamError> {
+    fn to_val(self) -> Val {
+        Val::Result(match self {
+            Ok(value) => Ok(Some(Box::new(value.to_val()))),
+            Err(error) => Err(Some(Box::new(error.to_val()))),
+        })
+    }
+}
+
+impl<T: FromVal> FromVal for Result<T, StreamError> {
+    fn from_val(value: Val) -> Result<Self, CallError> {
+        match value {
+            Val::Result(Ok(Some(value))) => T::from_val(*value).map(Ok),
+            Val::Result(Ok(None)) => T::from_val(Val::Tuple(Vec::new())).map(Ok),
+            Val::Result(Err(Some(error))) => StreamError::from_val(*error).map(Err),
+            _ => Err(shape("stream result")),
+        }
+    }
+}
+
 fn finish<T: FromVal>(outcome: Result<Vals, CallError>) -> wasmtime::Result<T> {
     let values = outcome.map_err(wasmtime::Error::new)?;
     let [value] = <[Val; 1]>::try_from(values).map_err(|_| shape("one result"))?;
@@ -500,5 +563,24 @@ mod views {
 
     pub(super) fn io(store: &mut StoreData) -> &mut wasmtime::component::ResourceTable {
         store.wasi_table()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stream_errors_round_trip_through_middleware_values() {
+        let closed = StreamError::from_val(StreamError::Closed.to_val()).unwrap();
+        assert!(matches!(closed, StreamError::Closed));
+
+        let encoded = StreamError::LastOperationFailed(Resource::<IoError>::new_own(17)).to_val();
+        let decoded = StreamError::from_val(encoded).unwrap();
+        let StreamError::LastOperationFailed(error) = decoded else {
+            panic!("last-operation-failed changed cases");
+        };
+        assert!(error.owned());
+        assert_eq!(error.rep(), 17);
     }
 }
