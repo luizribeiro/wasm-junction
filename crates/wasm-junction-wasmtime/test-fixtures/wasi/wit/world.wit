@@ -20,6 +20,7 @@ interface environment {
   exit-code: func();
   terminal-handles: func();
   benchmark-write: func(bytes: list<u8>) -> list<u8>;
+  filesystem-coverage: func();
 }
 
 world fixture {

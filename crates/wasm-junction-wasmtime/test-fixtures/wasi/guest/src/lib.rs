@@ -72,6 +72,7 @@ impl exports::test::wasi::environment::Guest for Component {
         let _ = output.check_write();
         let refused = output.write(&[0xfa]);
         if let Err(wasi::io::streams::StreamError::LastOperationFailed(error)) = refused {
+            let _ = wasi::filesystem::types::filesystem_error_code(&error);
             let _ = error.to_debug_string();
             drop(error);
         }
@@ -209,6 +210,59 @@ impl exports::test::wasi::environment::Guest for Component {
         }
         output.blocking_flush().unwrap();
         bytes
+    }
+
+    fn filesystem_coverage() {
+        use wasi::filesystem::types::{
+            Advice, DescriptorFlags, NewTimestamp, OpenFlags, PathFlags,
+        };
+
+        let Some((directory, _)) = wasi::filesystem::preopens::get_directories().into_iter().next()
+        else {
+            return;
+        };
+        let file = directory
+            .open_at(
+                PathFlags::empty(),
+                "note.txt",
+                OpenFlags::empty(),
+                DescriptorFlags::READ | DescriptorFlags::WRITE,
+            )
+            .unwrap();
+        drop(file.read_via_stream(0));
+        drop(file.write_via_stream(0));
+        drop(file.append_via_stream());
+        let _ = file.advise(0, 0, Advice::Normal);
+        let _ = file.sync_data();
+        let _ = file.get_flags();
+        let _ = file.get_type();
+        let _ = file.set_size(4);
+        let _ = file.set_times(NewTimestamp::NoChange, NewTimestamp::NoChange);
+        let _ = file.read(4, 0);
+        let _ = file.write(b"note", 0);
+        let entries = directory.read_directory().unwrap();
+        let _ = entries.read_directory_entry();
+        drop(entries);
+        let _ = file.sync();
+        let _ = directory.create_directory_at("coverage-dir");
+        let _ = directory.stat();
+        let _ = directory.stat_at(PathFlags::empty(), "note.txt");
+        let _ = directory.set_times_at(
+            PathFlags::empty(),
+            "note.txt",
+            NewTimestamp::NoChange,
+            NewTimestamp::NoChange,
+        );
+        let _ = directory.link_at(PathFlags::empty(), "note.txt", &directory, "hard-link");
+        let _ = directory.symlink_at("note.txt", "symbolic-link");
+        let _ = directory.readlink_at("symbolic-link");
+        let _ = directory.rename_at("hard-link", &directory, "renamed-link");
+        let _ = directory.unlink_file_at("renamed-link");
+        let _ = directory.unlink_file_at("symbolic-link");
+        let _ = directory.remove_directory_at("coverage-dir");
+        let _ = directory.is_same_object(&directory);
+        let _ = directory.metadata_hash();
+        let _ = directory.metadata_hash_at(PathFlags::empty(), "note.txt");
     }
 }
 

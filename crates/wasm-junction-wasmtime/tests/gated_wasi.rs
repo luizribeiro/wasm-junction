@@ -8,8 +8,8 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use wasm_junction::{
-    App, Call, CallError, CallErrorKind, Component, Event, InvocationId, Middleware, Next,
-    Resource, Val, Vals,
+    Access, App, Call, CallError, CallErrorKind, Component, Event, InvocationId, Middleware, Next,
+    Resource, Val, Vals, WasiSettings,
 };
 use wasm_junction_wasmtime::{GATED_WASI_INTERFACES, WASI_INTERFACES};
 
@@ -536,7 +536,7 @@ impl Middleware for RecordChannels {
 #[test]
 fn gated_wasi_set_changes_only_deliberately() {
     assert_eq!(
-        &GATED_WASI_INTERFACES[..18],
+        &GATED_WASI_INTERFACES[..20],
         [
             "wasi:cli/environment@0.2.12",
             "wasi:cli/exit@0.2.12",
@@ -550,6 +550,8 @@ fn gated_wasi_set_changes_only_deliberately() {
             "wasi:cli/terminal-stdout@0.2.12",
             "wasi:clocks/monotonic-clock@0.2.12",
             "wasi:clocks/wall-clock@0.2.12",
+            "wasi:filesystem/preopens@0.2.12",
+            "wasi:filesystem/types@0.2.12",
             "wasi:io/error@0.2.12",
             "wasi:io/poll@0.2.12",
             "wasi:io/streams@0.2.12",
@@ -559,10 +561,10 @@ fn gated_wasi_set_changes_only_deliberately() {
         ]
     );
     #[cfg(not(feature = "wasi-p3"))]
-    assert_eq!(GATED_WASI_INTERFACES.len(), 18);
+    assert_eq!(GATED_WASI_INTERFACES.len(), 20);
     #[cfg(feature = "wasi-p3")]
     assert_eq!(
-        &GATED_WASI_INTERFACES[18..],
+        &GATED_WASI_INTERFACES[20..],
         [
             "wasi:clocks/types@0.3.0",
             "wasi:clocks/monotonic-clock@0.3.0",
@@ -929,11 +931,25 @@ fn every_function_in_each_gated_wit_interface_has_a_gate() {
         .enable_time()
         .build()
         .unwrap();
+    let directory = std::env::temp_dir().join(format!(
+        "wasm-junction-filesystem-coverage-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("note.txt"), b"note").unwrap();
+    app.configure(
+        "coverage",
+        WasiSettings::new().preopen(&directory, "/data", Access::ReadWrite),
+    )
+    .unwrap();
     runtime
         .block_on(app.load(Component::from_bytes(COMPONENT).unwrap().named("coverage")))
         .unwrap();
     runtime
         .block_on(app.call("coverage", EXPORT, "coverage", Vec::new()))
+        .unwrap();
+    runtime
+        .block_on(app.call("coverage", EXPORT, "filesystem-coverage", Vec::new()))
         .unwrap();
     runtime
         .block_on(app.call("coverage", EXPORT, "exit-success", Vec::new()))
@@ -1009,6 +1025,14 @@ fn wit_functions() -> BTreeSet<(String, String)> {
             (
                 "wasi:io/streams@0.2.12".to_owned(),
                 "[drop]output-stream".to_owned(),
+            ),
+            (
+                "wasi:filesystem/types@0.2.12".to_owned(),
+                "[drop]descriptor".to_owned(),
+            ),
+            (
+                "wasi:filesystem/types@0.2.12".to_owned(),
+                "[drop]directory-entry-stream".to_owned(),
             ),
         ])
         .collect()
