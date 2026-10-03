@@ -178,6 +178,14 @@ impl exports::test::wasi::environment::Guest for Component {
         wasi::random::random::get_random_bytes(4)
     }
 
+    fn exit_success() {
+        wasi::cli::exit::exit(Ok(()));
+    }
+
+    fn exit_code() {
+        wasi::cli::exit::exit_with_code(7);
+    }
+
     fn benchmark_write(bytes: Vec<u8>) -> Vec<u8> {
         let output = wasi::cli::stdout::get_stdout();
         for chunk in bytes.chunks(4096) {

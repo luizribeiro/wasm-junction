@@ -222,6 +222,21 @@ impl FromVal for u64 {
     }
 }
 
+impl ToVal for u8 {
+    fn to_val(self) -> Val {
+        Val::U8(self)
+    }
+}
+
+impl FromVal for u8 {
+    fn from_val(value: Val) -> Result<Self, CallError> {
+        match value {
+            Val::U8(value) => Ok(value),
+            _ => Err(shape("u8")),
+        }
+    }
+}
+
 impl ToVal for bool {
     fn to_val(self) -> Val {
         Val::Bool(self)
@@ -416,6 +431,22 @@ impl FromVal for () {
     }
 }
 
+impl ToVal for Result<(), ()> {
+    fn to_val(self) -> Val {
+        Val::Result(self.map(|()| None).map_err(|()| None))
+    }
+}
+
+impl FromVal for Result<(), ()> {
+    fn from_val(value: Val) -> Result<Self, CallError> {
+        match value {
+            Val::Result(Ok(None)) => Ok(Ok(())),
+            Val::Result(Err(None)) => Ok(Err(())),
+            _ => Err(shape("result")),
+        }
+    }
+}
+
 impl ToVal for StreamError {
     fn to_val(self) -> Val {
         match self {
@@ -511,6 +542,11 @@ fn finish_stream<T: FromVal>(
 }
 
 macro_rules! gate {
+    ($linker:ident, $iface:literal, $name:literal, $view:ident, $method:path, plain,
+     ($($arg:ident: $ty:ty),*) -> ()) => {
+        gate!(@define $linker, $iface, $name, $view, $method, no_resource_validation, ,
+            ($($arg: $ty),*) -> (), unit);
+    };
     ($linker:ident, $iface:literal, $name:literal, $view:ident, $method:path, plain,
      $signature:tt -> $ok:ty) => {
         gate!(@define $linker, $iface, $name, $view, $method, no_resource_validation, , $signature -> $ok, one);
@@ -688,6 +724,16 @@ pub(super) fn add_stdio(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> 
         get_stdout, resource, () -> Resource<DynOutputStream>);
     gate!(linker, "wasi:cli/stderr@0.2.12", "get-stderr", store,
         get_stderr, resource, () -> Resource<DynOutputStream>);
+    Ok(())
+}
+
+pub(super) fn add_exit(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    gate!(linker, "wasi:cli/exit@0.2.12", "exit", cli,
+        wasmtime_wasi::p2::bindings::cli::exit::Host::exit,
+        plain, (status: Result<(), ()>) -> ());
+    gate!(linker, "wasi:cli/exit@0.2.12", "exit-with-code", cli,
+        wasmtime_wasi::p2::bindings::cli::exit::Host::exit_with_code,
+        plain, (status_code: u8) -> ());
     Ok(())
 }
 

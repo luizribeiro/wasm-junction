@@ -62,6 +62,8 @@ fn validate_io_call(call: &Call) {
         "[drop]output-stream" => &["own output-stream"][..],
         "[drop]error" => &["own error"][..],
         "get-random-bytes" | "get-insecure-random-bytes" => &["u64"][..],
+        "exit" => &["result"][..],
+        "exit-with-code" => &["u8"][..],
         _ => return,
     };
     assert_eq!(
@@ -71,7 +73,10 @@ fn validate_io_call(call: &Call) {
     );
     for (value, expected) in call.args.iter().zip(expected) {
         match (value, *expected) {
-            (Val::U64(_), "u64") | (Val::Bytes(_), "bytes") => {}
+            (Val::U64(_), "u64")
+            | (Val::U8(_), "u8")
+            | (Val::Bytes(_), "bytes")
+            | (Val::Result(Ok(None) | Err(None)), "result") => {}
             (Val::Resource(resource), expected) => {
                 let (ownership, name) = expected.strip_prefix("own ").map_or(
                     (wasm_junction::ResourceOwnership::Borrow, expected),
@@ -110,6 +115,19 @@ impl Middleware for RefuseRandom {
     async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
         if call.function.as_ref() == "get-random-bytes" {
             Err(CallError::refused("random denied by policy"))
+        } else {
+            next.run(call).await
+        }
+    }
+}
+
+struct RefuseExit(Arc<Mutex<Option<(String, Vals)>>>);
+
+impl Middleware for RefuseExit {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.interface.as_ref() == "wasi:cli/exit@0.2.12" {
+            *self.0.lock().unwrap() = Some((call.function.to_string(), call.args.clone()));
+            Err(CallError::refused("exit denied by policy"))
         } else {
             next.run(call).await
         }
@@ -417,6 +435,7 @@ fn gated_wasi_set_changes_only_deliberately() {
         GATED_WASI_INTERFACES,
         [
             "wasi:cli/environment@0.2.12",
+            "wasi:cli/exit@0.2.12",
             "wasi:cli/stderr@0.2.12",
             "wasi:cli/stdin@0.2.12",
             "wasi:cli/stdout@0.2.12",
@@ -449,6 +468,21 @@ fn random_refusal_traps_with_its_kind() {
         .unwrap_err();
     assert_eq!(error.kind(), CallErrorKind::Refused);
     assert_eq!(error.to_string(), "random denied by policy");
+}
+
+#[test]
+fn refused_exit_is_observed_and_ends_the_invocation() {
+    let seen = Arc::new(Mutex::new(None));
+    let (app, runtime) = checked_app(RefuseExit(seen.clone()));
+    let error = runtime
+        .block_on(app.call("checked", EXPORT, "exit-code", Vec::new()))
+        .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert_eq!(error.to_string(), "exit denied by policy");
+    assert_eq!(
+        *seen.lock().unwrap(),
+        Some(("exit-with-code".to_owned(), vec![Val::U8(7)]))
+    );
 }
 
 #[test]
@@ -722,6 +756,14 @@ fn every_function_in_each_gated_wit_interface_has_a_gate() {
     runtime
         .block_on(app.call("coverage", EXPORT, "coverage", Vec::new()))
         .unwrap();
+    runtime
+        .block_on(app.call("coverage", EXPORT, "exit-success", Vec::new()))
+        .unwrap_err();
+    let exit = runtime
+        .block_on(app.call("coverage", EXPORT, "exit-code", Vec::new()))
+        .unwrap_err();
+    assert_eq!(exit.kind(), CallErrorKind::Trap);
+    assert!(exit.to_string().contains('7'));
 
     assert_eq!(*seen.lock().unwrap(), wit_functions());
 }
