@@ -121,32 +121,6 @@ enum_value!(ErrorCode {
     CrossDevice => "cross-device",
 });
 
-macro_rules! flags_value {
-    ($ty:ty { $($flag:ident => $name:literal),+ $(,)? }) => {
-        impl ToVal for $ty {
-            fn to_val(self) -> Val {
-                Val::Flags(vec![$($name.to_owned(),)+].into_iter().zip([
-                    $(self.contains(Self::$flag),)+
-                ]).filter_map(|(name, set)| set.then_some(name)).collect())
-            }
-        }
-
-        impl FromVal for $ty {
-            fn from_val(value: Val) -> Result<Self, wasm_junction_core::CallError> {
-                let Val::Flags(values) = value else { return Err(shape("flags")); };
-                let mut flags = Self::empty();
-                for value in values {
-                    match value.as_str() {
-                        $($name => flags |= Self::$flag,)+
-                        _ => return Err(shape(stringify!($ty))),
-                    }
-                }
-                Ok(flags)
-            }
-        }
-    };
-}
-
 flags_value!(DescriptorFlags {
     READ => "read",
     WRITE => "write",

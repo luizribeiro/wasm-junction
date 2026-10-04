@@ -103,8 +103,17 @@ fn no_resource_validation(_values: &[Val], _store: &mut StoreData) -> Result<(),
 }
 
 fn validate_borrowed<T: WitResource>(value: &Val, store: &mut StoreData) -> Result<(), CallError> {
+    validate_borrowed_resource::<T>(value, T::INTERFACE, T::NAME, store)
+}
+
+fn validate_borrowed_resource<T: 'static>(
+    value: &Val,
+    interface: &str,
+    name: &str,
+    store: &mut StoreData,
+) -> Result<(), CallError> {
     let Val::Resource(resource) = value else {
-        return Err(CallError::refused(format!("expected {} handle", T::NAME)));
+        return Err(CallError::refused(format!("expected {name} handle")));
     };
     let invocation = store
         .context
@@ -112,15 +121,15 @@ fn validate_borrowed<T: WitResource>(value: &Val, store: &mut StoreData) -> Resu
         .ok_or_else(|| CallError::trap("WASI call has no invocation id"))?;
     validate_resource_for_invocation(
         resource,
-        T::INTERFACE,
-        T::NAME,
+        interface,
+        name,
         ResourceOwnership::Borrow,
         invocation,
     )?;
     store
         .wasi_table()
         .get(&Resource::<T>::new_borrow(resource.id()))
-        .map_err(|_| CallError::refused(format!("unknown {} handle {}", T::NAME, resource.id())))?;
+        .map_err(|_| CallError::refused(format!("unknown {name} handle {}", resource.id())))?;
     Ok(())
 }
 
@@ -556,27 +565,33 @@ impl WitResource for TerminalOutput {
 
 impl<T: WitResource> ToVal for Resource<T> {
     fn to_val(self) -> Val {
-        Val::Resource(if self.owned() {
-            JunctionResource::owned(T::INTERFACE, T::NAME, self.rep())
-        } else {
-            JunctionResource::borrowed(T::INTERFACE, T::NAME, self.rep())
-        })
+        resource_to_val(&self, T::INTERFACE, T::NAME)
     }
 }
 
 impl<T: WitResource> FromVal for Resource<T> {
     fn from_val(value: Val) -> Result<Self, CallError> {
-        match value {
-            Val::Resource(resource)
-                if resource.interface() == T::INTERFACE && resource.name() == T::NAME =>
-            {
-                Ok(match resource.ownership() {
-                    ResourceOwnership::Own => Self::new_own(resource.id()),
-                    ResourceOwnership::Borrow => Self::new_borrow(resource.id()),
-                })
-            }
-            _ => Err(shape(T::NAME)),
+        resource_from_val(value, T::INTERFACE, T::NAME)
+    }
+}
+
+fn resource_to_val<T>(resource: &Resource<T>, interface: &str, name: &str) -> Val {
+    Val::Resource(if resource.owned() {
+        JunctionResource::owned(interface, name, resource.rep())
+    } else {
+        JunctionResource::borrowed(interface, name, resource.rep())
+    })
+}
+
+fn resource_from_val<T>(value: Val, interface: &str, name: &str) -> Result<Resource<T>, CallError> {
+    match value {
+        Val::Resource(resource) if resource.interface() == interface && resource.name() == name => {
+            Ok(match resource.ownership() {
+                ResourceOwnership::Own => Resource::new_own(resource.id()),
+                ResourceOwnership::Borrow => Resource::new_borrow(resource.id()),
+            })
         }
+        _ => Err(shape(name)),
     }
 }
 
@@ -1178,6 +1193,32 @@ macro_rules! gate_drop {
                 Ok(())
             }),
         )?;
+    };
+}
+
+macro_rules! flags_value {
+    ($ty:ty { $($flag:ident => $name:literal),+ $(,)? }) => {
+        impl ToVal for $ty {
+            fn to_val(self) -> Val {
+                Val::Flags(vec![$($name.to_owned(),)+].into_iter().zip([
+                    $(self.contains(Self::$flag),)+
+                ]).filter_map(|(name, set)| set.then_some(name)).collect())
+            }
+        }
+
+        impl FromVal for $ty {
+            fn from_val(value: Val) -> Result<Self, CallError> {
+                let Val::Flags(values) = value else { return Err(shape("flags")); };
+                let mut flags = Self::empty();
+                for value in values {
+                    match value.as_str() {
+                        $($name => flags |= Self::$flag,)+
+                        _ => return Err(shape(stringify!($ty))),
+                    }
+                }
+                Ok(flags)
+            }
+        }
     };
 }
 

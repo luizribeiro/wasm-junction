@@ -5,8 +5,17 @@ use wasmtime_wasi::p2::bindings::filesystem::types::{self, ErrorCode};
 use super::super::{FromVal, finish, validate_borrowed, views};
 use crate::engine::StoreData;
 
-fn descriptor_preopen(value: &Val, store: &mut StoreData) -> Result<String, CallError> {
-    validate_borrowed::<types::Descriptor>(value, store)?;
+fn descriptor_preopen(
+    value: &Val,
+    interface: &str,
+    store: &mut StoreData,
+) -> Result<String, CallError> {
+    super::super::validate_borrowed_resource::<types::Descriptor>(
+        value,
+        interface,
+        super::DESCRIPTOR,
+        store,
+    )?;
     let Val::Resource(resource) = value else {
         return Err(CallError::refused("expected descriptor handle"));
     };
@@ -21,12 +30,21 @@ pub(super) fn add_context(
     descriptor_positions: &[usize],
     store: &mut StoreData,
 ) -> Result<(), CallError> {
+    add_context_for(super::INTERFACE, args, descriptor_positions, store)
+}
+
+pub(super) fn add_context_for(
+    interface: &str,
+    args: &mut Vals,
+    descriptor_positions: &[usize],
+    store: &mut StoreData,
+) -> Result<(), CallError> {
     let contexts = descriptor_positions
         .iter()
         .map(|position| {
             args.get(*position)
                 .ok_or_else(|| CallError::trap("missing descriptor argument"))
-                .and_then(|value| descriptor_preopen(value, store))
+                .and_then(|value| descriptor_preopen(value, interface, store))
                 .map(Val::String)
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -39,6 +57,15 @@ pub(super) fn validate_context(
     descriptor_positions: &[usize],
     store: &mut StoreData,
 ) -> Result<(), CallError> {
+    validate_context_for(super::INTERFACE, args, descriptor_positions, store)
+}
+
+pub(super) fn validate_context_for(
+    interface: &str,
+    args: &[Val],
+    descriptor_positions: &[usize],
+    store: &mut StoreData,
+) -> Result<(), CallError> {
     let context_start = args
         .len()
         .checked_sub(descriptor_positions.len())
@@ -47,7 +74,7 @@ pub(super) fn validate_context(
         let descriptor = args
             .get(*descriptor_position)
             .ok_or_else(|| CallError::refused("missing descriptor argument"))?;
-        let expected = descriptor_preopen(descriptor, store)?;
+        let expected = descriptor_preopen(descriptor, interface, store)?;
         match args.get(context_start + context_index) {
             Some(Val::String(actual)) if actual == &expected => {}
             _ => {
