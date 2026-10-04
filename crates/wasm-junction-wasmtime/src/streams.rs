@@ -16,19 +16,19 @@ use wasmtime::{AsContextMut, StoreContextMut};
 
 use crate::engine::StoreData;
 
-pub(crate) type ActiveStreams = Arc<Mutex<HashMap<u64, OutputStreamWriter>>>;
+pub(crate) type ActiveStreams = Arc<Mutex<HashMap<u64, (OutputStreamWriter, ChannelDirection)>>>;
 
 pub(crate) fn abort_streams(store: &StoreData) {
     let streams = lock_active(&store.active_streams)
         .drain()
         .collect::<Vec<_>>();
-    for (id, writer) in streams {
+    for (id, (writer, direction)) in streams {
         writer.abort();
         if let Some(invocation) = store.context.invocation_id() {
             store.imports.emit(EngineEvent::ChannelClose {
                 invocation,
                 stream: id,
-                direction: ChannelDirection::GuestToHost,
+                direction,
             });
         }
     }
@@ -36,7 +36,15 @@ pub(crate) fn abort_streams(store: &StoreData) {
 
 pub(crate) fn lift_stream(
     stream: StreamAny,
+    store: impl AsContextMut<Data = StoreData>,
+) -> Result<StreamHandle, wasmtime::Error> {
+    lift_stream_with_direction(stream, store, ChannelDirection::GuestToHost)
+}
+
+pub(crate) fn lift_stream_with_direction(
+    stream: StreamAny,
     mut store: impl AsContextMut<Data = StoreData>,
+    direction: ChannelDirection,
 ) -> Result<StreamHandle, wasmtime::Error> {
     let reader = stream.try_into_stream_reader::<u8>()?;
     let (writer, output) = OutputStream::channel();
@@ -47,10 +55,10 @@ pub(crate) fn lift_stream(
     imports.emit(EngineEvent::ChannelOpen {
         invocation,
         stream: id,
-        direction: ChannelDirection::GuestToHost,
+        direction,
     });
     let active = store.as_context().data().active_streams.clone();
-    lock_active(&active).insert(id, writer.clone());
+    lock_active(&active).insert(id, (writer.clone(), direction));
     reader.pipe(
         store.as_context_mut(),
         CoreConsumer {
@@ -59,6 +67,7 @@ pub(crate) fn lift_stream(
             invocation,
             imports,
             active,
+            direction,
             closed: false,
         },
     )?;
@@ -67,18 +76,28 @@ pub(crate) fn lift_stream(
 
 pub(crate) fn lower_stream(
     handle: StreamHandle,
+    store: impl AsContextMut<Data = StoreData>,
+) -> Result<StreamAny, wasmtime::Error> {
+    lower_stream_with_direction(handle, store, Some(ChannelDirection::HostToGuest))
+}
+
+pub(crate) fn lower_stream_with_direction(
+    handle: StreamHandle,
     mut store: impl AsContextMut<Data = StoreData>,
+    direction: Option<ChannelDirection>,
 ) -> Result<StreamAny, wasmtime::Error> {
     let id = handle.id();
     let input =
         InputStream::try_from(handle).map_err(|error| wasmtime::Error::msg(error.to_string()))?;
     let imports = store.as_context().data().imports.clone();
     let invocation = invocation_id(store.as_context().data())?;
-    imports.emit(EngineEvent::ChannelOpen {
-        invocation,
-        stream: id,
-        direction: ChannelDirection::HostToGuest,
-    });
+    if let Some(direction) = direction {
+        imports.emit(EngineEvent::ChannelOpen {
+            invocation,
+            stream: id,
+            direction,
+        });
+    }
     let reader = StreamReader::new(
         store.as_context_mut(),
         CoreProducer {
@@ -86,6 +105,7 @@ pub(crate) fn lower_stream(
             id,
             invocation,
             imports,
+            direction,
             closed: false,
         },
     )?;
@@ -97,6 +117,7 @@ struct CoreProducer {
     id: u64,
     invocation: InvocationId,
     imports: Arc<dyn ImportDispatcher>,
+    direction: Option<ChannelDirection>,
     closed: bool,
 }
 
@@ -107,11 +128,13 @@ impl CoreProducer {
         }
         if !self.closed {
             self.closed = true;
-            self.imports.emit(EngineEvent::ChannelClose {
-                invocation: self.invocation,
-                stream: self.id,
-                direction: ChannelDirection::HostToGuest,
-            });
+            if let Some(direction) = self.direction {
+                self.imports.emit(EngineEvent::ChannelClose {
+                    invocation: self.invocation,
+                    stream: self.id,
+                    direction,
+                });
+            }
         }
     }
 }
@@ -185,6 +208,7 @@ struct CoreConsumer {
     invocation: InvocationId,
     imports: Arc<dyn ImportDispatcher>,
     active: ActiveStreams,
+    direction: ChannelDirection,
     closed: bool,
 }
 
@@ -198,7 +222,7 @@ impl CoreConsumer {
                 self.imports.emit(EngineEvent::ChannelClose {
                     invocation: self.invocation,
                     stream: self.id,
-                    direction: ChannelDirection::GuestToHost,
+                    direction: self.direction,
                 });
             }
         }
@@ -212,7 +236,9 @@ fn invocation_id(store: &StoreData) -> Result<InvocationId, wasmtime::Error> {
         .ok_or_else(|| wasmtime::Error::msg("stream has no invocation id"))
 }
 
-fn lock_active(active: &ActiveStreams) -> MutexGuard<'_, HashMap<u64, OutputStreamWriter>> {
+fn lock_active(
+    active: &ActiveStreams,
+) -> MutexGuard<'_, HashMap<u64, (OutputStreamWriter, ChannelDirection)>> {
     match active.lock() {
         Ok(streams) => streams,
         Err(poisoned) => poisoned.into_inner(),
