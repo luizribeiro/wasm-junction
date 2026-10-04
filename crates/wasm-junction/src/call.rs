@@ -44,7 +44,7 @@ pub struct Call {
     )]
     #[cfg_attr(
         feature = "wasi-http",
-        doc = "\nFor the `wasi:http/client.send` layout, see [`wasi::http::provider`](crate::wasi::http::provider)."
+        doc = "\nFor outgoing HTTP policy context, see [`wasi::http::provider`](crate::wasi::http::provider)."
     )]
     pub args: Vals,
     extensions: Extensions,

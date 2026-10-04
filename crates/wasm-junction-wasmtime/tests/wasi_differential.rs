@@ -2,7 +2,7 @@
 
 #![cfg(feature = "wasi")]
 
-#[cfg(feature = "wasi-http")]
+#[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
 mod support;
 
 use std::path::PathBuf;
@@ -12,7 +12,7 @@ use wasm_junction::{Access, App, Component as JunctionComponent, Val, WasiSettin
 use wasmtime::component::{Component, Linker, ResourceTable, Val as WasmtimeVal};
 use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{FsPerms, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
-#[cfg(feature = "wasi-http")]
+#[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpCtxView, WasiHttpView};
 
 const COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wasi-test.wasm"));
@@ -21,9 +21,9 @@ const EXPORT: &str = "test:wasi/environment@0.1.0";
 const P3_COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wasi-p3-test.wasm"));
 #[cfg(feature = "wasi-p3")]
 const P3_EXPORT: &str = "test:wasi-p3/probe@0.1.0";
-#[cfg(feature = "wasi-http")]
+#[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
 const HTTP_COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wasi-http-test.wasm"));
-#[cfg(feature = "wasi-http")]
+#[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
 const HTTP_EXPORT: &str = "test:wasi-http/probe@0.1.0";
 
 struct TestDirectory(PathBuf);
@@ -46,7 +46,7 @@ impl Drop for TestDirectory {
 struct State {
     context: WasiCtx,
     table: ResourceTable,
-    #[cfg(feature = "wasi-http")]
+    #[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
     http: WasiHttpCtx,
 }
 
@@ -57,7 +57,7 @@ impl State {
         Self {
             context: builder.build(),
             table: ResourceTable::new(),
-            #[cfg(feature = "wasi-http")]
+            #[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
             http: WasiHttpCtx::new(),
         }
     }
@@ -70,7 +70,7 @@ impl State {
         Self {
             context: builder.build(),
             table: ResourceTable::new(),
-            #[cfg(feature = "wasi-http")]
+            #[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
             http: WasiHttpCtx::new(),
         }
     }
@@ -85,13 +85,13 @@ impl State {
         Self {
             context: builder.build(),
             table: ResourceTable::new(),
-            #[cfg(feature = "wasi-http")]
+            #[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
             http: WasiHttpCtx::new(),
         }
     }
 }
 
-#[cfg(feature = "wasi-http")]
+#[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
 impl WasiHttpView for State {
     fn http(&mut self) -> WasiHttpCtxView<'_> {
         WasiHttpCtxView {
@@ -267,7 +267,7 @@ async fn plain_p3() -> String {
     result.clone()
 }
 
-#[cfg(feature = "wasi-http")]
+#[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
 async fn plain_http(authority: String) -> String {
     let mut config = Config::new();
     config
@@ -460,7 +460,7 @@ fn gated_and_plain_wasi_match_for_preview_3_interfaces() {
 }
 
 #[test]
-#[cfg(feature = "wasi-http")]
+#[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
 fn gated_and_plain_outgoing_http_match() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

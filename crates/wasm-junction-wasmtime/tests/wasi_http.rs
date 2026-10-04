@@ -1,6 +1,6 @@
 //! WASI Preview 3 outgoing HTTP behavior.
 
-#![cfg(feature = "wasi-http")]
+#![cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
 
 mod support;
 

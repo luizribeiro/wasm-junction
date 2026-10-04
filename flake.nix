@@ -124,6 +124,8 @@
               cargo nextest run -p wasm-junction --no-default-features --features wasmtime,wasi-p3 --locked
               cargo nextest run -p wasm-junction-wasmtime --features wasi-http --locked
               cargo nextest run -p wasm-junction --no-default-features --features wasmtime,wasi-http --locked
+              cargo nextest run -p wasm-junction-wasmtime --features wasi-http,wasi-p3 --locked
+              cargo nextest run -p wasm-junction --no-default-features --features wasmtime,wasi-http,wasi-p3 --locked
             '';
             stages = [ "pre-push" ];
           };

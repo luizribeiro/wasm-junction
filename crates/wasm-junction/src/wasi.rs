@@ -49,16 +49,17 @@ pub const fn provider() -> Provided {
 pub mod http {
     use crate::{Provided, WASI_HTTP_PROVIDER_NAME};
 
-    /// Registers the selected engine's WASI Preview 3 outgoing HTTP implementation.
+    /// Registers the selected engine's WASI outgoing HTTP implementation.
     ///
     /// Use this together with [`super::provider`] for components that import
-    /// `wasi:http/client@0.3.0` or `wasi:http/types@0.3.0`. An engine without outgoing HTTP
-    /// support returns [`BuildError::UnsupportedEngineProvider`](crate::BuildError::UnsupportedEngineProvider).
+    /// `wasi:http/outgoing-handler@0.2.12` or, with the `wasi-p3` feature,
+    /// `wasi:http/client@0.3.0`. An engine without outgoing HTTP support returns
+    /// [`BuildError::UnsupportedEngineProvider`](crate::BuildError::UnsupportedEngineProvider).
     ///
-    /// Middleware sees `client.send` arguments as the owned request handle followed by method,
-    /// optional scheme, optional authority, optional path-with-query, and a list of `(name,
-    /// bytes)` headers. Changes to those metadata arguments are applied to the request before
-    /// network I/O starts.
+    /// Middleware sees `outgoing-handler.handle` and `client.send` arguments as the owned request
+    /// handle followed by method, optional scheme, optional authority, optional path-with-query,
+    /// and a list of `(name, bytes)` headers. Preview 2 `handle` then includes its declared
+    /// optional request-options argument. Changes to metadata are applied before network I/O.
     #[must_use]
     pub const fn provider() -> Provided {
         Provided::engine(WASI_HTTP_PROVIDER_NAME)

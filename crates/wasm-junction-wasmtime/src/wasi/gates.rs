@@ -1075,7 +1075,7 @@ macro_rules! gate_drop {
     };
 }
 
-#[cfg(feature = "wasi-http")]
+#[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
 macro_rules! gate_concurrent_drop {
     ($linker:ident, $iface:ident, $name:ident, $drop:literal, $ty:ty, $method:path) => {
         $linker.instance($iface)?.resource_concurrent(
@@ -1136,13 +1136,18 @@ macro_rules! gate_concurrent_drop {
 }
 
 mod filesystem;
-#[cfg(feature = "wasi-http")]
+#[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
 mod http;
+#[cfg(feature = "wasi-http")]
+mod http_p2;
 mod sockets;
 
 #[cfg(feature = "wasi-http")]
 pub(super) fn add_http(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
-    http::add(linker)
+    http_p2::add(linker)?;
+    #[cfg(feature = "wasi-p3")]
+    http::add(linker)?;
+    Ok(())
 }
 
 pub(super) fn add_filesystem(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
@@ -1442,7 +1447,7 @@ mod views {
         store
     }
 
-    #[cfg(feature = "wasi-http")]
+    #[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
     pub(super) fn http(store: &mut StoreData) -> wasmtime_wasi_http::WasiHttpCtxView<'_> {
         wasmtime_wasi_http::WasiHttpView::http(store)
     }
@@ -1465,7 +1470,7 @@ mod tests {
         store
     }
 
-    #[cfg(feature = "wasi-http")]
+    #[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
     #[expect(
         clippy::unnecessary_wraps,
         reason = "the mock matches the trappable host method signature"
@@ -1529,7 +1534,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "wasi-http")]
+    #[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
     fn http_scalar_and_header_values_round_trip() {
         assert_eq!(u16::from_val(418_u16.to_val()).unwrap(), 418);
         let headers = vec![("x-test".to_owned(), b"value".to_vec())];
@@ -1577,7 +1582,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "wasi-http")]
+    #[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
     fn plain_p3_error_gates_register() -> wasmtime::Result<()> {
         use wasmtime_wasi_http::p3::bindings::http::types::HeaderError;
 

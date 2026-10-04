@@ -92,5 +92,17 @@ pub const WASI_INTERFACES: &[&str] = &{
 pub const GATED_WASI_INTERFACES: &[&str] = WASI_INTERFACES;
 
 /// WASI outgoing HTTP interfaces supplied by [`WasmtimeEngine`].
-#[cfg(feature = "wasi-http")]
-pub const WASI_HTTP_INTERFACES: &[&str] = &["wasi:http/client@0.3.0", "wasi:http/types@0.3.0"];
+#[cfg(all(feature = "wasi-http", not(feature = "wasi-p3")))]
+pub const WASI_HTTP_INTERFACES: &[&str] = &[
+    "wasi:http/outgoing-handler@0.2.12",
+    "wasi:http/types@0.2.12",
+];
+
+/// WASI outgoing HTTP interfaces supplied by [`WasmtimeEngine`].
+#[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
+pub const WASI_HTTP_INTERFACES: &[&str] = &[
+    "wasi:http/outgoing-handler@0.2.12",
+    "wasi:http/types@0.2.12",
+    "wasi:http/client@0.3.0",
+    "wasi:http/types@0.3.0",
+];
