@@ -12,6 +12,29 @@ pub struct HttpServer {
     thread: JoinHandle<()>,
 }
 
+fn request_complete(request: &[u8]) -> bool {
+    let Some(end) = find_subslice(request, b"\r\n\r\n") else {
+        return false;
+    };
+    let head = String::from_utf8_lossy(&request[..end]).to_ascii_lowercase();
+    let body = &request[end + 4..];
+    if head.contains("transfer-encoding: chunked") {
+        return find_subslice(body, b"0\r\n\r\n").is_some();
+    }
+    let length = head
+        .lines()
+        .find_map(|line| line.strip_prefix("content-length:"))
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(0);
+    body.len() >= length
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|part| part == needle)
+}
+
 impl HttpServer {
     pub fn start(response_body: &'static [u8]) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -24,18 +47,14 @@ impl HttpServer {
                 .unwrap();
             let mut request = Vec::new();
             let mut buffer = [0; 1024];
-            loop {
+            // Answering before the whole request arrives closes the socket with unread data,
+            // which resets the connection while the client is still writing its body.
+            while !request_complete(&request) {
                 let count = stream.read(&mut buffer).unwrap();
                 if count == 0 {
                     break;
                 }
                 request.extend_from_slice(&buffer[..count]);
-                if request
-                    .windows(b"guest-body".len())
-                    .any(|part| part == b"guest-body")
-                {
-                    break;
-                }
             }
             sender.send(request).unwrap();
             write!(
