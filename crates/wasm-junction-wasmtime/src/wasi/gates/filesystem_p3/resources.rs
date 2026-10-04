@@ -1,9 +1,13 @@
-use wasmtime::component::{Linker, Resource};
-use wasmtime_wasi::p3::bindings::filesystem::preopens;
+use wasmtime::AsContextMut;
+use wasmtime::component::{Linker, Resource, ResourceType};
+use wasmtime_wasi::filesystem::WasiFilesystemView;
+use wasmtime_wasi::p3::bindings::filesystem::{preopens, types};
 
 use super::{
-    CallError, DESCRIPTOR, Descriptor, FromVal, INTERFACE, PREOPENS_INTERFACE, Real, StoreData,
-    ToVal, Val, resource_from_val, resource_to_val, scope_values, shape, trampoline, views,
+    CallError, DESCRIPTOR, Descriptor, EngineEvent, FromVal, INTERFACE, JunctionResource,
+    PREOPENS_INTERFACE, Real, RealConcurrent, StoreData, ToVal, Val, finish_unit,
+    resource_from_val, resource_to_val, scope_values, shape, trampoline, validate_owned_resource,
+    views,
 };
 
 fn encode_directories(directories: &[(Resource<Descriptor>, String)]) -> Val {
@@ -83,6 +87,81 @@ fn add_preopens(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     Ok(())
 }
 
+fn add_drop(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    linker.instance(INTERFACE)?.resource_concurrent(
+        DESCRIPTOR,
+        ResourceType::host::<Descriptor>(),
+        |accessor, id| {
+            Box::pin(async move {
+                let (invocation, imports, preopen) = accessor.with(|mut access| {
+                    let store = access.as_context_mut();
+                    let store = store.data();
+                    (
+                        store.context.invocation_id(),
+                        store.imports.clone(),
+                        store.descriptor_preopen(id).map(str::to_owned),
+                    )
+                });
+                let invocation = invocation
+                    .ok_or_else(|| wasmtime::Error::msg("WASI drop has no invocation id"))?;
+                let preopen = preopen
+                    .ok_or_else(|| wasmtime::Error::msg("descriptor has no preopen root"))?;
+                let resource =
+                    JunctionResource::__owned_for_invocation(INTERFACE, DESCRIPTOR, id, invocation);
+                imports.emit(EngineEvent::ResourceDrop {
+                    invocation,
+                    resource: resource.clone(),
+                });
+                let real: RealConcurrent = |accessor, args| {
+                    Box::pin(async move {
+                        let [Val::Resource(resource), Val::String(context)] =
+                            <[Val; 2]>::try_from(args).map_err(|_| shape(DESCRIPTOR))?
+                        else {
+                            return Err(shape(DESCRIPTOR));
+                        };
+                        accessor.with(|mut access| {
+                            let mut store = access.as_context_mut();
+                            let store = store.data_mut();
+                            validate_owned_resource::<Descriptor>(
+                                &resource, INTERFACE, DESCRIPTOR, store,
+                            )?;
+                            if store.descriptor_preopen(resource.id()) != Some(context.as_str()) {
+                                return Err(CallError::refused(
+                                    "descriptor preopen context does not match",
+                                ));
+                            }
+                            types::HostDescriptor::drop(
+                                &mut store.filesystem(),
+                                Resource::new_own(resource.id()),
+                            )
+                            .map_err(|error| CallError::trap(error.to_string()))
+                        })?;
+                        Ok(Vec::new())
+                    })
+                };
+                let outcome = trampoline::gate_concurrent(
+                    accessor,
+                    INTERFACE,
+                    "[drop]descriptor",
+                    vec![Val::Resource(resource), Val::String(preopen)],
+                    real,
+                )
+                .await;
+                finish_unit(outcome)?;
+                accessor.with(|mut access| {
+                    access
+                        .as_context_mut()
+                        .data_mut()
+                        .remove_descriptor_preopen(id);
+                });
+                Ok(())
+            })
+        },
+    )?;
+    Ok(())
+}
+
 pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
-    add_preopens(linker)
+    add_preopens(linker)?;
+    add_drop(linker)
 }

@@ -137,21 +137,30 @@ fn validate_owned<T: WitResource>(
     resource: &JunctionResource,
     store: &mut StoreData,
 ) -> Result<(), CallError> {
+    validate_owned_resource::<T>(resource, T::INTERFACE, T::NAME, store)
+}
+
+fn validate_owned_resource<T: 'static>(
+    resource: &JunctionResource,
+    interface: &str,
+    name: &str,
+    store: &mut StoreData,
+) -> Result<(), CallError> {
     let invocation = store
         .context
         .invocation_id()
         .ok_or_else(|| CallError::trap("WASI call has no invocation id"))?;
     validate_resource_for_invocation(
         resource,
-        T::INTERFACE,
-        T::NAME,
+        interface,
+        name,
         ResourceOwnership::Own,
         invocation,
     )?;
     store
         .wasi_table()
         .get(&Resource::<T>::new_borrow(resource.id()))
-        .map_err(|_| CallError::refused(format!("unknown {} handle {}", T::NAME, resource.id())))?;
+        .map_err(|_| CallError::refused(format!("unknown {name} handle {}", resource.id())))?;
     Ok(())
 }
 
