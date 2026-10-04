@@ -30,6 +30,10 @@ use wit_parser::{ManglingAndAbi, Resolve};
 const COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wasi-p3-test.wasm"));
 #[cfg(feature = "wasi-p3")]
 const EXPORT: &str = "test:wasi-p3/probe@0.1.0";
+#[cfg(feature = "wasi-p3")]
+const P2_COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wasi-test.wasm"));
+#[cfg(feature = "wasi-p3")]
+const P2_EXPORT: &str = "test:wasi/environment@0.1.0";
 
 fn block_on<F: Future>(future: F) -> F::Output {
     tokio::runtime::Builder::new_current_thread()
@@ -97,6 +101,54 @@ fn p3_app(middleware: impl Middleware + 'static) -> App {
     .unwrap();
     block_on(app.load(Component::from_bytes(COMPONENT).unwrap().named("p3"))).unwrap();
     app
+}
+
+#[test]
+#[cfg(feature = "wasi-p3")]
+fn preview_3_environment_and_arguments_match_preview_2() {
+    let app = App::builder()
+        .engine(WasmtimeEngine::new().unwrap())
+        .provide(wasm_junction::wasi::provider())
+        .build()
+        .unwrap();
+    for component in ["p2", "p3"] {
+        app.configure(
+            component,
+            wasm_junction::WasiSettings::new()
+                .env("GREETING", "hello")
+                .arg("alpha"),
+        )
+        .unwrap();
+    }
+    block_on(app.load(Component::from_bytes(P2_COMPONENT).unwrap().named("p2"))).unwrap();
+    block_on(app.load(Component::from_bytes(COMPONENT).unwrap().named("p3"))).unwrap();
+
+    let environment =
+        block_on(app.call("p2", P2_EXPORT, "read", vec![Val::from("GREETING")])).unwrap();
+    let [Val::Option(Some(environment))] = environment.as_slice() else {
+        panic!("Preview 2 environment returned the wrong shape")
+    };
+    let Val::String(environment) = environment.as_ref() else {
+        panic!("Preview 2 environment value was not a string")
+    };
+    let arguments = block_on(app.call("p2", P2_EXPORT, "arguments", Vec::new())).unwrap();
+    let [Val::List(arguments)] = arguments.as_slice() else {
+        panic!("Preview 2 arguments returned the wrong shape")
+    };
+    let arguments: Vec<_> = arguments
+        .iter()
+        .map(|argument| match argument {
+            Val::String(argument) => argument.as_str(),
+            _ => panic!("Preview 2 argument was not a string"),
+        })
+        .collect();
+
+    let result = block_on(app.call("p3", EXPORT, "cli", Vec::new())).unwrap();
+    let [Val::String(result)] = result.as_slice() else {
+        panic!("Preview 3 CLI probe returned the wrong shape")
+    };
+    let expected = format!("[(\"GREETING\", \"{environment}\")]|{arguments:?}|");
+    assert!(result.starts_with(&expected), "{result}");
 }
 
 #[cfg(feature = "wasi-p3")]
