@@ -47,6 +47,7 @@ through_core_codec!(
     Vec<Vec<u8>>,
     Vec<(String, Vec<u8>)>,
     (),
+    ErrorCode,
     Method,
     Scheme,
     HeaderError,

@@ -1146,6 +1146,8 @@ mod filesystem;
 mod http;
 #[cfg(feature = "wasi-http")]
 mod http_p2;
+#[cfg(feature = "wasi-http")]
+mod http_values;
 mod sockets;
 
 #[cfg(feature = "wasi-http")]

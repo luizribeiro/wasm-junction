@@ -30,7 +30,6 @@ use crate::engine::StoreData;
 mod bodies;
 mod codec;
 mod context;
-mod error_values;
 mod outgoing;
 mod outgoing_responses;
 mod requests;
