@@ -2,6 +2,8 @@ use super::super::{FromVal, ToVal, shape};
 use wasm_junction_core::{CallError, Resource as JunctionResource, ResourceOwnership, Val, Vals};
 use wasmtime::component::Resource;
 
+use crate::engine::StoreData;
+
 pub(super) trait HttpResource: 'static {
     const INTERFACE: &'static str;
     const NAME: &'static str;
@@ -67,6 +69,31 @@ impl<T: HttpResource> FromHttpVal for Resource<T> {
             ResourceOwnership::Borrow => Self::new_borrow(resource.id()),
         })
     }
+}
+
+pub(super) fn validate_borrowed<T: HttpResource>(
+    value: &Val,
+    store: &mut StoreData,
+) -> Result<(), CallError> {
+    let Val::Resource(resource) = value else {
+        return Err(CallError::refused(format!("expected {} handle", T::NAME)));
+    };
+    let invocation = store
+        .context
+        .invocation_id()
+        .ok_or_else(|| CallError::trap("WASI call has no invocation id"))?;
+    wasm_junction_core::validate_resource_for_invocation(
+        resource,
+        T::INTERFACE,
+        T::NAME,
+        ResourceOwnership::Borrow,
+        invocation,
+    )?;
+    store
+        .wasi_table()
+        .get(&Resource::<T>::new_borrow(resource.id()))
+        .map_err(|_| CallError::refused(format!("unknown {} handle {}", T::NAME, resource.id())))?;
+    Ok(())
 }
 
 pub(super) fn finish_http<T: FromHttpVal>(outcome: Result<Vals, CallError>) -> wasmtime::Result<T> {
