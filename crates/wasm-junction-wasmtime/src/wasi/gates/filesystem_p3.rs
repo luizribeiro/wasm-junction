@@ -23,6 +23,11 @@ const DESCRIPTOR: &str = "descriptor";
 )]
 mod descriptors;
 mod records;
+#[allow(
+    dead_code,
+    reason = "the complete interface remains unlinked until typed directory streams are designed"
+)]
+mod resources;
 #[cfg(test)]
 mod test_support;
 mod values;
