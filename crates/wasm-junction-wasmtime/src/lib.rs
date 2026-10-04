@@ -54,7 +54,15 @@ const P2_WASI_INTERFACES: &[&str] = &[
 ];
 
 #[cfg(feature = "wasi-p3")]
-const P3_WASI_INTERFACES: [&str; 6] = [
+const P3_WASI_INTERFACES: [&str; 14] = [
+    "wasi:cli/environment@0.3.0",
+    "wasi:cli/exit@0.3.0",
+    "wasi:cli/types@0.3.0",
+    "wasi:cli/terminal-input@0.3.0",
+    "wasi:cli/terminal-output@0.3.0",
+    "wasi:cli/terminal-stderr@0.3.0",
+    "wasi:cli/terminal-stdin@0.3.0",
+    "wasi:cli/terminal-stdout@0.3.0",
     "wasi:clocks/types@0.3.0",
     "wasi:clocks/monotonic-clock@0.3.0",
     "wasi:clocks/system-clock@0.3.0",

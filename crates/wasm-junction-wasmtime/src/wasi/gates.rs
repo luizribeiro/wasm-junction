@@ -1219,6 +1219,8 @@ macro_rules! gate_concurrent_drop {
     };
 }
 
+#[cfg(feature = "wasi-p3")]
+mod cli;
 mod filesystem;
 #[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
 mod http;
@@ -1361,6 +1363,7 @@ pub(super) fn add_p3(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     use wasmtime_wasi::p3::bindings::clocks::{monotonic_clock, system_clock};
     use wasmtime_wasi::p3::bindings::random::{insecure, insecure_seed, random};
 
+    cli::add(linker)?;
     linker.instance("wasi:clocks/types@0.3.0")?;
     gate!(linker, "wasi:clocks/monotonic-clock@0.3.0", "now", clocks,
         monotonic_clock::Host::now, plain, () -> u64);
