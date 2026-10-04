@@ -6,6 +6,7 @@
 mod support;
 
 use std::path::PathBuf;
+use std::{io, net, thread};
 
 use wasm_junction::{Access, App, Component as JunctionComponent, Val, WasiSettings};
 use wasmtime::component::{Component, Linker, ResourceTable, Val as WasmtimeVal};
@@ -66,6 +67,21 @@ impl State {
         builder
             .preopened_dir(path, "/data", FsPerms::ReadWrite)
             .unwrap();
+        Self {
+            context: builder.build(),
+            table: ResourceTable::new(),
+            #[cfg(feature = "wasi-http")]
+            http: WasiHttpCtx::new(),
+        }
+    }
+
+    fn with_sockets() -> Self {
+        let mut builder = WasiCtxBuilder::new();
+        builder
+            .inherit_network()
+            .allow_ip_name_lookup(true)
+            .allow_tcp(true)
+            .allow_udp(true);
         Self {
             context: builder.build(),
             table: ResourceTable::new(),
@@ -155,6 +171,66 @@ async fn plain_filesystem(path: &std::path::Path) -> String {
         panic!("plain filesystem returned the wrong shape")
     };
     result.clone()
+}
+
+async fn plain_sockets(tcp_port: u16, udp_port: u16) -> String {
+    let mut config = Config::new();
+    config
+        .wasm_component_model_async(true)
+        .concurrency_support(true);
+    let engine = Engine::new(&config).unwrap();
+    let component = Component::new(&engine, COMPONENT).unwrap();
+    let mut linker = Linker::new(&engine);
+    wasmtime_wasi::p2::add_to_linker_async(&mut linker).unwrap();
+    let pre = linker.instantiate_pre(&component).unwrap();
+    let mut store = Store::new(&engine, State::with_sockets());
+    let instance = pre.instantiate_async(&mut store).await.unwrap();
+    let interface = instance.get_export_index(&mut store, None, EXPORT).unwrap();
+    let function = instance
+        .get_export_index(&mut store, Some(&interface), "socket-differential")
+        .unwrap();
+    let function = instance.get_func(&mut store, function).unwrap();
+    let params = [WasmtimeVal::U16(tcp_port), WasmtimeVal::U16(udp_port)];
+    let mut results = vec![WasmtimeVal::Result(Ok(Some(Box::new(
+        WasmtimeVal::String(String::new()),
+    ))))];
+    store
+        .run_concurrent(async |accessor| {
+            function
+                .call_concurrent(accessor, &params, &mut results)
+                .await
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    let [WasmtimeVal::Result(Ok(Some(result)))] = results.as_slice() else {
+        panic!("plain sockets returned the wrong shape")
+    };
+    let WasmtimeVal::String(result) = result.as_ref() else {
+        panic!("plain sockets returned a non-string result")
+    };
+    result.clone()
+}
+
+fn echo_peers() -> (u16, u16, thread::JoinHandle<()>, thread::JoinHandle<()>) {
+    use io::{Read, Write};
+
+    let tcp = net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let tcp_port = tcp.local_addr().unwrap().port();
+    let tcp_peer = thread::spawn(move || {
+        let (mut stream, _) = tcp.accept().unwrap();
+        let mut bytes = [0; 3];
+        stream.read_exact(&mut bytes).unwrap();
+        stream.write_all(&bytes).unwrap();
+    });
+    let udp = net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let udp_port = udp.local_addr().unwrap().port();
+    let udp_peer = thread::spawn(move || {
+        let mut bytes = [0; 3];
+        let (length, peer) = udp.recv_from(&mut bytes).unwrap();
+        udp.send_to(&bytes[..length], peer).unwrap();
+    });
+    (tcp_port, udp_port, tcp_peer, udp_peer)
 }
 
 #[cfg(feature = "wasi-p3")]
@@ -311,6 +387,45 @@ fn gated_and_plain_filesystems_match_on_temporary_directories() {
         std::fs::read_to_string(plain_dir.join("output.txt")).unwrap(),
         "written"
     );
+}
+
+#[test]
+fn gated_and_plain_tcp_and_udp_sockets_match() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let gated_peers = echo_peers();
+    let plain_peers = echo_peers();
+    let app = App::builder()
+        .engine(wasm_junction_wasmtime::WasmtimeEngine::new().unwrap())
+        .provide(wasm_junction::wasi::provider())
+        .build()
+        .unwrap();
+    app.configure("gated-sockets", WasiSettings::new().sockets(true))
+        .unwrap();
+    runtime
+        .block_on(
+            app.load(
+                JunctionComponent::from_bytes(COMPONENT)
+                    .unwrap()
+                    .named("gated-sockets"),
+            ),
+        )
+        .unwrap();
+    let gated = runtime
+        .block_on(app.call(
+            "gated-sockets",
+            EXPORT,
+            "socket-differential",
+            vec![Val::U16(gated_peers.0), Val::U16(gated_peers.1)],
+        ))
+        .unwrap();
+    let plain = runtime.block_on(plain_sockets(plain_peers.0, plain_peers.1));
+    assert_eq!(gated, [Val::Result(Ok(Some(Box::new(Val::from(plain)))))]);
+    for peer in [gated_peers.2, gated_peers.3, plain_peers.2, plain_peers.3] {
+        peer.join().unwrap();
+    }
 }
 
 #[test]
