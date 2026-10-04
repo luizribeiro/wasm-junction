@@ -28,6 +28,11 @@ mod records;
     reason = "the complete interface remains unlinked until typed directory streams are designed"
 )]
 mod resources;
+#[allow(
+    dead_code,
+    reason = "the complete interface remains unlinked until typed directory streams are designed"
+)]
+mod streams;
 #[cfg(test)]
 mod test_support;
 mod values;
