@@ -260,6 +260,7 @@ mod tests {
     use crate::wasi::gates::filesystem_p3::test_support::{
         TestDirectory, TestDispatcher, completion, preopens, store,
     };
+    use crate::wasi::gates::finish_p3_error;
 
     async fn open_file(
         accessor: &wasmtime::component::Accessor<StoreData>,
@@ -382,5 +383,88 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn refused_and_read_only_writes_resolve_as_errors() {
+        let directory = TestDirectory::new("p3-refused-write");
+        std::fs::write(directory.path().join("note.txt"), b"unchanged").unwrap();
+        let mut denied = store(
+            &[(directory.path(), "/data", FsPerms::ReadWrite)],
+            TestDispatcher::refusing("[method]descriptor.write-via-stream"),
+        );
+        denied
+            .run_concurrent(async |accessor| -> wasmtime::Result<()> {
+                let root = preopens(accessor)[0].0;
+                let file = open_file(accessor, root, "note.txt", DescriptorFlags::READ).await;
+                let write = args(
+                    accessor,
+                    file.rep(),
+                    vec![Val::from(OutputStream::from_bytes(b"denied")), Val::U64(0)],
+                );
+                let direct = trampoline::gate_concurrent(
+                    accessor,
+                    INTERFACE,
+                    "[method]descriptor.write-via-stream",
+                    write,
+                    write_at_real,
+                )
+                .await;
+                let direct: Result<(), ErrorCode> =
+                    finish_p3_error(direct, ErrorCode::Access, |_| unreachable!()).unwrap();
+                assert!(matches!(direct, Err(ErrorCode::Access)));
+
+                let write = args(
+                    accessor,
+                    file.rep(),
+                    vec![Val::from(OutputStream::from_bytes(b"denied")), Val::U64(0)],
+                );
+                let future = accessor.with(|mut access| {
+                    let mut store = access.as_context_mut();
+                    let future = deferred::spawn(
+                        &mut store,
+                        INTERFACE,
+                        "[method]descriptor.write-via-stream",
+                        write,
+                        write_at_real,
+                        ErrorCode::Access,
+                    )?;
+                    lift_future_plain(&mut store, future)
+                })?;
+                assert!(matches!(
+                    completion(accessor, future).await,
+                    Err(ErrorCode::Access)
+                ));
+                wasmtime::Result::Ok(())
+            })
+            .await
+            .unwrap()
+            .unwrap();
+
+        let mut read_only = store(
+            &[(directory.path(), "/data", FsPerms::ReadOnly)],
+            TestDispatcher::passing(),
+        );
+        read_only
+            .run_concurrent(async |accessor| -> wasmtime::Result<()> {
+                let root = preopens(accessor)[0].0;
+                let file = open_file(accessor, root, "note.txt", DescriptorFlags::READ).await;
+                let write = args(
+                    accessor,
+                    file.rep(),
+                    vec![Val::from(OutputStream::from_bytes(b"denied")), Val::U64(0)],
+                );
+                let future = one(write_at_real(accessor, write).await.unwrap());
+                assert!(completion(accessor, future).await.is_err());
+                wasmtime::Result::Ok(())
+            })
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read(directory.path().join("note.txt")).unwrap(),
+            b"unchanged"
+        );
     }
 }

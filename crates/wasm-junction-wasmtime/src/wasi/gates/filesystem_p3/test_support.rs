@@ -44,11 +44,19 @@ impl Drop for TestDirectory {
     }
 }
 
-pub(super) struct TestDispatcher;
+pub(super) struct TestDispatcher {
+    refused: Option<&'static str>,
+}
 
 impl TestDispatcher {
     pub(super) const fn passing() -> Self {
-        Self
+        Self { refused: None }
+    }
+
+    pub(super) const fn refusing(function: &'static str) -> Self {
+        Self {
+            refused: Some(function),
+        }
     }
 }
 
@@ -69,11 +77,15 @@ impl ImportDispatcher for TestDispatcher {
         context: InvocationContext,
         _caller: Arc<str>,
         _interface: Arc<str>,
-        _function: Arc<str>,
+        function: Arc<str>,
         args: Vals,
         target: Arc<dyn ImportTarget>,
     ) -> BoxFuture<'_, Result<Vals, CallError>> {
-        target.call(context, args)
+        if self.refused == Some(function.as_ref()) {
+            Box::pin(async { Err(CallError::refused("denied by test middleware")) })
+        } else {
+            target.call(context, args)
+        }
     }
 
     fn drop_resource(
