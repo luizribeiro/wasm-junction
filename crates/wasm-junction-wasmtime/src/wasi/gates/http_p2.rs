@@ -28,6 +28,7 @@ mod codec;
 mod context;
 mod error_values;
 mod outgoing;
+mod responses;
 mod values;
 
 const TYPES: &str = "wasi:http/types@0.2.12";
@@ -81,6 +82,9 @@ validator!(validate_request, HostOutgoingRequest);
 validator!(validate_options, RequestOptions);
 validator!(validate_outgoing_body, HostOutgoingBody);
 validator!(validate_incoming_body, HostIncomingBody);
+validator!(validate_future_response, HostFutureIncomingResponse);
+validator!(validate_incoming_response, HostIncomingResponse);
+validator!(validate_future_trailers, HostFutureTrailers);
 
 fn validate_owned_fields(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
     let Some(Val::Resource(resource)) = values.first() else {
@@ -103,7 +107,8 @@ pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     add_outgoing_request(linker)?;
     add_request_options(linker)?;
     bodies::add(linker)?;
-    outgoing::add(linker)
+    outgoing::add(linker)?;
+    responses::add(linker)
 }
 
 fn add_drops(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
