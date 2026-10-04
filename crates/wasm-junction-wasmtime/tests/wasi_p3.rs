@@ -13,7 +13,10 @@ use std::{collections::BTreeSet, path::Path, process::Command};
 use wasm_junction::LoadError;
 use wasm_junction::{App, Component};
 #[cfg(feature = "wasi-p3")]
-use wasm_junction::{Call, CallError, CallErrorKind, Middleware, Next, Val, Vals};
+use wasm_junction::{
+    Call, CallError, CallErrorKind, ChannelDirection, Event, InputStream, Middleware, Next,
+    OutputStream, StreamHandle, Val, Vals,
+};
 #[cfg(feature = "wasi-p3")]
 use wasm_junction_wasmtime::WASI_INTERFACES;
 use wasm_junction_wasmtime::WasmtimeEngine;
@@ -92,6 +95,120 @@ fn p3_app(middleware: impl Middleware + 'static) -> App {
     .unwrap();
     block_on(app.load(Component::from_bytes(COMPONENT).unwrap().named("p3"))).unwrap();
     app
+}
+
+#[cfg(feature = "wasi-p3")]
+type ChannelEvents = Arc<Mutex<Vec<(bool, wasm_junction::InvocationId, u64, ChannelDirection)>>>;
+#[cfg(feature = "wasi-p3")]
+type CapturedBytes = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
+
+#[cfg(feature = "wasi-p3")]
+struct StdioPolicy {
+    refuse_stdout: bool,
+    bytes: CapturedBytes,
+    calls: Arc<Mutex<Vec<wasm_junction::InvocationId>>>,
+    events: ChannelEvents,
+}
+
+#[cfg(feature = "wasi-p3")]
+impl Middleware for StdioPolicy {
+    async fn call(&self, mut call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.function.as_ref() != "write-via-stream" {
+            return next.run(call).await;
+        }
+        self.calls.lock().unwrap().push(call.invocation_id());
+        let Val::Stream(stream) = call.args.remove(0) else {
+            return Err(CallError::trap("stdio did not carry a byte stream"));
+        };
+        let bytes = InputStream::try_from(stream)
+            .map_err(|error| CallError::trap(error.to_string()))?
+            .read_all()
+            .await
+            .map_err(|error| CallError::trap(error.to_string()))?;
+        self.bytes
+            .lock()
+            .unwrap()
+            .push((call.interface.to_string(), bytes.clone()));
+        if self.refuse_stdout && call.interface.as_ref() == "wasi:cli/stdout@0.3.0" {
+            return Err(CallError::refused("stdout denied"));
+        }
+        call.args
+            .push(Val::Stream(StreamHandle::from(OutputStream::from_bytes(
+                bytes,
+            ))));
+        next.run(call).await
+    }
+
+    fn event(&self, event: &Event) {
+        let observation = match event {
+            Event::ChannelOpen {
+                invocation,
+                stream,
+                direction,
+            } => Some((true, *invocation, *stream, *direction)),
+            Event::ChannelClose {
+                invocation,
+                stream,
+                direction,
+            } => Some((false, *invocation, *stream, *direction)),
+            _ => None,
+        };
+        if let Some(observation) = observation {
+            self.events.lock().unwrap().push(observation);
+        }
+    }
+}
+
+#[test]
+#[cfg(feature = "wasi-p3")]
+fn output_bytes_and_completion_cross_middleware() {
+    let bytes = Arc::new(Mutex::new(Vec::new()));
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let app = p3_app(StdioPolicy {
+        refuse_stdout: false,
+        bytes: bytes.clone(),
+        calls: calls.clone(),
+        events: events.clone(),
+    });
+    let result = block_on(app.call("p3", EXPORT, "cli", Vec::new())).unwrap();
+    let [Val::String(result)] = result.as_slice() else {
+        panic!("CLI probe returned the wrong shape")
+    };
+    assert!(result.contains("|0|true|true|true|"));
+    assert_eq!(
+        *bytes.lock().unwrap(),
+        [
+            ("wasi:cli/stdout@0.3.0".to_owned(), b"stdout".to_vec()),
+            ("wasi:cli/stderr@0.3.0".to_owned(), b"stderr".to_vec()),
+        ]
+    );
+
+    let calls = calls.lock().unwrap();
+    let events = events.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(events.len(), 6);
+    for (open, invocation, stream, direction) in events.iter().filter(|event| event.0) {
+        assert!(*open);
+        assert!(calls.contains(invocation));
+        assert!(events.contains(&(false, *invocation, *stream, *direction)));
+    }
+}
+
+#[test]
+#[cfg(feature = "wasi-p3")]
+fn output_refusal_resolves_to_the_cli_error() {
+    let app = p3_app(StdioPolicy {
+        refuse_stdout: true,
+        bytes: Arc::new(Mutex::new(Vec::new())),
+        calls: Arc::new(Mutex::new(Vec::new())),
+        events: Arc::new(Mutex::new(Vec::new())),
+    });
+    let result = block_on(app.call("p3", EXPORT, "cli", Vec::new())).unwrap();
+    let [Val::String(result)] = result.as_slice() else {
+        panic!("CLI probe returned the wrong shape")
+    };
+    assert!(result.contains("|0|true|false|true|"));
 }
 
 #[test]
