@@ -15,6 +15,10 @@ use wasm_junction_wasmtime::WasmtimeEngine;
 
 const COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wasi-http-p2-test.wasm"));
 const EXPORT: &str = "test:wasi-http-p2/probe@0.1.0";
+#[cfg(feature = "wasi-p3")]
+const P3_COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wasi-http-test.wasm"));
+#[cfg(feature = "wasi-p3")]
+const P3_EXPORT: &str = "test:wasi-http/probe@0.1.0";
 
 fn block_on<F: Future>(future: F) -> F::Output {
     tokio::runtime::Builder::new_current_thread()
@@ -284,4 +288,70 @@ fn invalid_preview_2_http_handles_are_refused() {
             [Val::from("denied")]
         );
     }
+}
+
+#[cfg(feature = "wasi-p3")]
+struct RefuseHttpVersions(Arc<Mutex<std::collections::BTreeSet<String>>>);
+
+#[cfg(feature = "wasi-p3")]
+impl Middleware for RefuseHttpVersions {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        if (call.interface.as_ref() == "wasi:http/outgoing-handler@0.2.12"
+            && call.function.as_ref() == "handle")
+            || (call.interface.as_ref() == "wasi:http/client@0.3.0"
+                && call.function.as_ref() == "send")
+        {
+            self.0.lock().unwrap().insert(call.interface.to_string());
+            return Err(CallError::refused("origin denied"));
+        }
+        next.run(call).await
+    }
+}
+
+#[test]
+#[cfg(feature = "wasi-p3")]
+fn one_middleware_refuses_both_http_versions() {
+    let seen = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
+    let app = App::builder()
+        .engine(WasmtimeEngine::new().unwrap())
+        .provide(wasm_junction::wasi::provider())
+        .provide(wasm_junction::wasi::http::provider())
+        .middleware(RefuseHttpVersions(seen.clone()))
+        .build()
+        .unwrap();
+    for name in ["http-p2", "http-p3"] {
+        app.configure(name, WasiSettings::new().network(true))
+            .unwrap();
+    }
+    block_on(app.load(Component::from_bytes(COMPONENT).unwrap().named("http-p2"))).unwrap();
+    block_on(
+        app.load(
+            Component::from_bytes(P3_COMPONENT)
+                .unwrap()
+                .named("http-p3"),
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(
+        request(&app, "example.invalid".into(), "/p2"),
+        [Val::from("denied")]
+    );
+    assert_eq!(
+        block_on(app.call(
+            "http-p3",
+            P3_EXPORT,
+            "request",
+            vec![Val::from("example.invalid"), Val::from("/p3")],
+        ))
+        .unwrap(),
+        [Val::from("denied")]
+    );
+    assert_eq!(
+        *seen.lock().unwrap(),
+        std::collections::BTreeSet::from([
+            "wasi:http/client@0.3.0".into(),
+            "wasi:http/outgoing-handler@0.2.12".into(),
+        ])
+    );
 }
