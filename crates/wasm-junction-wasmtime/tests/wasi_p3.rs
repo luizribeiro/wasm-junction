@@ -429,6 +429,133 @@ fn canceling_invocation_inside_output_next_closes_the_channel() {
     });
 }
 
+#[cfg(feature = "wasi-p3")]
+struct RefuseExit(Arc<Mutex<Option<(String, Vals)>>>);
+
+#[cfg(feature = "wasi-p3")]
+impl Middleware for RefuseExit {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.interface.as_ref() == "wasi:cli/exit@0.3.0" {
+            *self.0.lock().unwrap() = Some((call.function.to_string(), call.args.clone()));
+            Err(CallError::refused("Preview 3 exit denied"))
+        } else {
+            next.run(call).await
+        }
+    }
+}
+
+#[test]
+#[cfg(feature = "wasi-p3")]
+fn refused_exit_is_observed_and_ends_the_invocation() {
+    let seen = Arc::new(Mutex::new(None));
+    let app = p3_app(RefuseExit(seen.clone()));
+    let error = block_on(app.call("p3", EXPORT, "exit-code", Vec::new())).unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert_eq!(error.to_string(), "Preview 3 exit denied");
+    assert_eq!(
+        *seen.lock().unwrap(),
+        Some(("exit-with-code".to_owned(), vec![Val::U8(7)]))
+    );
+}
+
+#[cfg(feature = "wasi-p3")]
+enum RewriteTerminalInput {
+    Foreign(Mutex<Option<wasm_junction::Resource>>),
+    Mistyped,
+    Unscoped,
+}
+
+#[cfg(feature = "wasi-p3")]
+impl Middleware for RewriteTerminalInput {
+    async fn call(&self, mut call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.interface.as_ref() == "wasi:cli/terminal-input@0.3.0"
+            && call.function.as_ref() == "[drop]terminal-input"
+        {
+            let Val::Resource(current) = &call.args[0] else {
+                panic!("terminal drop did not receive a resource");
+            };
+            let replacement = match self {
+                Self::Foreign(saved) => {
+                    let mut saved = saved.lock().unwrap();
+                    if let Some(foreign) = saved.as_ref() {
+                        foreign.clone()
+                    } else {
+                        *saved = Some(current.clone());
+                        return Ok(Vec::new());
+                    }
+                }
+                Self::Mistyped => wasm_junction::Resource::__owned_for_invocation(
+                    "wasi:cli/terminal-output@0.3.0",
+                    "terminal-output",
+                    current.id(),
+                    call.invocation_id(),
+                ),
+                Self::Unscoped => wasm_junction::Resource::owned(
+                    current.interface(),
+                    current.name(),
+                    current.id(),
+                ),
+            };
+            call.args[0] = Val::Resource(replacement);
+        }
+        let invocation = call.invocation_id();
+        let terminal_stdin = call.interface.as_ref() == "wasi:cli/terminal-stdin@0.3.0"
+            && call.function.as_ref() == "get-terminal-stdin";
+        let mut values = next.run(call).await?;
+        if terminal_stdin {
+            values = vec![Val::Option(Some(Box::new(Val::Resource(
+                wasm_junction::Resource::__owned_for_invocation(
+                    "wasi:cli/terminal-input@0.3.0",
+                    "terminal-input",
+                    23,
+                    invocation,
+                ),
+            ))))];
+        }
+        Ok(values)
+    }
+}
+
+#[cfg(feature = "wasi-p3")]
+fn assert_invalid_terminal_handle(middleware: RewriteTerminalInput, expected: &str) {
+    let app = p3_app(middleware);
+    let error = block_on(app.call("p3", EXPORT, "cli", Vec::new())).unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert!(error.to_string().contains(expected));
+}
+
+#[test]
+#[cfg(feature = "wasi-p3")]
+fn foreign_terminal_handle_is_refused() {
+    let app = p3_app(RewriteTerminalInput::Foreign(Mutex::new(None)));
+    block_on(app.call("p3", EXPORT, "cli", Vec::new())).unwrap();
+    let error = block_on(app.call("p3", EXPORT, "cli", Vec::new())).unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert!(
+        error
+            .to_string()
+            .contains("does not belong to this invocation")
+    );
+}
+
+#[test]
+#[cfg(feature = "wasi-p3")]
+fn mistyped_terminal_handle_is_refused() {
+    assert_invalid_terminal_handle(
+        RewriteTerminalInput::Mistyped,
+        "does not match the resource type",
+    );
+}
+
+#[test]
+#[cfg(feature = "wasi-p3")]
+fn unscoped_terminal_handle_is_refused() {
+    assert_invalid_terminal_handle(
+        RewriteTerminalInput::Unscoped,
+        "does not belong to this invocation",
+    );
+}
+
 #[test]
 #[cfg(feature = "wasi-p3")]
 fn p3_clock_waits_can_await_middleware_and_be_rewritten() {
