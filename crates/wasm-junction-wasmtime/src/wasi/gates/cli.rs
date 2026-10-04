@@ -3,12 +3,17 @@
     reason = "CLI gates share the parent module's private gate machinery"
 )]
 use super::*;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use tokio::sync::oneshot;
 use wasmtime::AsContextMut;
-use wasmtime::component::{Access, FutureReader, StreamReader};
+use wasmtime::component::{
+    Access, Accessor, AccessorTask, FutureConsumer, FutureReader, Source, StreamReader,
+};
 use wasmtime_wasi::cli::{WasiCli, WasiCliView};
 use wasmtime_wasi::p3::bindings::cli::{
-    environment, exit, stdin, terminal_input, terminal_output, terminal_stderr, terminal_stdin,
-    terminal_stdout, types::ErrorCode,
+    environment, exit, stderr, stdin, stdout, terminal_input, terminal_output, terminal_stderr,
+    terminal_stdin, terminal_stdout, types::ErrorCode,
 };
 use wasmtime_wasi::p3::cli::{TerminalInput, TerminalOutput};
 
@@ -28,6 +33,11 @@ impl WitResource for TerminalOutput {
 }
 
 type TransferResult = Result<(), ErrorCode>;
+type TransferCompletion = wasmtime::Result<TransferResult>;
+type WriteOutput = for<'a> fn(
+    Access<'a, StoreData, WasiCli>,
+    StreamReader<u8>,
+) -> wasmtime::Result<FutureReader<TransferResult>>;
 
 fn refused_future(
     store: &mut StoreContextMut<'_, StoreData>,
@@ -35,6 +45,146 @@ fn refused_future(
     FutureReader::new(store.as_context_mut(), async {
         Ok::<TransferResult, wasmtime::Error>(Err(ErrorCode::Io))
     })
+}
+
+struct CompletionConsumer(Option<oneshot::Sender<TransferCompletion>>);
+
+impl FutureConsumer<StoreData> for CompletionConsumer {
+    type Item = TransferResult;
+
+    fn poll_consume(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        mut store: StoreContextMut<'_, StoreData>,
+        mut source: Source<'_, Self::Item>,
+        finish: bool,
+    ) -> Poll<wasmtime::Result<()>> {
+        let mut value = None;
+        source.read(store.as_context_mut(), &mut value)?;
+        if let Some(value) = value {
+            if let Some(sender) = self.get_mut().0.take() {
+                let _ = sender.send(Ok(value));
+            }
+            return Poll::Ready(Ok(()));
+        }
+        if finish {
+            if let Some(sender) = self.get_mut().0.take() {
+                let _ = sender.send(Err(wasmtime::Error::msg(
+                    "CLI output completion was canceled",
+                )));
+            }
+            return Poll::Ready(Ok(()));
+        }
+        Poll::Pending
+    }
+}
+
+fn write_output_real(
+    accessor: &Accessor<StoreData>,
+    args: Vals,
+    write: WriteOutput,
+) -> wasm_junction_core::BoxFuture<'_, Result<Vals, CallError>> {
+    Box::pin(async move {
+        let [stream] = <[Val; 1]>::try_from(args).map_err(|_| shape("output stream"))?;
+        accessor.with(|mut access| {
+            let mut store = access.as_context_mut();
+            let stream = lower_stream_handoff_plain(&mut store, stream)
+                .map_err(|error| CallError::trap(error.to_string()))?;
+            let cli = Access::<StoreData, WasiCli>::new(store.as_context_mut(), WasiCliView::cli);
+            let future = write(cli, stream).map_err(|error| CallError::trap(error.to_string()))?;
+            lift_future_plain(&mut store, future)
+                .map(|future| vec![future])
+                .map_err(|error| CallError::trap(error.to_string()))
+        })
+    })
+}
+
+fn write_stdout_real(
+    accessor: &Accessor<StoreData>,
+    args: Vals,
+) -> wasm_junction_core::BoxFuture<'_, Result<Vals, CallError>> {
+    write_output_real(accessor, args, stdout::HostWithStore::write_via_stream)
+}
+
+fn write_stderr_real(
+    accessor: &Accessor<StoreData>,
+    args: Vals,
+) -> wasm_junction_core::BoxFuture<'_, Result<Vals, CallError>> {
+    write_output_real(accessor, args, stderr::HostWithStore::write_via_stream)
+}
+
+struct OutputGate {
+    interface: &'static str,
+    stream: Val,
+    real: RealConcurrent,
+    completion: oneshot::Sender<TransferCompletion>,
+}
+
+impl AccessorTask<StoreData> for OutputGate {
+    async fn run(self, accessor: &Accessor<StoreData>) -> wasmtime::Result<()> {
+        let outcome = trampoline::gate_concurrent(
+            accessor,
+            self.interface,
+            "write-via-stream",
+            vec![self.stream],
+            self.real,
+        )
+        .await;
+        let values = match outcome {
+            Ok(values) => values,
+            Err(error) if error.kind() == CallErrorKind::Refused => {
+                let _ = self.completion.send(Ok(Err(ErrorCode::Io)));
+                return Ok(());
+            }
+            Err(error) => {
+                let _ = self.completion.send(Err(wasmtime::Error::new(error)));
+                return Ok(());
+            }
+        };
+        let [future] =
+            <[Val; 1]>::try_from(values).map_err(|_| wasmtime::Error::new(shape("future")))?;
+        let future = accessor.with(|mut access| {
+            let mut store = access.as_context_mut();
+            lower_future_plain(&mut store, future)
+        })?;
+        accessor.with(|mut access| {
+            future.pipe(
+                access.as_context_mut(),
+                CompletionConsumer(Some(self.completion)),
+            )
+        })
+    }
+}
+
+fn add_output(
+    linker: &mut Linker<StoreData>,
+    interface: &'static str,
+    real: RealConcurrent,
+) -> wasmtime::Result<()> {
+    linker.instance(interface)?.func_wrap(
+        "write-via-stream",
+        move |mut store, (stream,): (StreamReader<u8>,)| {
+            let stream = lift_stream_with_direction_plain(
+                &mut store,
+                stream,
+                ChannelDirection::GuestToHost,
+            )?;
+            let (completion, receiver) = oneshot::channel();
+            let future = FutureReader::new(store.as_context_mut(), async move {
+                receiver
+                    .await
+                    .map_err(|_| wasmtime::Error::msg("CLI output gate ended without a result"))?
+            })?;
+            store.as_context_mut().spawn(OutputGate {
+                interface,
+                stream,
+                real,
+                completion,
+            })?;
+            Ok((future,))
+        },
+    )?;
+    Ok(())
 }
 
 fn add_stdin(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
@@ -126,6 +276,8 @@ pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     gate!(linker, "wasi:cli/exit@0.3.0", "exit-with-code", cli,
         exit::Host::exit_with_code, plain, (status_code: u8) -> ());
     add_stdin(linker)?;
+    add_output(linker, "wasi:cli/stdout@0.3.0", write_stdout_real)?;
+    add_output(linker, "wasi:cli/stderr@0.3.0", write_stderr_real)?;
     gate_drop!(
         linker,
         TERMINAL_INPUT_INTERFACE,
