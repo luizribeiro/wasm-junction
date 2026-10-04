@@ -371,6 +371,17 @@ impl exports::test::wasi::environment::Guest for Component {
     fn socket_differential(tcp_port: u16, udp_port: u16) -> Result<String, String> {
         Ok(format!("{}|{}", tcp_echo(tcp_port)?, udp_echo(udp_port)?))
     }
+
+    fn dns_probe(name: String) -> String {
+        let network = wasi::sockets::instance_network::instance_network();
+        match wasi::sockets::ip_name_lookup::resolve_addresses(&network, &name) {
+            Ok(stream) => {
+                drop(stream);
+                "started".to_owned()
+            }
+            Err(error) => error.name().to_owned(),
+        }
+    }
 }
 
 fn tcp_echo(port: u16) -> Result<String, String> {
