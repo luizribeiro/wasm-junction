@@ -382,6 +382,14 @@ impl exports::test::wasi::environment::Guest for Component {
             Err(error) => error.name().to_owned(),
         }
     }
+
+    fn socket_handle() -> bool {
+        use wasi::sockets::network::{ErrorCode, IpAddressFamily};
+
+        let socket =
+            wasi::sockets::tcp_create_socket::create_tcp_socket(IpAddressFamily::Ipv4).unwrap();
+        matches!(socket.set_hop_limit(64), Err(ErrorCode::AccessDenied))
+    }
 }
 
 fn tcp_echo(port: u16) -> Result<String, String> {

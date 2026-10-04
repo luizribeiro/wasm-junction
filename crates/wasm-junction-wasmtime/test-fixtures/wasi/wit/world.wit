@@ -35,6 +35,7 @@ interface environment {
   udp-echo: func(port: u16) -> result<string, string>;
   socket-differential: func(tcp-port: u16, udp-port: u16) -> result<string, string>;
   dns-probe: func(name: string) -> string;
+  socket-handle: func() -> bool;
 }
 
 world fixture {
