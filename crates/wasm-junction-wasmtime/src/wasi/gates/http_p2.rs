@@ -28,6 +28,7 @@ mod codec;
 mod context;
 mod error_values;
 mod outgoing;
+mod requests;
 mod responses;
 mod values;
 
@@ -79,6 +80,7 @@ macro_rules! validator {
 }
 
 validator!(validate_request, HostOutgoingRequest);
+validator!(validate_incoming_request, HostIncomingRequest);
 validator!(validate_options, RequestOptions);
 validator!(validate_outgoing_body, HostOutgoingBody);
 validator!(validate_incoming_body, HostIncomingBody);
@@ -108,6 +110,7 @@ pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     add_request_options(linker)?;
     bodies::add(linker)?;
     outgoing::add(linker)?;
+    requests::add(linker)?;
     responses::add(linker)
 }
 
