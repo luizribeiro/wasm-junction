@@ -123,8 +123,30 @@ macro_rules! gate_descriptor {
     };
 }
 
-pub(super) fn add_stat(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+pub(super) fn add_metadata(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    gate_descriptor!(linker, "[method]descriptor.advise", HostDescriptorWithStore::advise, [0],
+        (descriptor: Resource<Descriptor>, offset: u64, length: u64, advice: Advice) -> ());
+    gate_descriptor!(linker, "[method]descriptor.sync-data", HostDescriptorWithStore::sync_data,
+        [0], (descriptor: Resource<Descriptor>) -> ());
+    gate_descriptor!(linker, "[method]descriptor.get-flags", HostDescriptorWithStore::get_flags,
+        [0], (descriptor: Resource<Descriptor>) -> DescriptorFlags);
+    gate_descriptor!(linker, "[method]descriptor.get-type", HostDescriptorWithStore::get_type,
+        [0], (descriptor: Resource<Descriptor>) -> DescriptorType);
+    gate_descriptor!(linker, "[method]descriptor.set-size", HostDescriptorWithStore::set_size,
+        [0], (descriptor: Resource<Descriptor>, size: u64) -> ());
+    gate_descriptor!(linker, "[method]descriptor.set-times", HostDescriptorWithStore::set_times,
+        [0], (descriptor: Resource<Descriptor>, accessed: NewTimestamp,
+            modified: NewTimestamp) -> ());
     gate_descriptor!(linker, "[method]descriptor.stat", HostDescriptorWithStore::stat,
         [0], (descriptor: Resource<Descriptor>) -> DescriptorStat);
+    gate_descriptor!(linker, "[method]descriptor.sync", HostDescriptorWithStore::sync,
+        [0], (descriptor: Resource<Descriptor>) -> ());
+    gate_descriptor!(linker, "[method]descriptor.metadata-hash",
+        HostDescriptorWithStore::metadata_hash, [0],
+        (descriptor: Resource<Descriptor>) -> MetadataHashValue);
+    gate_descriptor!(linker, "[method]descriptor.metadata-hash-at",
+        HostDescriptorWithStore::metadata_hash_at, [0],
+        (descriptor: Resource<Descriptor>, path_flags: PathFlags,
+            path: String) -> MetadataHashValue);
     Ok(())
 }
