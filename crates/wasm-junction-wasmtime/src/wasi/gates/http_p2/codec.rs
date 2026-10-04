@@ -1,0 +1,108 @@
+use super::super::{FromVal, ToVal, shape};
+use wasm_junction_core::{CallError, Resource as JunctionResource, ResourceOwnership, Val, Vals};
+use wasmtime::component::Resource;
+
+pub(super) trait HttpResource: 'static {
+    const INTERFACE: &'static str;
+    const NAME: &'static str;
+}
+
+pub(super) trait ToHttpVal {
+    fn to_http_val(self) -> Val;
+}
+
+pub(super) trait FromHttpVal: Sized {
+    fn from_http_val(value: Val) -> Result<Self, CallError>;
+}
+
+macro_rules! through_core_codec {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl ToHttpVal for $ty {
+                fn to_http_val(self) -> Val { self.to_val() }
+            }
+
+            impl FromHttpVal for $ty {
+                fn from_http_val(value: Val) -> Result<Self, CallError> {
+                    Self::from_val(value)
+                }
+            }
+        )+
+    };
+}
+
+through_core_codec!(
+    String,
+    bool,
+    u8,
+    u16,
+    u32,
+    u64,
+    Vec<u8>,
+    Vec<Vec<u8>>,
+    Vec<(String, Vec<u8>)>,
+);
+
+impl<T: HttpResource> ToHttpVal for Resource<T> {
+    fn to_http_val(self) -> Val {
+        let resource = if self.owned() {
+            JunctionResource::owned(T::INTERFACE, T::NAME, self.rep())
+        } else {
+            JunctionResource::borrowed(T::INTERFACE, T::NAME, self.rep())
+        };
+        Val::Resource(resource)
+    }
+}
+
+impl<T: HttpResource> FromHttpVal for Resource<T> {
+    fn from_http_val(value: Val) -> Result<Self, CallError> {
+        let Val::Resource(resource) = value else {
+            return Err(shape(T::NAME));
+        };
+        if resource.interface() != T::INTERFACE || resource.name() != T::NAME {
+            return Err(shape(T::NAME));
+        }
+        Ok(match resource.ownership() {
+            ResourceOwnership::Own => Self::new_own(resource.id()),
+            ResourceOwnership::Borrow => Self::new_borrow(resource.id()),
+        })
+    }
+}
+
+pub(super) fn finish_http<T: FromHttpVal>(outcome: Result<Vals, CallError>) -> wasmtime::Result<T> {
+    let values = outcome.map_err(wasmtime::Error::new)?;
+    let [value] = <[Val; 1]>::try_from(values).map_err(|_| shape("one result"))?;
+    T::from_http_val(value).map_err(wasmtime::Error::new)
+}
+
+macro_rules! gate_http {
+    ($linker:ident, $name:literal, $method:path, $validate:ident,
+     ($($arg:ident: $ty:ty),*) -> $ok:ty) => {
+        $linker.instance(TYPES)?.func_wrap_async(
+            $name,
+            |mut store, ($($arg,)*): ($($ty,)*)| Box::new(async move {
+                let invocation = store.data().context.invocation_id()
+                    .ok_or_else(|| wasmtime::Error::msg("WASI call has no invocation id"))?;
+                let mut args = scope_values(vec![$($arg.to_http_val()),*], invocation);
+                add_handle_contexts(&mut args, store.data());
+                let real: Real = |mut store, args| Box::pin(async move {
+                    $validate(&args, store.data_mut())?;
+                    #[allow(unused_mut, unused_variables)]
+                    let mut args = args.into_iter();
+                    $(let $arg = <$ty>::from_http_val(
+                        args.next().ok_or_else(|| shape("another argument"))?
+                    )?;)*
+                    let value = $method(&mut views::http(store.data_mut()) $(, $arg)*)
+                        .map_err(|error| CallError::trap(error.to_string()))?;
+                    let invocation = store.data().context.invocation_id()
+                        .ok_or_else(|| CallError::trap("WASI call has no invocation id"))?;
+                    Ok(scope_values(vec![value.to_http_val()], invocation))
+                });
+                let outcome = trampoline::gate(&mut store, TYPES, $name, args, real).await;
+                Ok((codec::finish_http::<$ok>(outcome)?,))
+            }),
+        )?;
+    };
+}
+
+pub(super) use gate_http;

@@ -1447,7 +1447,7 @@ mod views {
         store
     }
 
-    #[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
+    #[cfg(feature = "wasi-http")]
     pub(super) fn http(store: &mut StoreData) -> wasmtime_wasi_http::WasiHttpCtxView<'_> {
         wasmtime_wasi_http::WasiHttpView::http(store)
     }
