@@ -103,6 +103,44 @@ type ChannelEvents = Arc<Mutex<Vec<(bool, wasm_junction::InvocationId, u64, Chan
 type CapturedBytes = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
 
 #[cfg(feature = "wasi-p3")]
+fn record_channel_event(events: &ChannelEvents, event: &Event) {
+    let observation = match event {
+        Event::ChannelOpen {
+            invocation,
+            stream,
+            direction,
+        } => Some((true, *invocation, *stream, *direction)),
+        Event::ChannelClose {
+            invocation,
+            stream,
+            direction,
+        } => Some((false, *invocation, *stream, *direction)),
+        _ => None,
+    };
+    if let Some(observation) = observation {
+        events.lock().unwrap().push(observation);
+    }
+}
+
+#[cfg(feature = "wasi-p3")]
+fn assert_channel_closed(
+    events: &ChannelEvents,
+    invocation: wasm_junction::InvocationId,
+    direction: ChannelDirection,
+) {
+    let events: Vec<_> = events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|event| event.1 == invocation && event.3 == direction)
+        .copied()
+        .collect();
+    assert_eq!(events.len(), 2);
+    assert!(events[0].0);
+    assert_eq!(events[1], (false, invocation, events[0].2, direction));
+}
+
+#[cfg(feature = "wasi-p3")]
 struct StdioPolicy {
     refuse_stdout: bool,
     bytes: CapturedBytes,
@@ -140,22 +178,7 @@ impl Middleware for StdioPolicy {
     }
 
     fn event(&self, event: &Event) {
-        let observation = match event {
-            Event::ChannelOpen {
-                invocation,
-                stream,
-                direction,
-            } => Some((true, *invocation, *stream, *direction)),
-            Event::ChannelClose {
-                invocation,
-                stream,
-                direction,
-            } => Some((false, *invocation, *stream, *direction)),
-            _ => None,
-        };
-        if let Some(observation) = observation {
-            self.events.lock().unwrap().push(observation);
-        }
+        record_channel_event(&self.events, event);
     }
 }
 
@@ -175,7 +198,7 @@ fn output_bytes_and_completion_cross_middleware() {
     let [Val::String(result)] = result.as_slice() else {
         panic!("CLI probe returned the wrong shape")
     };
-    assert!(result.contains("|0|true|true|true|"));
+    assert!(result.contains("|0|ok|true|true|"));
     assert_eq!(
         *bytes.lock().unwrap(),
         [
@@ -208,7 +231,50 @@ fn output_refusal_resolves_to_the_cli_error() {
     let [Val::String(result)] = result.as_slice() else {
         panic!("CLI probe returned the wrong shape")
     };
-    assert!(result.contains("|0|true|false|true|"));
+    assert!(result.contains("|0|ok|false|true|"));
+}
+
+#[cfg(feature = "wasi-p3")]
+struct RefuseStdin {
+    invocation: Arc<Mutex<Option<wasm_junction::InvocationId>>>,
+    events: ChannelEvents,
+}
+
+#[cfg(feature = "wasi-p3")]
+impl Middleware for RefuseStdin {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.interface.as_ref() == "wasi:cli/stdin@0.3.0" {
+            *self.invocation.lock().unwrap() = Some(call.invocation_id());
+            Err(CallError::refused("stdin denied"))
+        } else {
+            next.run(call).await
+        }
+    }
+
+    fn event(&self, event: &Event) {
+        record_channel_event(&self.events, event);
+    }
+}
+
+#[test]
+#[cfg(feature = "wasi-p3")]
+fn stdin_refusal_returns_a_closed_stream_and_io_completion() {
+    let invocation = Arc::new(Mutex::new(None));
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let app = p3_app(RefuseStdin {
+        invocation: invocation.clone(),
+        events: events.clone(),
+    });
+    let result = block_on(app.call("p3", EXPORT, "cli", Vec::new())).unwrap();
+    let [Val::String(result)] = result.as_slice() else {
+        panic!("CLI probe returned the wrong shape")
+    };
+    assert!(result.contains("|0|io|true|true|"));
+    assert_channel_closed(
+        &events,
+        invocation.lock().unwrap().unwrap(),
+        ChannelDirection::HostToGuest,
+    );
 }
 
 #[test]

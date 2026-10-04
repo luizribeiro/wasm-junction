@@ -63,7 +63,12 @@ async fn cli_probe() -> String {
     let cwd = wasi::cli::environment::get_initial_cwd();
     let (input, completion) = wasi::cli::stdin::read_via_stream();
     let input = input.collect().await;
-    let input_ok = completion.await.is_ok();
+    let input_result = match completion.await {
+        Ok(()) => "ok",
+        Err(wasi::cli::types::ErrorCode::Io) => "io",
+        Err(wasi::cli::types::ErrorCode::IllegalByteSequence) => "illegal-byte-sequence",
+        Err(wasi::cli::types::ErrorCode::Pipe) => "pipe",
+    };
     let stdout_ok = write_stdout(b"stdout".to_vec()).await;
     let stderr_ok = write_stderr(b"stderr".to_vec()).await;
     let terminals = (
@@ -72,7 +77,7 @@ async fn cli_probe() -> String {
         wasi::cli::terminal_stderr::get_terminal_stderr().is_some(),
     );
     format!(
-        "{environment:?}|{arguments:?}|{cwd:?}|{}|{input_ok}|{stdout_ok}|{stderr_ok}|{terminals:?}",
+        "{environment:?}|{arguments:?}|{cwd:?}|{}|{input_result}|{stdout_ok}|{stderr_ok}|{terminals:?}",
         input.len()
     )
 }
