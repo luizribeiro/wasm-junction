@@ -23,6 +23,7 @@ use wasmtime_wasi_http::{FieldMap, RequestOptions};
 
 use crate::engine::StoreData;
 
+mod bodies;
 mod codec;
 mod values;
 
@@ -75,6 +76,8 @@ macro_rules! validator {
 
 validator!(validate_request, HostOutgoingRequest);
 validator!(validate_options, RequestOptions);
+validator!(validate_outgoing_body, HostOutgoingBody);
+validator!(validate_incoming_body, HostIncomingBody);
 
 fn validate_owned_fields(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
     let Some(Val::Resource(resource)) = values.first() else {
@@ -83,12 +86,20 @@ fn validate_owned_fields(values: &[Val], store: &mut StoreData) -> Result<(), Ca
     codec::validate_owned::<FieldMap>(resource, store)
 }
 
+fn validate_owned_incoming_body(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
+    let Some(Val::Resource(resource)) = values.first() else {
+        return Err(shape("incoming-body"));
+    };
+    codec::validate_owned::<HostIncomingBody>(resource, store)
+}
+
 pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     linker.instance(OUTGOING_HANDLER)?;
     add_drops(linker)?;
     add_fields(linker)?;
     add_outgoing_request(linker)?;
-    add_request_options(linker)
+    add_request_options(linker)?;
+    bodies::add(linker)
 }
 
 fn add_drops(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
@@ -186,9 +197,6 @@ fn add_outgoing_request(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> 
     gate_http!(linker, "[constructor]outgoing-request", OutgoingRequestApi::new,
         validate_owned_fields,
         (headers: Resource<FieldMap>) -> Resource<HostOutgoingRequest>);
-    gate_http_result!(linker, "[method]outgoing-request.body", OutgoingRequestApi::body,
-        validate_request, codec::convert_plain, (),
-        (request: Resource<HostOutgoingRequest>) -> Result<Resource<HostOutgoingBody>, ()>);
     gate_http!(linker, "[method]outgoing-request.method", OutgoingRequestApi::method,
         validate_request, (request: Resource<HostOutgoingRequest>) -> Method);
     gate_http_result!(linker, "[method]outgoing-request.set-method", OutgoingRequestApi::set_method,

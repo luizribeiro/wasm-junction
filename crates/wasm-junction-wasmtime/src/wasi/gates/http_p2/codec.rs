@@ -199,6 +199,16 @@ pub(super) fn finish_result<T: FromHttpVal, E: FromHttpVal>(
 macro_rules! gate_http {
     ($linker:ident, $name:literal, $method:path, $validate:ident,
      ($($arg:ident: $ty:ty),*) -> $ok:ty) => {
+        gate_http!(@define $linker, $name, http, $method, $validate,
+            ($($arg: $ty),*) -> $ok);
+    };
+    ($linker:ident, $name:literal, store, $method:path, $validate:ident,
+     ($($arg:ident: $ty:ty),*) -> $ok:ty) => {
+        gate_http!(@define $linker, $name, store, $method, $validate,
+            ($($arg: $ty),*) -> $ok);
+    };
+    (@define $linker:ident, $name:literal, $view:ident, $method:path, $validate:ident,
+     ($($arg:ident: $ty:ty),*) -> $ok:ty) => {
         $linker.instance(TYPES)?.func_wrap_async(
             $name,
             |mut store, ($($arg,)*): ($($ty,)*)| Box::new(async move {
@@ -213,7 +223,7 @@ macro_rules! gate_http {
                     $(let $arg = <$ty>::from_http_val(
                         args.next().ok_or_else(|| shape("another argument"))?
                     )?;)*
-                    let value = $method(&mut views::http(store.data_mut()) $(, $arg)*)
+                    let value = $method(&mut views::$view(store.data_mut()) $(, $arg)*)
                         .map_err(|error| CallError::trap(error.to_string()))?;
                     let invocation = store.data().context.invocation_id()
                         .ok_or_else(|| CallError::trap("WASI call has no invocation id"))?;
@@ -231,6 +241,17 @@ pub(super) use gate_http;
 macro_rules! gate_http_result {
     ($linker:ident, $name:literal, $method:path, $validate:ident, $convert:path, $denied:expr,
      ($($arg:ident: $ty:ty),*) -> Result<$ok:ty, $error:ty>) => {
+        gate_http_result!(@define $linker, $name, http, $method, $validate, $convert, $denied,
+            ($($arg: $ty),*) -> Result<$ok, $error>);
+    };
+    ($linker:ident, $name:literal, store, $method:path, $validate:ident, $convert:path, $denied:expr,
+     ($($arg:ident: $ty:ty),*) -> Result<$ok:ty, $error:ty>) => {
+        gate_http_result!(@define $linker, $name, store, $method, $validate, $convert, $denied,
+            ($($arg: $ty),*) -> Result<$ok, $error>);
+    };
+    (@define $linker:ident, $name:literal, $view:ident, $method:path, $validate:ident,
+     $convert:path, $denied:expr,
+     ($($arg:ident: $ty:ty),*) -> Result<$ok:ty, $error:ty>) => {
         $linker.instance(TYPES)?.func_wrap_async(
             $name,
             |mut store, ($($arg,)*): ($($ty,)*)| Box::new(async move {
@@ -245,7 +266,7 @@ macro_rules! gate_http_result {
                     $(let $arg = <$ty>::from_http_val(
                         args.next().ok_or_else(|| shape("another argument"))?
                     )?;)*
-                    let result = $convert($method(&mut views::http(store.data_mut()) $(, $arg)*))?;
+                    let result = $convert($method(&mut views::$view(store.data_mut()) $(, $arg)*))?;
                     let invocation = store.data().context.invocation_id()
                         .ok_or_else(|| CallError::trap("WASI call has no invocation id"))?;
                     Ok(scope_values(vec![result.to_http_val()], invocation))
