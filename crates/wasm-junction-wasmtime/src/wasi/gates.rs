@@ -183,6 +183,12 @@ pub(super) fn validate_handle_contexts(values: &[Val], store: &StoreData) -> Res
         .ok_or_else(|| CallError::refused("WASI handle context does not match"))
 }
 
+fn copy_handle_context(store: &mut StoreData, source: u32, target: u32) {
+    if let Some(context) = store.wasi_handle_context(source).cloned() {
+        store.set_wasi_handle_context(target, context);
+    }
+}
+
 fn validate_splice_borrows(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
     validate_borrowed::<DynOutputStream>(
         values.first().ok_or_else(|| shape("output-stream"))?,

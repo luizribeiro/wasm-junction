@@ -15,7 +15,8 @@ mod tcp_gates;
 mod udp_gates;
 mod values;
 
-use gate::{copy_context, gate_socket};
+use super::copy_handle_context as copy_context;
+use gate::gate_socket;
 
 const NETWORK_INTERFACE: &str = "wasi:sockets/network@0.2.12";
 const LOOKUP_INTERFACE: &str = "wasi:sockets/ip-name-lookup@0.2.12";
