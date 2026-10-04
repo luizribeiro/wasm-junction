@@ -44,6 +44,13 @@ const P2_WASI_INTERFACES: &[&str] = &[
     "wasi:random/insecure-seed@0.2.12",
     "wasi:random/insecure@0.2.12",
     "wasi:random/random@0.2.12",
+    "wasi:sockets/instance-network@0.2.12",
+    "wasi:sockets/ip-name-lookup@0.2.12",
+    "wasi:sockets/network@0.2.12",
+    "wasi:sockets/tcp-create-socket@0.2.12",
+    "wasi:sockets/tcp@0.2.12",
+    "wasi:sockets/udp-create-socket@0.2.12",
+    "wasi:sockets/udp@0.2.12",
 ];
 
 #[cfg(feature = "wasi-p3")]

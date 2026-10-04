@@ -23,7 +23,6 @@ pub(crate) struct WasiState {
     socket_local_addresses: HashMap<u32, Val>,
 }
 
-#[allow(dead_code)]
 impl WasiState {
     pub(crate) fn new(context: WasiCtx) -> Self {
         Self {
@@ -119,6 +118,7 @@ pub(crate) fn add_gates(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> 
     gates::add_streams(linker)?;
     gates::add_error(linker)?;
     gates::add_filesystem(linker)?;
+    gates::add_sockets(linker)?;
     #[cfg(feature = "wasi-p3")]
     gates::add_p3(linker)?;
     #[cfg(feature = "wasi-http")]

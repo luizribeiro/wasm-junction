@@ -536,7 +536,7 @@ impl Middleware for RecordChannels {
 #[test]
 fn gated_wasi_set_changes_only_deliberately() {
     assert_eq!(
-        &GATED_WASI_INTERFACES[..20],
+        &GATED_WASI_INTERFACES[..27],
         [
             "wasi:cli/environment@0.2.12",
             "wasi:cli/exit@0.2.12",
@@ -558,13 +558,20 @@ fn gated_wasi_set_changes_only_deliberately() {
             "wasi:random/insecure-seed@0.2.12",
             "wasi:random/insecure@0.2.12",
             "wasi:random/random@0.2.12",
+            "wasi:sockets/instance-network@0.2.12",
+            "wasi:sockets/ip-name-lookup@0.2.12",
+            "wasi:sockets/network@0.2.12",
+            "wasi:sockets/tcp-create-socket@0.2.12",
+            "wasi:sockets/tcp@0.2.12",
+            "wasi:sockets/udp-create-socket@0.2.12",
+            "wasi:sockets/udp@0.2.12",
         ]
     );
     #[cfg(not(feature = "wasi-p3"))]
-    assert_eq!(GATED_WASI_INTERFACES.len(), 20);
+    assert_eq!(GATED_WASI_INTERFACES.len(), 27);
     #[cfg(feature = "wasi-p3")]
     assert_eq!(
-        &GATED_WASI_INTERFACES[20..],
+        &GATED_WASI_INTERFACES[27..],
         [
             "wasi:clocks/types@0.3.0",
             "wasi:clocks/monotonic-clock@0.3.0",

@@ -82,6 +82,10 @@ impl ToVal for IpAddress {
 }
 
 impl FromVal for IpAddress {
+    #[expect(
+        clippy::many_single_char_names,
+        reason = "the names are positions in fixed-size IP address tuples"
+    )]
     fn from_val(value: Val) -> Result<Self, CallError> {
         let Val::Variant {
             case,

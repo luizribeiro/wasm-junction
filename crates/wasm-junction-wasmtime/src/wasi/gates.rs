@@ -365,14 +365,12 @@ impl FromVal for u8 {
     }
 }
 
-#[cfg(feature = "wasi-http")]
 impl ToVal for u16 {
     fn to_val(self) -> Val {
         Val::U16(self)
     }
 }
 
-#[cfg(feature = "wasi-http")]
 impl FromVal for u16 {
     fn from_val(value: Val) -> Result<Self, CallError> {
         match value {
@@ -551,6 +549,26 @@ impl<A: FromVal, B: FromVal> FromVal for (A, B) {
         };
         let [first, second] = <[Val; 2]>::try_from(fields).map_err(|_| shape("pair"))?;
         Ok((A::from_val(first)?, B::from_val(second)?))
+    }
+}
+
+impl<A: ToVal, B: ToVal, C: ToVal> ToVal for (A, B, C) {
+    fn to_val(self) -> Val {
+        Val::Tuple(vec![self.0.to_val(), self.1.to_val(), self.2.to_val()])
+    }
+}
+
+impl<A: FromVal, B: FromVal, C: FromVal> FromVal for (A, B, C) {
+    fn from_val(value: Val) -> Result<Self, CallError> {
+        let Val::Tuple(fields) = value else {
+            return Err(shape("tuple"));
+        };
+        let [first, second, third] = <[Val; 3]>::try_from(fields).map_err(|_| shape("triple"))?;
+        Ok((
+            A::from_val(first)?,
+            B::from_val(second)?,
+            C::from_val(third)?,
+        ))
     }
 }
 
@@ -953,7 +971,8 @@ macro_rules! gate {
             |mut store, ($($arg,)*): ($($ty,)*)| Box::new(async move {
                 let invocation = store.data().context.invocation_id()
                     .ok_or_else(|| wasmtime::Error::msg("WASI call has no invocation id"))?;
-                let args = scope_values(vec![$($arg.to_val()),*], invocation);
+                let mut args = scope_values(vec![$($arg.to_val()),*], invocation);
+                $crate::wasi::gates::add_handle_contexts(&mut args, store.data());
                 let real: Real = |mut store, args| Box::pin(async move {
                     $validate(&args, store.data_mut())?;
                     #[allow(unused_mut, unused_variables)]
@@ -1119,6 +1138,7 @@ macro_rules! gate_concurrent_drop {
 mod filesystem;
 #[cfg(feature = "wasi-http")]
 mod http;
+mod sockets;
 
 #[cfg(feature = "wasi-http")]
 pub(super) fn add_http(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
@@ -1127,6 +1147,10 @@ pub(super) fn add_http(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 
 pub(super) fn add_filesystem(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     filesystem::add(linker)
+}
+
+pub(super) fn add_sockets(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    sockets::add(linker)
 }
 
 pub(super) fn add_environment(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
@@ -1384,6 +1408,7 @@ mod views {
     use wasmtime_wasi::clocks::WasiClocksView;
     use wasmtime_wasi::filesystem::WasiFilesystemView;
     use wasmtime_wasi::random::WasiRandomView;
+    use wasmtime_wasi::sockets::WasiSocketsView;
 
     use crate::engine::StoreData;
 
@@ -1407,6 +1432,10 @@ mod views {
 
     pub(super) fn random(store: &mut StoreData) -> &mut wasmtime_wasi::random::WasiRandomCtx {
         store.random()
+    }
+
+    pub(super) fn sockets(store: &mut StoreData) -> wasmtime_wasi::sockets::WasiSocketsCtxView<'_> {
+        store.sockets()
     }
 
     pub(super) const fn store(store: &mut StoreData) -> &mut StoreData {

@@ -70,7 +70,6 @@ impl WasiHttpView for StoreData {
 }
 
 #[cfg(feature = "wasi")]
-#[allow(dead_code)]
 impl StoreData {
     pub(crate) fn wasi_table(&mut self) -> &mut wasmtime::component::ResourceTable {
         &mut self.wasi.table
