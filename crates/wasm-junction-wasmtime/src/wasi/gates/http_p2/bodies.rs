@@ -8,10 +8,10 @@ fn request_body(
     store: &mut StoreData,
     request: Resource<HostOutgoingRequest>,
 ) -> wasmtime::Result<Result<Resource<HostOutgoingBody>, ()>> {
-    let parent = request.rep();
+    let context = context::read(store, &request)?;
     let body = OutgoingRequestApi::body(&mut views::http(store), request)?;
     if let Ok(body) = &body {
-        copy_handle_context(store, parent, body.rep());
+        store.set_wasi_handle_context(body.rep(), context::value(context));
     }
     Ok(body)
 }
@@ -65,5 +65,9 @@ pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     gate_http!(linker, "[static]incoming-body.finish", store, incoming_body_finish,
         validate_owned_incoming_body,
         (body: Resource<HostIncomingBody>) -> Resource<HostFutureTrailers>);
+    gate_http_result!(linker, "[static]outgoing-body.finish", OutgoingBodyApi::finish,
+        validate_outgoing_body_finish, codec::convert_http, ErrorCode::HttpRequestDenied,
+        (body: Resource<HostOutgoingBody>, trailers: Option<Resource<FieldMap>>)
+            -> Result<(), ErrorCode>);
     Ok(())
 }

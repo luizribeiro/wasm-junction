@@ -20,13 +20,15 @@ pub(super) fn read(
     let id = request.rep();
     let mut view = views::http(store);
     let fields = OutgoingRequestApi::headers(&mut view, Resource::new_borrow(id))?;
-    Ok((
+    let context = (
         OutgoingRequestApi::method(&mut view, Resource::new_borrow(id))?,
         OutgoingRequestApi::scheme(&mut view, Resource::new_borrow(id))?,
         OutgoingRequestApi::authority(&mut view, Resource::new_borrow(id))?,
         OutgoingRequestApi::path_with_query(&mut view, Resource::new_borrow(id))?,
-        HostFields::entries(&mut view, fields)?,
-    ))
+        HostFields::entries(&mut view, Resource::new_borrow(fields.rep()))?,
+    );
+    HostFields::drop(&mut view, fields)?;
+    Ok(context)
 }
 
 pub(super) fn apply(

@@ -107,6 +107,20 @@ fn validate_owned_incoming_body(values: &[Val], store: &mut StoreData) -> Result
     codec::validate_owned::<HostIncomingBody>(resource, store)
 }
 
+fn validate_outgoing_body_finish(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
+    let [Val::Resource(body), trailers, ..] = values else {
+        return Err(shape("outgoing-body arguments"));
+    };
+    codec::validate_owned::<HostOutgoingBody>(body, store)?;
+    if let Val::Option(Some(trailers)) = trailers {
+        let Val::Resource(trailers) = trailers.as_ref() else {
+            return Err(shape("fields"));
+        };
+        codec::validate_owned::<FieldMap>(trailers, store)?;
+    }
+    Ok(())
+}
+
 pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     linker.instance(OUTGOING_HANDLER)?;
     add_drops(linker)?;
