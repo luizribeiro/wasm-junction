@@ -608,6 +608,61 @@ fn unscoped_terminal_handle_is_refused() {
     );
 }
 
+#[cfg(feature = "wasi-p3")]
+struct RecordTerminalDrops(Arc<Mutex<Vec<String>>>);
+
+#[cfg(feature = "wasi-p3")]
+impl Middleware for RecordTerminalDrops {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        if matches!(
+            call.function.as_ref(),
+            "[drop]terminal-input" | "[drop]terminal-output"
+        ) {
+            self.0.lock().unwrap().push(call.function.to_string());
+            return Ok(Vec::new());
+        }
+        let invocation = call.invocation_id();
+        let terminal = match call.interface.as_ref() {
+            "wasi:cli/terminal-stdin@0.3.0" => {
+                Some(("wasi:cli/terminal-input@0.3.0", "terminal-input", 31))
+            }
+            "wasi:cli/terminal-stdout@0.3.0" | "wasi:cli/terminal-stderr@0.3.0" => {
+                Some(("wasi:cli/terminal-output@0.3.0", "terminal-output", 32))
+            }
+            _ => None,
+        };
+        let mut values = next.run(call).await?;
+        if let Some((interface, name, id)) = terminal {
+            values = vec![Val::Option(Some(Box::new(Val::Resource(
+                wasm_junction::Resource::__owned_for_invocation(interface, name, id, invocation),
+            ))))];
+        }
+        Ok(values)
+    }
+}
+
+#[test]
+#[cfg(feature = "wasi-p3")]
+fn every_terminal_resource_drop_crosses_middleware() {
+    let drops = Arc::new(Mutex::new(Vec::new()));
+    let app = p3_app(RecordTerminalDrops(drops.clone()));
+    let result = block_on(app.call("p3", EXPORT, "cli", Vec::new())).unwrap();
+    let [Val::String(result)] = result.as_slice() else {
+        panic!("CLI probe returned the wrong shape")
+    };
+    assert!(result.ends_with("(true, true, true)"));
+    let mut drops = drops.lock().unwrap().clone();
+    drops.sort();
+    assert_eq!(
+        drops,
+        [
+            "[drop]terminal-input",
+            "[drop]terminal-output",
+            "[drop]terminal-output",
+        ]
+    );
+}
+
 #[test]
 #[cfg(feature = "wasi-p3")]
 fn p3_clock_waits_can_await_middleware_and_be_rewritten() {
