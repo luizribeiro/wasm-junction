@@ -25,6 +25,7 @@ use crate::engine::StoreData;
 
 mod bodies;
 mod codec;
+mod error_values;
 mod values;
 
 const TYPES: &str = "wasi:http/types@0.2.12";
