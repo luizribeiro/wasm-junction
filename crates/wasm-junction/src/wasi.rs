@@ -22,6 +22,14 @@ use crate::{Provided, WASI_PROVIDER_NAME};
 /// configured capability that produced a handle; middleware should make policy decisions from it
 /// rather than from relative path arguments.
 ///
+/// Socket calls expose declared WIT arguments first. Addresses on connect, bind, UDP stream, and
+/// datagram send calls therefore keep their declared position, as does the name on
+/// `resolve-addresses`. Handle-only calls append one policy value per socket-derived handle in
+/// handle-argument order: an `ip-socket-address` value for TCP sockets, byte streams, UDP sockets,
+/// and datagram streams, or the queried string for resolve streams. A connected handle uses its
+/// peer address; an unconnected UDP handle uses its local address. Resource drops use the owned
+/// handle followed by the same policy value.
+///
 /// ```
 /// use wasm_junction::{App, BuildError, wasi};
 ///

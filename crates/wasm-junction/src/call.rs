@@ -40,7 +40,7 @@ pub struct Call {
     /// The function arguments in declaration order.
     #[cfg_attr(
         feature = "wasi",
-        doc = "\nWASI filesystem calls append policy context as described by [`wasi::provider`](crate::wasi::provider)."
+        doc = "\nWASI filesystem and socket calls append policy context as described by [`wasi::provider`](crate::wasi::provider)."
     )]
     #[cfg_attr(
         feature = "wasi-http",

@@ -179,7 +179,7 @@ fn wasi_preview_three_import_is_missing_with_the_provider() {
 
 #[cfg(all(feature = "wasi", feature = "wasmtime", not(target_family = "wasm")))]
 #[test]
-fn filesystem_loads_while_sockets_remain_missing() {
+fn filesystem_and_sockets_load_with_the_wasi_provider() {
     let filesystem = component_bytes_from(
         &[
             (
@@ -201,7 +201,7 @@ fn filesystem_loads_while_sockets_remain_missing() {
             ),
             (
                 "sockets.wit",
-                "package wasi:sockets@0.2.12; interface network { probe: func(); }",
+                "package wasi:sockets@0.2.12; interface network {}",
             ),
             (
                 "fixture.wit",
@@ -223,12 +223,7 @@ fn filesystem_loads_while_sockets_remain_missing() {
         ),
     )
     .unwrap();
-    let error = block_on(app.load(Component::from_bytes(bytes).unwrap().named("client")))
-        .expect_err("ungated WASI imports unexpectedly resolved");
-    let LoadError::MissingImports(missing) = error else {
-        panic!("expected missing imports")
-    };
-    assert_eq!(missing.interfaces(), ["wasi:sockets/network@0.2.12"]);
+    block_on(app.load(Component::from_bytes(bytes).unwrap().named("client"))).unwrap();
 }
 
 fn _engine_contract_is_object_safe(
