@@ -5,9 +5,9 @@ use wasmtime_wasi::p3::bindings::filesystem::types::{ErrorCode, HostDescriptorWi
 
 use super::{
     CallError, CallErrorKind, ChannelDirection, DESCRIPTOR, Descriptor, FromVal, INTERFACE,
-    RealConcurrent, StoreData, Val, Vals, lift_future_plain, lift_stream_with_direction_plain,
-    lower_future_plain, lower_stream_handoff_plain, resource_from_val, resource_to_val,
-    scope_values, shape, trampoline,
+    RealConcurrent, StoreData, Val, Vals, deferred, lift_future_plain,
+    lift_stream_with_direction_plain, lower_future_plain, lower_stream_handoff_plain,
+    resource_from_val, resource_to_val, scope_values, shape, trampoline,
 };
 use crate::wasi::gates::filesystem::gate::{add_context_for, validate_context_for};
 
@@ -21,6 +21,65 @@ fn validate_context(args: &[Val], store: &mut StoreData) -> Result<(), CallError
 
 fn decode_descriptor(value: Val) -> Result<Resource<Descriptor>, CallError> {
     resource_from_val(value, INTERFACE, DESCRIPTOR)
+}
+
+fn write_head(
+    accessor: &wasmtime::component::Accessor<StoreData>,
+    args: Vals,
+) -> Result<(Resource<Descriptor>, Val, std::vec::IntoIter<Val>), CallError> {
+    accessor.with(|mut access| validate_context(&args, access.as_context_mut().data_mut()))?;
+    let mut args = args.into_iter();
+    let descriptor = decode_descriptor(args.next().ok_or_else(|| shape(DESCRIPTOR))?)?;
+    let stream = args.next().ok_or_else(|| shape("stream"))?;
+    Ok((descriptor, stream, args))
+}
+
+pub(super) fn write_at_real(
+    accessor: &wasmtime::component::Accessor<StoreData>,
+    args: Vals,
+) -> wasm_junction_core::BoxFuture<'_, Result<Vals, CallError>> {
+    Box::pin(async move {
+        let (descriptor, stream, mut args) = write_head(accessor, args)?;
+        let offset = u64::from_val(args.next().ok_or_else(|| shape("offset"))?)?;
+        accessor.with(|mut access| {
+            let mut store = access.as_context_mut();
+            let stream = lower_stream_handoff_plain(&mut store, stream)
+                .map_err(|error| CallError::trap(error.to_string()))?;
+            let filesystem = Access::<StoreData, WasiFilesystem>::new(
+                store.as_context_mut(),
+                WasiFilesystemView::filesystem,
+            );
+            let future =
+                HostDescriptorWithStore::write_via_stream(filesystem, descriptor, stream, offset)
+                    .map_err(|error| CallError::trap(error.to_string()))?;
+            lift_future_plain(&mut store, future)
+                .map(|future| vec![future])
+                .map_err(|error| CallError::trap(error.to_string()))
+        })
+    })
+}
+
+pub(super) fn append_real(
+    accessor: &wasmtime::component::Accessor<StoreData>,
+    args: Vals,
+) -> wasm_junction_core::BoxFuture<'_, Result<Vals, CallError>> {
+    Box::pin(async move {
+        let (descriptor, stream, _) = write_head(accessor, args)?;
+        accessor.with(|mut access| {
+            let mut store = access.as_context_mut();
+            let stream = lower_stream_handoff_plain(&mut store, stream)
+                .map_err(|error| CallError::trap(error.to_string()))?;
+            let filesystem = Access::<StoreData, WasiFilesystem>::new(
+                store.as_context_mut(),
+                WasiFilesystemView::filesystem,
+            );
+            let future = HostDescriptorWithStore::append_via_stream(filesystem, descriptor, stream)
+                .map_err(|error| CallError::trap(error.to_string()))?;
+            lift_future_plain(&mut store, future)
+                .map(|future| vec![future])
+                .map_err(|error| CallError::trap(error.to_string()))
+        })
+    })
 }
 
 pub(super) fn read_real(
@@ -49,6 +108,72 @@ pub(super) fn read_real(
             ])])
         })
     })
+}
+
+fn add_write(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    linker.instance(INTERFACE)?.func_wrap(
+        "[method]descriptor.write-via-stream",
+        |mut store, (descriptor, stream, offset): (Resource<Descriptor>, StreamReader<u8>, u64)| {
+            let invocation = store
+                .data()
+                .context
+                .invocation_id()
+                .ok_or_else(|| wasmtime::Error::msg("WASI call has no invocation id"))?;
+            let stream = lift_stream_with_direction_plain(
+                &mut store,
+                stream,
+                ChannelDirection::GuestToHost,
+            )?;
+            let mut args = scope_values(
+                vec![
+                    resource_to_val(&descriptor, INTERFACE, DESCRIPTOR),
+                    stream,
+                    Val::U64(offset),
+                ],
+                invocation,
+            );
+            add_context(&mut args, store.data_mut()).map_err(wasmtime::Error::new)?;
+            let future = deferred::spawn(
+                &mut store,
+                INTERFACE,
+                "[method]descriptor.write-via-stream",
+                args,
+                write_at_real as RealConcurrent,
+                ErrorCode::Access,
+            )?;
+            Ok((future,))
+        },
+    )?;
+    linker.instance(INTERFACE)?.func_wrap(
+        "[method]descriptor.append-via-stream",
+        |mut store, (descriptor, stream): (Resource<Descriptor>, StreamReader<u8>)| {
+            let invocation = store
+                .data()
+                .context
+                .invocation_id()
+                .ok_or_else(|| wasmtime::Error::msg("WASI call has no invocation id"))?;
+            let stream = lift_stream_with_direction_plain(
+                &mut store,
+                stream,
+                ChannelDirection::GuestToHost,
+            )?;
+            let mut args = scope_values(
+                vec![resource_to_val(&descriptor, INTERFACE, DESCRIPTOR), stream],
+                invocation,
+            );
+            add_context(&mut args, store.data_mut()).map_err(wasmtime::Error::new)?;
+            let future = deferred::spawn(
+                &mut store,
+                INTERFACE,
+                "[method]descriptor.append-via-stream",
+                args,
+                append_real as RealConcurrent,
+                ErrorCode::Access,
+            )?;
+            Ok((future,))
+        },
+    )?;
+    Ok(())
 }
 
 fn add_read(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
@@ -119,5 +244,6 @@ fn add_read(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 }
 
 pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
-    add_read(linker)
+    add_read(linker)?;
+    add_write(linker)
 }
