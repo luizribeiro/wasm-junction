@@ -3,6 +3,7 @@ package test:wasi-p3@0.1.0;
 interface probe {
   coverage: async func() -> string;
   cli: async func() -> string;
+  drop-output-completion: async func() -> list<string>;
   exit-success: async func();
   exit-code: async func();
 }

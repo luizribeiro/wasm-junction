@@ -112,6 +112,15 @@ impl exports::test::wasi_p3::probe::Guest for Component {
         cli_probe().await
     }
 
+    async fn drop_output_completion() -> Vec<String> {
+        let (writer, reader) = wit_stream::new();
+        drop(writer);
+        drop(wasi::cli::stdout::write_via_stream(reader));
+        let arguments = wasi::cli::environment::get_arguments();
+        wasi::clocks::monotonic_clock::wait_for(1).await;
+        arguments
+    }
+
     async fn exit_success() {
         wasi::cli::exit::exit(Ok(()));
     }

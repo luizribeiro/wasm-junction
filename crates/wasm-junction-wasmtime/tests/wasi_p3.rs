@@ -4,18 +4,20 @@
 
 use std::future::Future;
 #[cfg(feature = "wasi-p3")]
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 #[cfg(feature = "wasi-p3")]
 use std::sync::{Arc, Mutex};
 #[cfg(feature = "wasi-p3")]
 use std::{collections::BTreeSet, path::Path, process::Command};
 
+#[cfg(feature = "wasi-p3")]
+use tokio::sync::Notify;
 use wasm_junction::LoadError;
 use wasm_junction::{App, Component};
 #[cfg(feature = "wasi-p3")]
 use wasm_junction::{
     Call, CallError, CallErrorKind, ChannelDirection, Event, InputStream, Middleware, Next,
-    OutputStream, StreamHandle, Val, Vals,
+    OutputStream, OutputStreamWriter, StreamHandle, Val, Vals,
 };
 #[cfg(feature = "wasi-p3")]
 use wasm_junction_wasmtime::WASI_INTERFACES;
@@ -275,6 +277,156 @@ fn stdin_refusal_returns_a_closed_stream_and_io_completion() {
         invocation.lock().unwrap().unwrap(),
         ChannelDirection::HostToGuest,
     );
+}
+
+#[cfg(feature = "wasi-p3")]
+struct BlockOutputNext {
+    claimed: AtomicBool,
+    opened: AtomicBool,
+    hold_guest: AtomicBool,
+    state: Arc<OutputDropState>,
+}
+
+#[cfg(feature = "wasi-p3")]
+#[derive(Default)]
+struct OutputDropState {
+    entered: Notify,
+    progressed: Notify,
+    waiting: Notify,
+    writer: Mutex<Option<OutputStreamWriter>>,
+    invocation: Mutex<Option<wasm_junction::InvocationId>>,
+    events: ChannelEvents,
+}
+
+#[cfg(feature = "wasi-p3")]
+impl Middleware for BlockOutputNext {
+    async fn call(&self, mut call: Call, next: Next) -> Result<Vals, CallError> {
+        let progressed = self.opened.load(Ordering::Relaxed)
+            && call.interface.as_ref() == "wasi:cli/environment@0.3.0"
+            && call.function.as_ref() == "get-arguments";
+        if progressed {
+            self.state.progressed.notify_one();
+        }
+        let hold = self.opened.load(Ordering::Relaxed)
+            && call.interface.as_ref() == "wasi:clocks/monotonic-clock@0.3.0"
+            && call.function.as_ref() == "wait-for";
+        if hold && self.hold_guest.swap(false, Ordering::Relaxed) {
+            self.state.waiting.notify_one();
+            return std::future::pending().await;
+        }
+        let block = call.interface.as_ref() == "wasi:cli/stdout@0.3.0"
+            && !self.claimed.swap(true, Ordering::Relaxed);
+        if !block {
+            return next.run(call).await;
+        }
+        *self.state.invocation.lock().unwrap() = Some(call.invocation_id());
+        let (writer, stream) = OutputStream::channel();
+        *self.state.writer.lock().unwrap() = Some(writer);
+        call.args = vec![Val::Stream(StreamHandle::from(stream))];
+        self.state.entered.notify_one();
+        next.run(call).await
+    }
+
+    fn event(&self, event: &Event) {
+        if matches!(
+            event,
+            Event::ChannelOpen {
+                direction: ChannelDirection::GuestToHost,
+                ..
+            }
+        ) {
+            self.opened.store(true, Ordering::Relaxed);
+        }
+        record_channel_event(&self.state.events, event);
+    }
+}
+
+#[cfg(feature = "wasi-p3")]
+async fn assert_store_usable(app: &App) {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        app.call("p3", EXPORT, "cli", Vec::new()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+}
+
+#[test]
+#[cfg(feature = "wasi-p3")]
+fn dropping_output_completion_finishes_cleanly() {
+    let state = Arc::new(OutputDropState::default());
+    let app = p3_app(BlockOutputNext {
+        claimed: AtomicBool::new(false),
+        opened: AtomicBool::new(false),
+        hold_guest: AtomicBool::new(false),
+        state: state.clone(),
+    });
+    block_on(async {
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            let mut call = Box::pin(app.call("p3", EXPORT, "drop-output-completion", Vec::new()));
+            let ready = async {
+                tokio::join!(state.entered.notified(), state.progressed.notified());
+            };
+            tokio::pin!(ready);
+            tokio::select! {
+                biased;
+                () = &mut ready => {}
+                result = &mut call => panic!("output call resolved before guest progress: {result:?}"),
+            }
+            state.writer.lock().unwrap().take();
+            call.await
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(result, [Val::List(vec![Val::from("alpha")])]);
+        let invocation = state.invocation.lock().unwrap().unwrap();
+        assert_channel_closed(&state.events, invocation, ChannelDirection::GuestToHost);
+        assert_store_usable(&app).await;
+    });
+}
+
+#[test]
+#[cfg(feature = "wasi-p3")]
+fn canceling_invocation_inside_output_next_closes_the_channel() {
+    let state = Arc::new(OutputDropState::default());
+    let app = p3_app(BlockOutputNext {
+        claimed: AtomicBool::new(false),
+        opened: AtomicBool::new(false),
+        hold_guest: AtomicBool::new(true),
+        state: state.clone(),
+    });
+    block_on(async {
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            let mut call = Box::pin(app.call("p3", EXPORT, "drop-output-completion", Vec::new()));
+            let ready = async {
+                tokio::join!(state.entered.notified(), state.waiting.notified());
+            };
+            tokio::pin!(ready);
+            tokio::select! {
+                biased;
+                () = &mut ready => {}
+                result = &mut call => panic!("blocked output call returned: {result:?}"),
+            }
+            drop(call);
+            state.writer.lock().unwrap().take();
+            let invocation = state.invocation.lock().unwrap().unwrap();
+            loop {
+                let closed = state.events.lock().unwrap().iter().any(|event| {
+                    !event.0 && event.1 == invocation && event.3 == ChannelDirection::GuestToHost
+                });
+                if closed {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+            assert_channel_closed(&state.events, invocation, ChannelDirection::GuestToHost);
+        })
+        .await
+        .unwrap();
+        assert_store_usable(&app).await;
+    });
 }
 
 #[test]
