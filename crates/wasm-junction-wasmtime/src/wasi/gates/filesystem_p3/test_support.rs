@@ -1,16 +1,21 @@
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::task::{Context, Poll};
 
+use tokio::sync::oneshot;
 use wasm_junction_core::{
     BoxFuture, CallError, ImportDispatcher, ImportTarget, InvocationContext, InvocationId,
     Resource as JunctionResource, Vals,
 };
-use wasmtime::{Config, Engine, Store};
+use wasmtime::component::{FutureConsumer, Source};
+use wasmtime::{AsContextMut, Config, Engine, Store, StoreContextMut};
 use wasmtime_wasi::p3::bindings::filesystem::preopens;
+use wasmtime_wasi::p3::bindings::filesystem::types::ErrorCode;
 use wasmtime_wasi::{FsPerms, WasiCtxBuilder};
 
-use super::StoreData;
+use super::{StoreData, lower_future_plain};
 use crate::wasi::WasiState;
 use crate::wasi::gates::views;
 
@@ -120,4 +125,47 @@ pub(super) fn preopens(accessor: &wasmtime::component::Accessor<StoreData>) -> V
                 .collect())
         })
         .unwrap()
+}
+
+struct CompletionConsumer(Option<oneshot::Sender<Result<(), ErrorCode>>>);
+
+impl FutureConsumer<StoreData> for CompletionConsumer {
+    type Item = Result<(), ErrorCode>;
+
+    fn poll_consume(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        mut store: StoreContextMut<'_, StoreData>,
+        mut source: Source<'_, Self::Item>,
+        finish: bool,
+    ) -> Poll<wasmtime::Result<()>> {
+        let mut result = None;
+        source.read(store.as_context_mut(), &mut result)?;
+        if let Some(result) = result {
+            if let Some(sender) = self.get_mut().0.take() {
+                let _ = sender.send(result);
+            }
+            Poll::Ready(Ok(()))
+        } else if finish {
+            Poll::Ready(Err(wasmtime::Error::msg(
+                "completion ended without a value",
+            )))
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+pub(super) async fn completion(
+    accessor: &wasmtime::component::Accessor<StoreData>,
+    value: wasm_junction_core::Val,
+) -> Result<(), ErrorCode> {
+    let future = accessor
+        .with(|mut access| lower_future_plain(&mut access.as_context_mut(), value))
+        .unwrap();
+    let (sender, receiver) = oneshot::channel();
+    accessor
+        .with(|mut access| future.pipe(access.as_context_mut(), CompletionConsumer(Some(sender))))
+        .unwrap();
+    receiver.await.unwrap()
 }

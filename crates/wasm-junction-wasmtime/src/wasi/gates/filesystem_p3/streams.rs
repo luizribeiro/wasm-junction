@@ -247,3 +247,106 @@ pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     add_read(linker)?;
     add_write(linker)
 }
+
+#[cfg(test)]
+mod tests {
+    use wasm_junction_core::OutputStream;
+    use wasmtime::component::Resource;
+    use wasmtime_wasi::FsPerms;
+    use wasmtime_wasi::p3::bindings::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
+
+    use super::*;
+    use crate::wasi::gates::filesystem_p3::descriptors::open_at;
+    use crate::wasi::gates::filesystem_p3::test_support::{
+        TestDirectory, TestDispatcher, completion, preopens, store,
+    };
+
+    async fn open_file(
+        accessor: &wasmtime::component::Accessor<StoreData>,
+        root: u32,
+        path: &str,
+        flags: DescriptorFlags,
+    ) -> Resource<Descriptor> {
+        let filesystem = accessor.with_getter::<WasiFilesystem>(WasiFilesystemView::filesystem);
+        open_at(
+            &filesystem,
+            Resource::new_borrow(root),
+            PathFlags::empty(),
+            path.to_owned(),
+            OpenFlags::empty(),
+            flags,
+        )
+        .await
+        .unwrap()
+    }
+
+    fn args(
+        accessor: &wasmtime::component::Accessor<StoreData>,
+        descriptor: u32,
+        mut values: Vals,
+    ) -> Vals {
+        let mut args = vec![resource_to_val(
+            &Resource::<Descriptor>::new_borrow(descriptor),
+            INTERFACE,
+            DESCRIPTOR,
+        )];
+        args.append(&mut values);
+        accessor.with(|mut access| {
+            let invocation = access.get().context.invocation_id().unwrap();
+            let mut args = scope_values(args, invocation);
+            add_context(&mut args, access.get()).unwrap();
+            args
+        })
+    }
+
+    fn one(values: Vals) -> Val {
+        let [value] = <[Val; 1]>::try_from(values).unwrap();
+        value
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn write_and_append_streams_update_the_file_and_complete() {
+        let directory = TestDirectory::new("p3-write-append");
+        std::fs::write(directory.path().join("note.txt"), b"old").unwrap();
+        let mut store = store(
+            &[(directory.path(), "/data", FsPerms::ReadWrite)],
+            TestDispatcher::passing(),
+        );
+
+        store
+            .run_concurrent(async |accessor| -> wasmtime::Result<()> {
+                let root = preopens(accessor)[0].0;
+                let file = open_file(
+                    accessor,
+                    root,
+                    "note.txt",
+                    DescriptorFlags::READ | DescriptorFlags::WRITE,
+                )
+                .await;
+                let write = args(
+                    accessor,
+                    file.rep(),
+                    vec![Val::from(OutputStream::from_bytes(b"new")), Val::U64(0)],
+                );
+                let future = one(write_at_real(accessor, write).await.unwrap());
+                assert!(completion(accessor, future).await.is_ok());
+
+                let append = args(
+                    accessor,
+                    file.rep(),
+                    vec![Val::from(OutputStream::from_bytes(b" tail"))],
+                );
+                let future = one(append_real(accessor, append).await.unwrap());
+                assert!(completion(accessor, future).await.is_ok());
+                wasmtime::Result::Ok(())
+            })
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read(directory.path().join("note.txt")).unwrap(),
+            b"new tail"
+        );
+    }
+}
