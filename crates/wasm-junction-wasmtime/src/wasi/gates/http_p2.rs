@@ -7,7 +7,7 @@ use codec::{FromHttpVal, HttpResource, ToHttpVal, gate_http, gate_http_drop, gat
 use wasmtime::component::{Linker, Resource};
 use wasmtime_wasi::{p2::DynInputStream, p2::DynOutputStream, p2::DynPollable};
 use wasmtime_wasi_http::p2::bindings::http::types::{
-    HeaderError, HostFields, HostFutureIncomingResponse as FutureIncomingResponseApi,
+    ErrorCode, HeaderError, HostFields, HostFutureIncomingResponse as FutureIncomingResponseApi,
     HostFutureTrailers as FutureTrailersApi, HostIncomingBody as IncomingBodyApi,
     HostIncomingRequest as IncomingRequestApi, HostIncomingResponse as IncomingResponseApi,
     HostOutgoingBody as OutgoingBodyApi, HostOutgoingRequest as OutgoingRequestApi,
@@ -25,7 +25,9 @@ use crate::engine::StoreData;
 
 mod bodies;
 mod codec;
+mod context;
 mod error_values;
+mod outgoing;
 mod values;
 
 const TYPES: &str = "wasi:http/types@0.2.12";
@@ -100,7 +102,8 @@ pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     add_fields(linker)?;
     add_outgoing_request(linker)?;
     add_request_options(linker)?;
-    bodies::add(linker)
+    bodies::add(linker)?;
+    outgoing::add(linker)
 }
 
 fn add_drops(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {

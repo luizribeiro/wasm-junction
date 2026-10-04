@@ -5,7 +5,7 @@ use wasm_junction_core::{
 use wasmtime::component::Resource;
 
 use crate::engine::StoreData;
-use wasmtime_wasi_http::p2::bindings::http::types::{HeaderError, Method, Scheme};
+use wasmtime_wasi_http::p2::bindings::http::types::{ErrorCode, HeaderError, Method, Scheme};
 
 pub(super) trait HttpResource: 'static {
     const INTERFACE: &'static str;
@@ -171,6 +171,18 @@ pub(super) fn finish_http<T: FromHttpVal>(outcome: Result<Vals, CallError>) -> w
 pub(super) fn convert_header<T>(
     result: Result<T, wasmtime_wasi_http::p2::HeaderError>,
 ) -> Result<Result<T, HeaderError>, CallError> {
+    match result {
+        Ok(value) => Ok(Ok(value)),
+        Err(error) => error
+            .downcast()
+            .map(Err)
+            .map_err(|error| CallError::trap(error.to_string())),
+    }
+}
+
+pub(super) fn convert_http<T>(
+    result: Result<T, wasmtime_wasi_http::p2::HttpError>,
+) -> Result<Result<T, ErrorCode>, CallError> {
     match result {
         Ok(value) => Ok(Ok(value)),
         Err(error) => error
