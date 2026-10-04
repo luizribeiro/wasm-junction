@@ -2,7 +2,13 @@ use wasm_junction_core::{
     CallError, CallErrorKind, ChannelDirection, EngineEvent, InvocationId,
     Resource as JunctionResource, ResourceOwnership, Val, Vals, validate_resource_for_invocation,
 };
+#[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
+use wasmtime::component::StreamReader;
+#[cfg(feature = "wasi-p3")]
+use wasmtime::component::{ComponentType, FutureReader};
 use wasmtime::component::{Linker, Resource};
+#[cfg(feature = "wasi-p3")]
+use wasmtime::{AsContextMut, StoreContextMut};
 use wasmtime_wasi::p2::bindings::cli::terminal_input::TerminalInput;
 use wasmtime_wasi::p2::bindings::cli::terminal_output::TerminalOutput;
 use wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime;
@@ -187,6 +193,74 @@ fn copy_handle_context(store: &mut StoreData, source: u32, target: u32) {
     if let Some(context) = store.wasi_handle_context(source).cloned() {
         store.set_wasi_handle_context(target, context);
     }
+}
+
+#[cfg(feature = "wasi-p3")]
+#[cfg_attr(not(feature = "wasi-http"), allow(dead_code))]
+fn lift_future_plain<T: ComponentType + 'static>(
+    store: &mut StoreContextMut<'_, StoreData>,
+    future: FutureReader<T>,
+) -> wasmtime::Result<Val> {
+    let future = future.try_into_future_any(store.as_context_mut())?;
+    crate::engine::lift_future(future, store.data_mut()).map(Val::Future)
+}
+
+#[cfg(feature = "wasi-p3")]
+#[cfg_attr(not(feature = "wasi-http"), allow(dead_code))]
+fn lower_future_plain<T: ComponentType + 'static>(
+    store: &mut StoreContextMut<'_, StoreData>,
+    value: Val,
+) -> wasmtime::Result<FutureReader<T>> {
+    let Val::Future(future) = value else {
+        return Err(wasmtime::Error::new(shape("future")));
+    };
+    let future = crate::engine::lower_future(&future, store.data_mut())?;
+    FutureReader::try_from_future_any(future)
+}
+
+#[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
+fn lift_stream_plain(
+    store: &mut StoreContextMut<'_, StoreData>,
+    stream: StreamReader<u8>,
+) -> wasmtime::Result<Val> {
+    let stream = stream.try_into_stream_any(store.as_context_mut())?;
+    crate::streams::lift_stream(stream, store.as_context_mut()).map(Val::Stream)
+}
+
+#[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
+fn lower_stream_plain(
+    store: &mut StoreContextMut<'_, StoreData>,
+    value: Val,
+) -> wasmtime::Result<StreamReader<u8>> {
+    let Val::Stream(stream) = value else {
+        return Err(wasmtime::Error::new(shape("stream")));
+    };
+    let stream = crate::streams::lower_stream(stream, store.as_context_mut())?;
+    StreamReader::try_from_stream_any(stream)
+}
+
+#[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
+fn lift_optional_stream_plain(
+    store: &mut StoreContextMut<'_, StoreData>,
+    stream: Option<StreamReader<u8>>,
+) -> wasmtime::Result<Val> {
+    stream
+        .map(|stream| lift_stream_plain(store, stream))
+        .transpose()
+        .map(|stream| Val::Option(stream.map(Box::new)))
+}
+
+#[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
+fn lower_optional_stream_plain(
+    store: &mut StoreContextMut<'_, StoreData>,
+    value: Val,
+) -> wasmtime::Result<Option<StreamReader<u8>>> {
+    let Val::Option(stream) = value else {
+        return Err(wasmtime::Error::new(shape("optional stream")));
+    };
+    stream
+        .map(|stream| lower_stream_plain(store, *stream))
+        .transpose()
 }
 
 fn validate_splice_borrows(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
