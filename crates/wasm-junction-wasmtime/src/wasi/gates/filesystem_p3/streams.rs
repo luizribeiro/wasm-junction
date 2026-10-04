@@ -250,7 +250,7 @@ pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use wasm_junction_core::OutputStream;
+    use wasm_junction_core::{InputStream, OutputStream};
     use wasmtime::component::Resource;
     use wasmtime_wasi::FsPerms;
     use wasmtime_wasi::p3::bindings::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
@@ -348,5 +348,39 @@ mod tests {
             std::fs::read(directory.path().join("note.txt")).unwrap(),
             b"new tail"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn read_stream_delivers_bytes_and_completes() {
+        let directory = TestDirectory::new("p3-read");
+        std::fs::write(directory.path().join("note.txt"), b"a useful note").unwrap();
+        let mut store = store(
+            &[(directory.path(), "/data", FsPerms::ReadWrite)],
+            TestDispatcher::passing(),
+        );
+
+        store
+            .run_concurrent(async |accessor| -> wasmtime::Result<()> {
+                let root = preopens(accessor)[0].0;
+                let file = open_file(accessor, root, "note.txt", DescriptorFlags::READ).await;
+                let read = args(accessor, file.rep(), vec![Val::U64(0)]);
+                let [Val::Tuple(pair)] =
+                    <[Val; 1]>::try_from(read_real(accessor, read).await.unwrap()).unwrap()
+                else {
+                    panic!("read returned the wrong shape")
+                };
+                let [stream, future] = <[Val; 2]>::try_from(pair).unwrap();
+                let bytes = InputStream::try_from(stream)
+                    .unwrap()
+                    .read_all()
+                    .await
+                    .unwrap();
+                assert_eq!(bytes, b"a useful note");
+                assert!(completion(accessor, future).await.is_ok());
+                wasmtime::Result::Ok(())
+            })
+            .await
+            .unwrap()
+            .unwrap();
     }
 }
