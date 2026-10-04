@@ -27,10 +27,10 @@ jobs:
         run: nix develop -c cargo check -p wasm-junction --test bindgen_calls --test bindgen_handles --test bindgen_resources --test bindgen_streams --test bindgen_with --target wasm32-unknown-unknown --no-default-features --locked
       - name: Check without WASI
         run: |
-          nix develop -c cargo check -p wasm-junction-wasmtime --no-default-features --locked
-          nix develop -c cargo check -p wasm-junction --no-default-features --features wasmtime --locked
+          nix develop -c cargo clippy -p wasm-junction-wasmtime --no-default-features --locked -- -D warnings
+          nix develop -c cargo clippy -p wasm-junction --no-default-features --features wasmtime --locked -- -D warnings
       - name: Check WASI Preview 3
-        run: nix develop -c cargo check -p wasm-junction --no-default-features --features wasmtime,wasi-p3 --locked
+        run: nix develop -c cargo clippy -p wasm-junction --no-default-features --features wasmtime,wasi-p3 --locked -- -D warnings
       - name: Test WASI Preview 3
         run: |
           nix develop -c cargo nextest run -p wasm-junction-wasmtime --features wasi-p3 --locked

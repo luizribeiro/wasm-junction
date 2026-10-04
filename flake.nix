@@ -101,10 +101,10 @@
               cargo check -p wasm-junction-core --target wasm32-unknown-unknown --locked
               cargo check -p wasm-junction --target wasm32-unknown-unknown --locked
               cargo check -p wasm-junction --test bindgen_calls --test bindgen_handles --test bindgen_resources --test bindgen_streams --test bindgen_with --target wasm32-unknown-unknown --no-default-features --locked
-              cargo check -p wasm-junction-wasmtime --no-default-features --locked
-              cargo check -p wasm-junction --no-default-features --features wasmtime --locked
-              cargo check -p wasm-junction --no-default-features --features wasmtime,wasi-p3 --locked
-              cargo check -p wasm-junction --no-default-features --features wasmtime,wasi-http --locked
+              cargo clippy -p wasm-junction-wasmtime --no-default-features --locked -- -D warnings
+              cargo clippy -p wasm-junction --no-default-features --features wasmtime --locked -- -D warnings
+              cargo clippy -p wasm-junction --no-default-features --features wasmtime,wasi-p3 --locked -- -D warnings
+              cargo clippy -p wasm-junction --no-default-features --features wasmtime,wasi-http --locked -- -D warnings
             '';
           };
           cargo-deny = cargoHook {
