@@ -486,6 +486,11 @@ fn gated_and_plain_wasi_match_for_preview_3_interfaces() {
         .provide(wasm_junction::wasi::provider())
         .build()
         .unwrap();
+    app.configure(
+        "gated-p3",
+        WasiSettings::new().env("GREETING", "hello").arg("alpha"),
+    )
+    .unwrap();
     runtime
         .block_on(
             app.load(

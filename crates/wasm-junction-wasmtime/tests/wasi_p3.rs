@@ -83,6 +83,13 @@ fn p3_app(middleware: impl Middleware + 'static) -> App {
         .middleware(middleware)
         .build()
         .unwrap();
+    app.configure(
+        "p3",
+        wasm_junction::WasiSettings::new()
+            .env("GREETING", "hello")
+            .arg("alpha"),
+    )
+    .unwrap();
     block_on(app.load(Component::from_bytes(COMPONENT).unwrap().named("p3"))).unwrap();
     app
 }
@@ -134,6 +141,8 @@ fn every_function_in_each_gated_p3_interface_has_a_gate() {
     let seen = Arc::new(Mutex::new(BTreeSet::new()));
     let app = p3_app(RecordGates(seen.clone()));
     block_on(app.call("p3", EXPORT, "coverage", Vec::new())).unwrap();
+    block_on(app.call("p3", EXPORT, "exit-success", Vec::new())).unwrap_err();
+    block_on(app.call("p3", EXPORT, "exit-code", Vec::new())).unwrap_err();
 
     assert_eq!(*seen.lock().unwrap(), p3_wit_functions());
 }
