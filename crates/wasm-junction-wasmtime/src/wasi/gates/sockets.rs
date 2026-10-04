@@ -1,10 +1,12 @@
-use wasm_junction_core::{CallError, Val, WasiSettings};
+use wasm_junction_core::{CallError, EngineEvent, Resource as JunctionResource, Val, WasiSettings};
 use wasmtime::component::{Linker, Resource};
 use wasmtime_wasi::p2::bindings::sockets::{ip_name_lookup, network, tcp, udp};
 use wasmtime_wasi::p2::{DynPollable, IoError, SocketResult};
 
 use super::{
-    ToVal, WitResource, validate_borrowed, validate_error_borrow, validate_handle_contexts, views,
+    FromVal, Real, ToVal, WitResource, add_handle_contexts, close_channel, finish,
+    no_resource_validation, scope_values, shape, trampoline, validate_borrowed,
+    validate_error_borrow, validate_handle_contexts, validate_owned, views,
 };
 use crate::engine::StoreData;
 
@@ -121,9 +123,10 @@ fn subscribe_resolve_stream(
     store: &mut StoreData,
     stream: Resource<ip_name_lookup::ResolveAddressStream>,
 ) -> wasmtime::Result<Resource<DynPollable>> {
+    let stream_id = stream.rep();
     let pollable =
         ip_name_lookup::HostResolveAddressStream::subscribe(&mut views::sockets(store), stream)?;
-    if let Some(context) = store.wasi_handle_context(stream.rep()).cloned() {
+    if let Some(context) = store.wasi_handle_context(stream_id).cloned() {
         store.set_wasi_handle_context(pollable.rep(), context);
     }
     Ok(pollable)
@@ -156,22 +159,69 @@ pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 }
 
 fn add_drops(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
-    gate_drop!(linker, NETWORK_INTERFACE, NETWORK, "[drop]network", network::Network,
-        store, None, drop_network);
-    gate_drop!(linker, LOOKUP_INTERFACE, RESOLVE_STREAM, "[drop]resolve-address-stream",
-        ip_name_lookup::ResolveAddressStream, store, None, drop_resolve_stream, await);
-    gate_drop!(linker, TCP_INTERFACE, TCP_SOCKET, "[drop]tcp-socket", tcp::TcpSocket,
-        store, None, drop_tcp_socket);
-    gate_drop!(linker, UDP_INTERFACE, UDP_SOCKET, "[drop]udp-socket", udp::UdpSocket,
-        store, None, drop_udp_socket);
-    gate_drop!(linker, UDP_INTERFACE, INCOMING_DATAGRAM_STREAM,
-        "[drop]incoming-datagram-stream", udp::IncomingDatagramStream, store,
+    gate_drop!(
+        linker,
+        NETWORK_INTERFACE,
+        NETWORK,
+        "[drop]network",
+        network::Network,
+        store,
+        None,
+        drop_network
+    );
+    gate_drop!(
+        linker,
+        LOOKUP_INTERFACE,
+        RESOLVE_STREAM,
+        "[drop]resolve-address-stream",
+        ip_name_lookup::ResolveAddressStream,
+        store,
+        None,
+        drop_resolve_stream,
+        await
+    );
+    gate_drop!(
+        linker,
+        TCP_INTERFACE,
+        TCP_SOCKET,
+        "[drop]tcp-socket",
+        tcp::TcpSocket,
+        store,
+        None,
+        drop_tcp_socket
+    );
+    gate_drop!(
+        linker,
+        UDP_INTERFACE,
+        UDP_SOCKET,
+        "[drop]udp-socket",
+        udp::UdpSocket,
+        store,
+        None,
+        drop_udp_socket
+    );
+    gate_drop!(
+        linker,
+        UDP_INTERFACE,
+        INCOMING_DATAGRAM_STREAM,
+        "[drop]incoming-datagram-stream",
+        udp::IncomingDatagramStream,
+        store,
         Some(wasm_junction_core::ChannelDirection::HostToGuest),
-        drop_incoming_datagram_stream, await);
-    gate_drop!(linker, UDP_INTERFACE, OUTGOING_DATAGRAM_STREAM,
-        "[drop]outgoing-datagram-stream", udp::OutgoingDatagramStream, store,
+        drop_incoming_datagram_stream,
+        await
+    );
+    gate_drop!(
+        linker,
+        UDP_INTERFACE,
+        OUTGOING_DATAGRAM_STREAM,
+        "[drop]outgoing-datagram-stream",
+        udp::OutgoingDatagramStream,
+        store,
         Some(wasm_junction_core::ChannelDirection::GuestToHost),
-        drop_outgoing_datagram_stream, await);
+        drop_outgoing_datagram_stream,
+        await
+    );
     Ok(())
 }
 
