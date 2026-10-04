@@ -391,6 +391,42 @@ impl exports::test::wasi::environment::Guest for Component {
         matches!(socket.set_hop_limit(64), Err(ErrorCode::AccessDenied))
     }
 
+    fn network_handle() -> bool {
+        use wasi::sockets::network::ErrorCode;
+
+        let network = wasi::sockets::instance_network::instance_network();
+        matches!(
+            wasi::sockets::ip_name_lookup::resolve_addresses(&network, "localhost"),
+            Err(ErrorCode::AccessDenied)
+        )
+    }
+
+    fn resolver_handle() -> bool {
+        use wasi::sockets::network::ErrorCode;
+
+        let network = wasi::sockets::instance_network::instance_network();
+        let resolver =
+            wasi::sockets::ip_name_lookup::resolve_addresses(&network, "localhost").unwrap();
+        matches!(
+            resolver.resolve_next_address(),
+            Err(ErrorCode::AccessDenied)
+        )
+    }
+
+    fn incoming_datagram_handle() -> bool {
+        use wasi::sockets::network::ErrorCode;
+
+        let (_socket, incoming, _outgoing) = datagram_streams();
+        matches!(incoming.receive(1), Err(ErrorCode::AccessDenied))
+    }
+
+    fn outgoing_datagram_handle() -> bool {
+        use wasi::sockets::network::ErrorCode;
+
+        let (_socket, _incoming, outgoing) = datagram_streams();
+        matches!(outgoing.check_send(), Err(ErrorCode::AccessDenied))
+    }
+
     fn socket_coverage(tcp_port: u16, udp_port: u16) {
         use wasi::sockets::network::IpAddressFamily;
 
@@ -464,6 +500,22 @@ impl exports::test::wasi::environment::Guest for Component {
             remote_address: None,
         }]);
     }
+}
+
+fn datagram_streams() -> (
+    wasi::sockets::udp::UdpSocket,
+    wasi::sockets::udp::IncomingDatagramStream,
+    wasi::sockets::udp::OutgoingDatagramStream,
+) {
+    use wasi::sockets::network::IpAddressFamily;
+
+    let network = wasi::sockets::instance_network::instance_network();
+    let socket =
+        wasi::sockets::udp_create_socket::create_udp_socket(IpAddressFamily::Ipv4).unwrap();
+    socket.start_bind(&network, socket_address(0)).unwrap();
+    socket.finish_bind().unwrap();
+    let (incoming, outgoing) = socket.stream(None).unwrap();
+    (socket, incoming, outgoing)
 }
 
 fn socket_address(port: u16) -> wasi::sockets::network::IpSocketAddress {

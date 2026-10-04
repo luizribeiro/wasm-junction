@@ -36,6 +36,10 @@ interface environment {
   socket-differential: func(tcp-port: u16, udp-port: u16) -> result<string, string>;
   dns-probe: func(name: string) -> string;
   socket-handle: func() -> bool;
+  network-handle: func() -> bool;
+  resolver-handle: func() -> bool;
+  incoming-datagram-handle: func() -> bool;
+  outgoing-datagram-handle: func() -> bool;
   socket-coverage: func(tcp-port: u16, udp-port: u16);
 }
 

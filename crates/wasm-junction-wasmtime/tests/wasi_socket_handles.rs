@@ -16,16 +16,18 @@ enum InvalidHandle {
     Foreign,
     Mistyped,
     Unscoped,
+    Nonexistent,
 }
 
 struct RewriteHandle {
+    target: &'static str,
     replacement: InvalidHandle,
     saved: Mutex<Option<Resource>>,
 }
 
 impl Middleware for RewriteHandle {
     async fn call(&self, mut call: Call, next: Next) -> Result<Vals, CallError> {
-        if call.function.as_ref() != "[method]tcp-socket.set-hop-limit" {
+        if call.function.as_ref() != self.target {
             return next.run(call).await;
         }
         let Val::Resource(current) = &call.args[0] else {
@@ -56,17 +58,24 @@ impl Middleware for RewriteHandle {
             InvalidHandle::Unscoped => {
                 Resource::borrowed(current.interface(), current.name(), current.id())
             }
+            InvalidHandle::Nonexistent => Resource::__borrowed_for_invocation(
+                current.interface(),
+                current.name(),
+                u32::MAX,
+                call.invocation_id(),
+            ),
         };
         call.args[0] = Val::Resource(replacement);
         next.run(call).await
     }
 }
 
-fn assert_invalid_handle(replacement: InvalidHandle) {
+fn assert_invalid_handle(export: &str, target: &'static str, replacement: InvalidHandle) {
     let app = App::builder()
         .engine(wasm_junction_wasmtime::WasmtimeEngine::new().unwrap())
         .provide(wasm_junction::wasi::provider())
         .middleware(RewriteHandle {
+            target,
             replacement,
             saved: Mutex::new(None),
         })
@@ -82,24 +91,42 @@ fn assert_invalid_handle(replacement: InvalidHandle) {
         .block_on(app.load(Component::from_bytes(COMPONENT).unwrap().named("handles")))
         .unwrap();
     if matches!(replacement, InvalidHandle::Foreign) {
-        let first = runtime
-            .block_on(app.call("handles", EXPORT, "socket-handle", Vec::new()))
-            .unwrap();
-        assert_eq!(first, [Val::Bool(false)]);
+        runtime
+            .block_on(app.call("handles", EXPORT, export, Vec::new()))
+            .unwrap_or_else(|error| panic!("{export} setup failed: {error}"));
     }
     let result = runtime
-        .block_on(app.call("handles", EXPORT, "socket-handle", Vec::new()))
-        .unwrap();
+        .block_on(app.call("handles", EXPORT, export, Vec::new()))
+        .unwrap_or_else(|error| panic!("{export} replacement failed: {error}"));
     assert_eq!(result, [Val::Bool(true)]);
 }
 
 #[test]
 fn invalid_socket_handles_are_refused_as_access_errors() {
-    for replacement in [
-        InvalidHandle::Foreign,
-        InvalidHandle::Mistyped,
-        InvalidHandle::Unscoped,
-    ] {
-        assert_invalid_handle(replacement);
+    let handles = [
+        ("socket-handle", "[method]tcp-socket.set-hop-limit"),
+        ("network-handle", "resolve-addresses"),
+        (
+            "resolver-handle",
+            "[method]resolve-address-stream.resolve-next-address",
+        ),
+        (
+            "incoming-datagram-handle",
+            "[method]incoming-datagram-stream.receive",
+        ),
+        (
+            "outgoing-datagram-handle",
+            "[method]outgoing-datagram-stream.check-send",
+        ),
+    ];
+    for (export, target) in handles {
+        for replacement in [
+            InvalidHandle::Foreign,
+            InvalidHandle::Mistyped,
+            InvalidHandle::Unscoped,
+            InvalidHandle::Nonexistent,
+        ] {
+            assert_invalid_handle(export, target, replacement);
+        }
     }
 }
