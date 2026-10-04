@@ -106,3 +106,25 @@ flags_value!(OpenFlags {
     EXCLUSIVE => "exclusive",
     TRUNCATE => "truncate",
 });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extensible_filesystem_variants_round_trip() {
+        let descriptor = DescriptorType::Other(Some("door".to_owned()));
+        let DescriptorType::Other(descriptor) =
+            DescriptorType::from_val(descriptor.to_val()).unwrap()
+        else {
+            panic!("descriptor type changed case")
+        };
+        assert_eq!(descriptor.as_deref(), Some("door"));
+
+        let error = ErrorCode::Other(Some("remote".to_owned()));
+        let ErrorCode::Other(error) = ErrorCode::from_val(error.to_val()).unwrap() else {
+            panic!("error code changed case")
+        };
+        assert_eq!(error.as_deref(), Some("remote"));
+    }
+}

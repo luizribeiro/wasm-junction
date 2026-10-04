@@ -36,3 +36,31 @@ mod streams;
 #[cfg(test)]
 mod test_support;
 mod values;
+
+#[allow(
+    dead_code,
+    reason = "registration waits for a typed directory-stream middleware design"
+)]
+fn add(linker: &mut wasmtime::component::Linker<crate::engine::StoreData>) -> wasmtime::Result<()> {
+    resources::add(linker)?;
+    descriptors::add_metadata(linker)?;
+    descriptors::add_paths(linker)?;
+    descriptors::add_identity(linker)?;
+    streams::add(linker)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn available_filesystem_gates_register_without_linking() {
+        let mut config = wasmtime::Config::new();
+        config
+            .wasm_component_model_async(true)
+            .concurrency_support(true);
+        let engine = wasmtime::Engine::new(&config).unwrap();
+        let mut linker = wasmtime::component::Linker::new(&engine);
+        add(&mut linker).unwrap();
+    }
+}
