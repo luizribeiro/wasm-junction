@@ -33,7 +33,7 @@ pub(super) fn add_context(
     add_context_for(super::INTERFACE, args, descriptor_positions, store)
 }
 
-pub(super) fn add_context_for(
+pub(in crate::wasi::gates) fn add_context_for(
     interface: &str,
     args: &mut Vals,
     descriptor_positions: &[usize],
@@ -60,7 +60,7 @@ pub(super) fn validate_context(
     validate_context_for(super::INTERFACE, args, descriptor_positions, store)
 }
 
-pub(super) fn validate_context_for(
+pub(in crate::wasi::gates) fn validate_context_for(
     interface: &str,
     args: &[Val],
     descriptor_positions: &[usize],

@@ -20,7 +20,7 @@ use wasmtime_wasi::p2::{DynInputStream, DynOutputStream, FsError, IoError};
 use super::{Real, finish, scope_values, trampoline, views};
 use crate::engine::StoreData;
 
-mod gate;
+pub(super) mod gate;
 
 use gate::{
     add_context, add_directory_stream_context, convert, finish_result, gate_fs, validate_context,
