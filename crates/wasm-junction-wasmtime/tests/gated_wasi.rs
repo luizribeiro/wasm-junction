@@ -3,6 +3,7 @@
 #![cfg(feature = "wasi")]
 
 use std::collections::BTreeSet;
+use std::net::{TcpListener, UdpSocket};
 use std::path::Path;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -89,12 +90,16 @@ fn validate_io_call(call: &Call) {
         "exit-with-code" => &["u8"][..],
         _ => return,
     };
-    assert_eq!(
-        call.args.len(),
-        expected.len(),
-        "wrong arguments for {function}"
-    );
-    for (value, expected) in call.args.iter().zip(expected) {
+    let args = match call.args.split_last() {
+        Some((Val::Variant { case, .. }, declared))
+            if declared.len() == expected.len() && matches!(case.as_str(), "ipv4" | "ipv6") =>
+        {
+            declared
+        }
+        _ => call.args.as_slice(),
+    };
+    assert_eq!(args.len(), expected.len(), "wrong arguments for {function}");
+    for (value, expected) in args.iter().zip(expected) {
         match (value, *expected) {
             (Val::U64(_), "u64")
             | (Val::U8(_), "u8")
@@ -935,7 +940,7 @@ fn every_function_in_each_gated_wit_interface_has_a_gate() {
         .build()
         .unwrap();
     let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_time()
+        .enable_all()
         .build()
         .unwrap();
     let directory = std::env::temp_dir().join(format!(
@@ -946,7 +951,9 @@ fn every_function_in_each_gated_wit_interface_has_a_gate() {
     std::fs::write(directory.join("note.txt"), b"note").unwrap();
     app.configure(
         "coverage",
-        WasiSettings::new().preopen(&directory, "/data", Access::ReadWrite),
+        WasiSettings::new()
+            .preopen(&directory, "/data", Access::ReadWrite)
+            .sockets(true),
     )
     .unwrap();
     runtime
@@ -958,6 +965,25 @@ fn every_function_in_each_gated_wit_interface_has_a_gate() {
     runtime
         .block_on(app.call("coverage", EXPORT, "filesystem-coverage", Vec::new()))
         .unwrap();
+    let tcp = TcpListener::bind("127.0.0.1:0").unwrap();
+    let tcp_port = tcp.local_addr().unwrap().port();
+    let tcp_peer = std::thread::spawn(move || drop(tcp.accept().unwrap()));
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let udp_port = udp.local_addr().unwrap().port();
+    let udp_peer = std::thread::spawn(move || {
+        let mut bytes = [0; 3];
+        let _ = udp.recv_from(&mut bytes).unwrap();
+    });
+    runtime
+        .block_on(app.call(
+            "coverage",
+            EXPORT,
+            "socket-coverage",
+            vec![Val::U16(tcp_port), Val::U16(udp_port)],
+        ))
+        .unwrap();
+    tcp_peer.join().unwrap();
+    udp_peer.join().unwrap();
     runtime
         .block_on(app.call("coverage", EXPORT, "exit-success", Vec::new()))
         .unwrap_err();
@@ -1040,6 +1066,30 @@ fn wit_functions() -> BTreeSet<(String, String)> {
             (
                 "wasi:filesystem/types@0.2.12".to_owned(),
                 "[drop]directory-entry-stream".to_owned(),
+            ),
+            (
+                "wasi:sockets/network@0.2.12".to_owned(),
+                "[drop]network".to_owned(),
+            ),
+            (
+                "wasi:sockets/ip-name-lookup@0.2.12".to_owned(),
+                "[drop]resolve-address-stream".to_owned(),
+            ),
+            (
+                "wasi:sockets/tcp@0.2.12".to_owned(),
+                "[drop]tcp-socket".to_owned(),
+            ),
+            (
+                "wasi:sockets/udp@0.2.12".to_owned(),
+                "[drop]udp-socket".to_owned(),
+            ),
+            (
+                "wasi:sockets/udp@0.2.12".to_owned(),
+                "[drop]incoming-datagram-stream".to_owned(),
+            ),
+            (
+                "wasi:sockets/udp@0.2.12".to_owned(),
+                "[drop]outgoing-datagram-stream".to_owned(),
             ),
         ])
         .collect()

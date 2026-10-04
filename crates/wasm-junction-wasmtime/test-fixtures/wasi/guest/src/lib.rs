@@ -390,6 +390,89 @@ impl exports::test::wasi::environment::Guest for Component {
             wasi::sockets::tcp_create_socket::create_tcp_socket(IpAddressFamily::Ipv4).unwrap();
         matches!(socket.set_hop_limit(64), Err(ErrorCode::AccessDenied))
     }
+
+    fn socket_coverage(tcp_port: u16, udp_port: u16) {
+        use wasi::sockets::network::IpAddressFamily;
+
+        let network = wasi::sockets::instance_network::instance_network();
+        let lookup =
+            wasi::sockets::ip_name_lookup::resolve_addresses(&network, "localhost").unwrap();
+        drop(lookup.subscribe());
+        let _ = lookup.resolve_next_address();
+
+        let tcp = wasi::sockets::tcp_create_socket::create_tcp_socket(IpAddressFamily::Ipv4)
+            .unwrap();
+        let _ = tcp.address_family();
+        let _ = tcp.is_listening();
+        let _ = tcp.set_listen_backlog_size(1);
+        let _ = tcp.keep_alive_enabled();
+        let _ = tcp.set_keep_alive_enabled(true);
+        let _ = tcp.keep_alive_idle_time();
+        let _ = tcp.set_keep_alive_idle_time(1);
+        let _ = tcp.keep_alive_interval();
+        let _ = tcp.set_keep_alive_interval(1);
+        let _ = tcp.keep_alive_count();
+        let _ = tcp.set_keep_alive_count(1);
+        let _ = tcp.hop_limit();
+        let _ = tcp.set_hop_limit(64);
+        let _ = tcp.receive_buffer_size();
+        let _ = tcp.set_receive_buffer_size(4096);
+        let _ = tcp.send_buffer_size();
+        let _ = tcp.set_send_buffer_size(4096);
+        drop(tcp.subscribe());
+        tcp.start_connect(&network, socket_address(tcp_port))
+            .unwrap();
+        tcp.subscribe().block();
+        let (input, output) = tcp.finish_connect().unwrap();
+        let _ = tcp.local_address();
+        let _ = tcp.remote_address();
+        let _ = tcp.shutdown(wasi::sockets::tcp::ShutdownType::Both);
+        drop(input);
+        drop(output);
+
+        let listener =
+            wasi::sockets::tcp_create_socket::create_tcp_socket(IpAddressFamily::Ipv4).unwrap();
+        listener
+            .start_bind(&network, socket_address(0))
+            .unwrap();
+        listener.finish_bind().unwrap();
+        listener.start_listen().unwrap();
+        listener.finish_listen().unwrap();
+        let _ = listener.accept();
+
+        let udp = wasi::sockets::udp_create_socket::create_udp_socket(IpAddressFamily::Ipv4)
+            .unwrap();
+        let _ = udp.address_family();
+        let _ = udp.unicast_hop_limit();
+        let _ = udp.set_unicast_hop_limit(64);
+        let _ = udp.receive_buffer_size();
+        let _ = udp.set_receive_buffer_size(4096);
+        let _ = udp.send_buffer_size();
+        let _ = udp.set_send_buffer_size(4096);
+        drop(udp.subscribe());
+        udp.start_bind(&network, socket_address(0)).unwrap();
+        udp.finish_bind().unwrap();
+        let _ = udp.local_address();
+        let _ = udp.remote_address();
+        let (incoming, outgoing) = udp.stream(Some(socket_address(udp_port))).unwrap();
+        drop(incoming.subscribe());
+        let _ = incoming.receive(1);
+        drop(outgoing.subscribe());
+        let _ = outgoing.check_send();
+        let _ = outgoing.send(&[wasi::sockets::udp::OutgoingDatagram {
+            data: b"udp".to_vec(),
+            remote_address: None,
+        }]);
+    }
+}
+
+fn socket_address(port: u16) -> wasi::sockets::network::IpSocketAddress {
+    wasi::sockets::network::IpSocketAddress::Ipv4(
+        wasi::sockets::network::Ipv4SocketAddress {
+            port,
+            address: (127, 0, 0, 1),
+        },
+    )
 }
 
 fn tcp_echo(port: u16) -> Result<String, String> {
