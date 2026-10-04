@@ -7,6 +7,12 @@ fn main() -> std::io::Result<()> {
         "wasi_test_guest.wasm",
         "wasi-test.wasm",
     )?;
+    println!("cargo::rerun-if-changed=test-fixtures/wasi-http-p2");
+    wasm_junction_guest_build::build_wasi(
+        "test-fixtures/wasi-http-p2/Cargo.toml",
+        "wasi_http_p2_test_guest.wasm",
+        "wasi-http-p2-test.wasm",
+    )?;
     println!("cargo::rerun-if-changed=test-fixtures/wasi-p3");
     wasm_junction_guest_build::build(
         "test-fixtures/wasi-p3/Cargo.toml",

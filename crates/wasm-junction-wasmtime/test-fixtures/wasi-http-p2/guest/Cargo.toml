@@ -1,0 +1,12 @@
+[package]
+name = "wasi-http-p2-test-guest"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasi.workspace = true
+wit-bindgen.workspace = true
