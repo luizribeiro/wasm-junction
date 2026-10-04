@@ -9,11 +9,10 @@ use std::task::{Context, Poll, Waker};
 #[cfg(feature = "wasi-http")]
 use wasm_junction_core::WASI_HTTP_PROVIDER_NAME;
 #[cfg(feature = "wasi")]
-use wasm_junction_core::WASI_PROVIDER_NAME;
+use wasm_junction_core::{Access, WASI_PROVIDER_NAME, WasiSettings};
 use wasm_junction_core::{
-    Access, BoxFuture, CallError, CompiledComponent, Engine, EngineError, FutureHandle,
-    ImportDispatcher, InvocationContext, Resource, StreamHandle, Val, Vals, WasiSettings,
-    validate_resource_lowering,
+    BoxFuture, CallError, CompiledComponent, Engine, EngineError, FutureHandle, ImportDispatcher,
+    InvocationContext, Resource, StreamHandle, Val, Vals, validate_resource_lowering,
 };
 use wasmtime::component::{
     Component, FutureAny, InstancePre, Linker, ResourceAny, ResourceDynamic, ResourceType,

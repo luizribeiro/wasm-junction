@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use semver::Version;
 
+#[cfg(feature = "wasi")]
+use crate::WASI_HTTP_PROVIDER_NAME;
 use crate::component::ComponentParts;
 use crate::middleware::{CallTarget, ErasedMiddleware};
 use crate::provider::ProvidedKind;
@@ -15,7 +17,7 @@ use crate::{
     BoxFuture, Call, CallContext, CallError, Caller, CompiledComponent, Component, Engine,
     EngineError, EngineEvent, Event, Extensions, HostBound, ImportDispatcher, ImportTarget,
     InvocationContext, InvocationId, Middleware, Provided, Provider, Resource, Val, Vals,
-    WASI_HTTP_PROVIDER_NAME, WASI_PROVIDER_NAME, WasiSettings,
+    WASI_PROVIDER_NAME, WasiSettings,
 };
 
 mod lifecycle;

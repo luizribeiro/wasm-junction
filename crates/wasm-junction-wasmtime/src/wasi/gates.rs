@@ -737,6 +737,7 @@ fn finish_unit(outcome: Result<Vals, CallError>) -> wasmtime::Result<()> {
 }
 
 #[cfg(feature = "wasi-p3")]
+#[cfg_attr(not(feature = "wasi-http"), allow(dead_code))]
 fn finish_p3_error<T, E>(
     outcome: Result<Vals, CallError>,
     denied: E,
@@ -750,6 +751,7 @@ fn finish_p3_error<T, E>(
 }
 
 #[cfg(feature = "wasi-p3")]
+#[cfg_attr(not(feature = "wasi-http"), allow(dead_code))]
 fn decode_p3_result<T: FromVal, E: FromVal>(values: Vals) -> Result<Result<T, E>, CallError> {
     let [value] = <[Val; 1]>::try_from(values).map_err(|_| shape("one result"))?;
     let Val::Result(result) = value else {
@@ -766,6 +768,7 @@ fn decode_p3_result<T: FromVal, E: FromVal>(values: Vals) -> Result<Result<T, E>
 }
 
 #[cfg(feature = "wasi-p3")]
+#[cfg_attr(not(feature = "wasi-http"), allow(dead_code))]
 fn p3_result_value<T: ToVal, E: ToVal>(result: Result<T, E>) -> Val {
     Val::Result(match result {
         Ok(value) => Ok(Some(Box::new(value.to_val()))),
@@ -774,6 +777,7 @@ fn p3_result_value<T: ToVal, E: ToVal>(result: Result<T, E>) -> Val {
 }
 
 #[cfg(feature = "wasi-p3")]
+#[cfg_attr(not(feature = "wasi-http"), allow(dead_code))]
 fn convert_trappable<T, E>(
     result: Result<T, wasmtime_wasi::TrappableError<E>>,
 ) -> Result<Result<T, E>, CallError>
