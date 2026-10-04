@@ -1,8 +1,11 @@
 use super::super::{FromVal, ToVal, shape};
-use wasm_junction_core::{CallError, Resource as JunctionResource, ResourceOwnership, Val, Vals};
+use wasm_junction_core::{
+    CallError, CallErrorKind, Resource as JunctionResource, ResourceOwnership, Val, Vals,
+};
 use wasmtime::component::Resource;
 
 use crate::engine::StoreData;
+use wasmtime_wasi_http::p2::bindings::http::types::{HeaderError, Method, Scheme};
 
 pub(super) trait HttpResource: 'static {
     const INTERFACE: &'static str;
@@ -43,7 +46,48 @@ through_core_codec!(
     Vec<u8>,
     Vec<Vec<u8>>,
     Vec<(String, Vec<u8>)>,
+    (),
+    Method,
+    Scheme,
+    HeaderError,
 );
+
+impl<T: ToHttpVal> ToHttpVal for Option<T> {
+    fn to_http_val(self) -> Val {
+        Val::Option(self.map(|value| Box::new(value.to_http_val())))
+    }
+}
+
+impl<T: FromHttpVal> FromHttpVal for Option<T> {
+    fn from_http_val(value: Val) -> Result<Self, CallError> {
+        let Val::Option(value) = value else {
+            return Err(shape("option"));
+        };
+        value.map(|value| T::from_http_val(*value)).transpose()
+    }
+}
+
+impl<T: ToHttpVal, E: ToHttpVal> ToHttpVal for Result<T, E> {
+    fn to_http_val(self) -> Val {
+        Val::Result(match self {
+            Ok(value) => Ok(Some(Box::new(value.to_http_val()))),
+            Err(error) => Err(Some(Box::new(error.to_http_val()))),
+        })
+    }
+}
+
+impl<T: FromHttpVal, E: FromHttpVal> FromHttpVal for Result<T, E> {
+    fn from_http_val(value: Val) -> Result<Self, CallError> {
+        let Val::Result(result) = value else {
+            return Err(shape("result"));
+        };
+        match result {
+            Ok(Some(value)) => T::from_http_val(*value).map(Ok),
+            Err(Some(value)) => E::from_http_val(*value).map(Err),
+            _ => Err(shape("result payload")),
+        }
+    }
+}
 
 impl<T: HttpResource> ToHttpVal for Resource<T> {
     fn to_http_val(self) -> Val {
@@ -102,6 +146,28 @@ pub(super) fn finish_http<T: FromHttpVal>(outcome: Result<Vals, CallError>) -> w
     T::from_http_val(value).map_err(wasmtime::Error::new)
 }
 
+pub(super) fn convert_header<T>(
+    result: Result<T, wasmtime_wasi_http::p2::HeaderError>,
+) -> Result<Result<T, HeaderError>, CallError> {
+    match result {
+        Ok(value) => Ok(Ok(value)),
+        Err(error) => error
+            .downcast()
+            .map(Err)
+            .map_err(|error| CallError::trap(error.to_string())),
+    }
+}
+
+pub(super) fn finish_result<T: FromHttpVal, E: FromHttpVal>(
+    outcome: Result<Vals, CallError>,
+    denied: E,
+) -> wasmtime::Result<Result<T, E>> {
+    match outcome {
+        Err(error) if error.kind() == CallErrorKind::Refused => Ok(Err(denied)),
+        other => finish_http(other),
+    }
+}
+
 macro_rules! gate_http {
     ($linker:ident, $name:literal, $method:path, $validate:ident,
      ($($arg:ident: $ty:ty),*) -> $ok:ty) => {
@@ -133,3 +199,34 @@ macro_rules! gate_http {
 }
 
 pub(super) use gate_http;
+
+macro_rules! gate_http_result {
+    ($linker:ident, $name:literal, $method:path, $validate:ident, $convert:path, $denied:expr,
+     ($($arg:ident: $ty:ty),*) -> Result<$ok:ty, $error:ty>) => {
+        $linker.instance(TYPES)?.func_wrap_async(
+            $name,
+            |mut store, ($($arg,)*): ($($ty,)*)| Box::new(async move {
+                let invocation = store.data().context.invocation_id()
+                    .ok_or_else(|| wasmtime::Error::msg("WASI call has no invocation id"))?;
+                let mut args = scope_values(vec![$($arg.to_http_val()),*], invocation);
+                add_handle_contexts(&mut args, store.data());
+                let real: Real = |mut store, args| Box::pin(async move {
+                    $validate(&args, store.data_mut())?;
+                    #[allow(unused_mut, unused_variables)]
+                    let mut args = args.into_iter();
+                    $(let $arg = <$ty>::from_http_val(
+                        args.next().ok_or_else(|| shape("another argument"))?
+                    )?;)*
+                    let result = $convert($method(&mut views::http(store.data_mut()) $(, $arg)*))?;
+                    let invocation = store.data().context.invocation_id()
+                        .ok_or_else(|| CallError::trap("WASI call has no invocation id"))?;
+                    Ok(scope_values(vec![result.to_http_val()], invocation))
+                });
+                let outcome = trampoline::gate(&mut store, TYPES, $name, args, real).await;
+                Ok((codec::finish_result::<$ok, $error>(outcome, $denied)?,))
+            }),
+        )?;
+    };
+}
+
+pub(super) use gate_http_result;
