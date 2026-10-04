@@ -348,6 +348,60 @@ impl exports::test::wasi::environment::Guest for Component {
         let after = std::fs::read_to_string("/data/output.txt").unwrap();
         format!("{before}|{after}")
     }
+
+    fn sockets_denied() -> (String, String) {
+        use wasi::sockets::network::IpAddressFamily;
+
+        let tcp = wasi::sockets::tcp_create_socket::create_tcp_socket(IpAddressFamily::Ipv4)
+            .expect_err("raw sockets should be disabled");
+        let network = wasi::sockets::instance_network::instance_network();
+        let dns = wasi::sockets::ip_name_lookup::resolve_addresses(&network, "localhost")
+            .expect_err("name lookup should be disabled");
+        (tcp.name().to_owned(), dns.name().to_owned())
+    }
+
+    fn tcp_echo(port: u16) -> Result<String, String> {
+        tcp_echo(port)
+    }
+
+    fn udp_echo(port: u16) -> Result<String, String> {
+        udp_echo(port)
+    }
+
+    fn socket_differential(tcp_port: u16, udp_port: u16) -> Result<String, String> {
+        Ok(format!("{}|{}", tcp_echo(tcp_port)?, udp_echo(udp_port)?))
+    }
+}
+
+fn tcp_echo(port: u16) -> Result<String, String> {
+    use std::io::{Read, Write};
+
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port))
+        .map_err(|error| format!("{:?}", error.kind()))?;
+    stream
+        .write_all(b"tcp")
+        .map_err(|error| format!("{:?}", error.kind()))?;
+    let mut reply = [0; 3];
+    stream
+        .read_exact(&mut reply)
+        .map_err(|error| format!("{:?}", error.kind()))?;
+    String::from_utf8(reply.to_vec()).map_err(|error| error.to_string())
+}
+
+fn udp_echo(port: u16) -> Result<String, String> {
+    let socket = std::net::UdpSocket::bind(("127.0.0.1", 0))
+        .map_err(|error| format!("{:?}", error.kind()))?;
+    socket
+        .connect(("127.0.0.1", port))
+        .map_err(|error| format!("{:?}", error.kind()))?;
+    socket
+        .send(b"udp")
+        .map_err(|error| format!("{:?}", error.kind()))?;
+    let mut reply = [0; 3];
+    socket
+        .recv(&mut reply)
+        .map_err(|error| format!("{:?}", error.kind()))?;
+    String::from_utf8(reply.to_vec()).map_err(|error| error.to_string())
 }
 
 export!(Component);

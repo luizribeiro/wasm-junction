@@ -30,6 +30,10 @@ interface environment {
   descriptor-handle: func() -> bool;
   directory-stream-handle: func() -> bool;
   filesystem-differential: func() -> string;
+  sockets-denied: func() -> tuple<string, string>;
+  tcp-echo: func(port: u16) -> result<string, string>;
+  udp-echo: func(port: u16) -> result<string, string>;
+  socket-differential: func(tcp-port: u16, udp-port: u16) -> result<string, string>;
 }
 
 world fixture {
