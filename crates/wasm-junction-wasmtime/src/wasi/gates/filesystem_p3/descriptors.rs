@@ -1,9 +1,11 @@
-use wasmtime::component::{Linker, Resource};
+use wasmtime::AsContextMut;
+use wasmtime::component::{Accessor, Linker, Resource};
 use wasmtime_wasi::filesystem::{WasiFilesystem, WasiFilesystemView};
 use wasmtime_wasi::p3::bindings::filesystem::types::{
     Advice, DescriptorFlags, DescriptorStat, DescriptorType, ErrorCode, HostDescriptorWithStore,
     MetadataHashValue, NewTimestamp, OpenFlags, PathFlags,
 };
+use wasmtime_wasi::p3::filesystem::FilesystemResult;
 
 use super::{
     CallError, DESCRIPTOR, Descriptor, FromVal, INTERFACE, RealConcurrent, ToVal, Val, Vals,
@@ -123,6 +125,36 @@ macro_rules! gate_descriptor {
     };
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn open_at(
+    accessor: &Accessor<StoreData, WasiFilesystem>,
+    descriptor: Resource<Descriptor>,
+    path_flags: PathFlags,
+    path: String,
+    open_flags: OpenFlags,
+    flags: DescriptorFlags,
+) -> FilesystemResult<Resource<Descriptor>> {
+    let preopen = accessor
+        .with(|mut access| {
+            access
+                .as_context_mut()
+                .data()
+                .descriptor_preopen(descriptor.rep())
+                .map(str::to_owned)
+        })
+        .ok_or(ErrorCode::Access)?;
+    let opened =
+        HostDescriptorWithStore::open_at(accessor, descriptor, path_flags, path, open_flags, flags)
+            .await?;
+    accessor.with(|mut access| {
+        access
+            .as_context_mut()
+            .data_mut()
+            .set_descriptor_preopen(opened.rep(), preopen);
+    });
+    Ok(opened)
+}
+
 pub(super) fn add_metadata(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     gate_descriptor!(linker, "[method]descriptor.advise", HostDescriptorWithStore::advise, [0],
         (descriptor: Resource<Descriptor>, offset: u64, length: u64, advice: Advice) -> ());
@@ -152,6 +184,9 @@ pub(super) fn add_metadata(linker: &mut Linker<StoreData>) -> wasmtime::Result<(
 }
 
 pub(super) fn add_paths(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    gate_descriptor!(linker, "[method]descriptor.open-at", open_at, [0],
+        (descriptor: Resource<Descriptor>, path_flags: PathFlags, path: String,
+            open_flags: OpenFlags, flags: DescriptorFlags) -> Resource<Descriptor>);
     gate_descriptor!(linker, "[method]descriptor.create-directory-at",
         HostDescriptorWithStore::create_directory_at, [0],
         (descriptor: Resource<Descriptor>, path: String) -> ());
