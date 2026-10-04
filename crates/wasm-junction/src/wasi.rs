@@ -15,12 +15,12 @@ use crate::{Provided, WASI_PROVIDER_NAME};
 /// An engine without WASI returns
 /// [`BuildError::UnsupportedEngineProvider`](crate::BuildError::UnsupportedEngineProvider).
 ///
-/// Filesystem descriptor methods expose their declared WIT arguments first, followed by the guest
-/// preopen path for each descriptor argument in the same order, with the receiver first. Descriptor
-/// drops likewise place their preopen path after the owned handle. A directory-entry-stream read
-/// places its preopen path after the borrowed stream handle. This appended context identifies the
-/// configured capability that produced a handle; middleware should make policy decisions from it
-/// rather than from relative path arguments.
+/// Preview 2 and Preview 3 filesystem descriptor methods expose their declared WIT arguments
+/// first, followed by the guest preopen path for each descriptor argument in the same order, with
+/// the receiver first. Descriptor drops likewise place their preopen path after the owned handle.
+/// A Preview 2 directory-entry-stream read places its preopen path after the borrowed stream
+/// handle. This appended context identifies the configured capability that produced a handle;
+/// middleware should make policy decisions from it rather than from relative path arguments.
 ///
 /// Socket calls expose declared WIT arguments first. Addresses on connect, bind, UDP stream, and
 /// datagram send calls therefore keep their declared position, as does the name on
