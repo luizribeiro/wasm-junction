@@ -70,6 +70,24 @@ impl WasiHttpView for StoreData {
 
 #[cfg(feature = "wasi")]
 impl StoreData {
+    #[cfg(test)]
+    pub(crate) fn for_wasi_test(
+        imports: Arc<dyn ImportDispatcher>,
+        context: InvocationContext,
+        wasi: WasiState,
+    ) -> Self {
+        Self {
+            imports,
+            context,
+            component: Arc::from("test"),
+            wasi,
+            resources: Arc::from([]),
+            owned_resources: HashSet::new(),
+            active_streams: Arc::new(Mutex::new(HashMap::new())),
+            active_futures: ActiveFutures::default(),
+        }
+    }
+
     pub(crate) fn wasi_table(&mut self) -> &mut wasmtime::component::ResourceTable {
         &mut self.wasi.table
     }

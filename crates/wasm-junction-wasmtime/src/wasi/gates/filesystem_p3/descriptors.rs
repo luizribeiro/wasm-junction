@@ -126,7 +126,7 @@ macro_rules! gate_descriptor {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn open_at(
+pub(super) async fn open_at(
     accessor: &Accessor<StoreData, WasiFilesystem>,
     descriptor: Resource<Descriptor>,
     path_flags: PathFlags,
@@ -258,4 +258,79 @@ pub(super) fn add_identity(linker: &mut Linker<StoreData>) -> wasmtime::Result<(
         },
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use wasmtime::component::Resource;
+    use wasmtime_wasi::FsPerms;
+
+    use super::*;
+    use crate::wasi::gates::filesystem_p3::test_support::{
+        TestDirectory, TestDispatcher, preopens, store,
+    };
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn open_inherits_its_root_and_rename_carries_both_roots() {
+        let first = TestDirectory::new("p3-first-root");
+        let second = TestDirectory::new("p3-second-root");
+        std::fs::write(first.path().join("note.txt"), b"note").unwrap();
+        let mut store = store(
+            &[
+                (first.path(), "/first", FsPerms::ReadWrite),
+                (second.path(), "/second", FsPerms::ReadWrite),
+            ],
+            TestDispatcher::passing(),
+        );
+
+        store
+            .run_concurrent(async |accessor| -> wasmtime::Result<()> {
+                let roots = preopens(accessor);
+                let first_root = roots.iter().find(|(_, path)| path == "/first").unwrap().0;
+                let second_root = roots.iter().find(|(_, path)| path == "/second").unwrap().0;
+                let filesystem =
+                    accessor.with_getter::<WasiFilesystem>(WasiFilesystemView::filesystem);
+                let opened = open_at(
+                    &filesystem,
+                    Resource::new_borrow(first_root),
+                    PathFlags::empty(),
+                    "note.txt".to_owned(),
+                    OpenFlags::empty(),
+                    DescriptorFlags::READ,
+                )
+                .await
+                .unwrap();
+                accessor.with(|mut access| {
+                    assert_eq!(
+                        access.get().descriptor_preopen(opened.rep()),
+                        Some("/first")
+                    );
+                    let invocation = access.get().context.invocation_id().unwrap();
+                    let mut args = scope_values(
+                        vec![
+                            resource_to_val(
+                                &Resource::<Descriptor>::new_borrow(first_root),
+                                INTERFACE,
+                                DESCRIPTOR,
+                            ),
+                            Val::String("note.txt".to_owned()),
+                            resource_to_val(
+                                &Resource::<Descriptor>::new_borrow(second_root),
+                                INTERFACE,
+                                DESCRIPTOR,
+                            ),
+                            Val::String("renamed.txt".to_owned()),
+                        ],
+                        invocation,
+                    );
+                    add_context(&mut args, &[0, 2], access.get()).unwrap();
+                    assert!(matches!(args.get(4), Some(Val::String(root)) if root == "/first"));
+                    assert!(matches!(args.get(5), Some(Val::String(root)) if root == "/second"));
+                });
+                Ok(())
+            })
+            .await
+            .unwrap()
+            .unwrap();
+    }
 }

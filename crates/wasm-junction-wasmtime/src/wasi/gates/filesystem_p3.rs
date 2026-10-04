@@ -23,4 +23,6 @@ const DESCRIPTOR: &str = "descriptor";
 )]
 mod descriptors;
 mod records;
+#[cfg(test)]
+mod test_support;
 mod values;
