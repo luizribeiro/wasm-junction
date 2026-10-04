@@ -8,9 +8,10 @@ use codec::{
     gate_http_unit,
 };
 use wasmtime::component::{Linker, Resource};
-use wasmtime_wasi::{p2::DynInputStream, p2::DynOutputStream, p2::DynPollable};
+use wasmtime_wasi::{p2::DynInputStream, p2::DynOutputStream, p2::DynPollable, p2::IoError};
 use wasmtime_wasi_http::p2::bindings::http::types::{
-    ErrorCode, HeaderError, HostFields, HostFutureIncomingResponse as FutureIncomingResponseApi,
+    ErrorCode, HeaderError, Host as TypesApi, HostFields,
+    HostFutureIncomingResponse as FutureIncomingResponseApi,
     HostFutureTrailers as FutureTrailersApi, HostIncomingBody as IncomingBodyApi,
     HostIncomingRequest as IncomingRequestApi, HostIncomingResponse as IncomingResponseApi,
     HostOutgoingBody as OutgoingBodyApi, HostOutgoingRequest as OutgoingRequestApi,
@@ -65,6 +66,7 @@ http_resource!(HostFutureIncomingResponse, "future-incoming-response");
 http_resource!(DynInputStream, STREAMS_INTERFACE, "input-stream");
 http_resource!(DynOutputStream, STREAMS_INTERFACE, "output-stream");
 http_resource!(DynPollable, POLLABLE_INTERFACE, "pollable");
+http_resource!(IoError, ERROR_INTERFACE, "error");
 
 fn validate_fields(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
     codec::validate_borrowed::<FieldMap>(values.first().ok_or_else(|| shape("fields"))?, store)
@@ -92,6 +94,7 @@ validator!(validate_incoming_body, HostIncomingBody);
 validator!(validate_future_response, HostFutureIncomingResponse);
 validator!(validate_incoming_response, HostIncomingResponse);
 validator!(validate_future_trailers, HostFutureTrailers);
+validator!(validate_io_error, IoError);
 
 fn validate_owned_fields(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
     let Some(Val::Resource(resource)) = values.first() else {
@@ -125,6 +128,7 @@ pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     linker.instance(OUTGOING_HANDLER)?;
     add_drops(linker)?;
     add_fields(linker)?;
+    add_error_code(linker)?;
     add_outgoing_request(linker)?;
     add_request_options(linker)?;
     bodies::add(linker)?;
@@ -132,6 +136,12 @@ pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     outgoing_responses::add(linker)?;
     requests::add(linker)?;
     responses::add(linker)
+}
+
+fn add_error_code(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    gate_http!(linker, "http-error-code", TypesApi::http_error_code, validate_io_error,
+        (error: Resource<IoError>) -> Option<ErrorCode>);
+    Ok(())
 }
 
 fn add_drops(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
