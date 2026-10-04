@@ -1222,6 +1222,26 @@ macro_rules! flags_value {
     };
 }
 
+macro_rules! enum_value {
+    ($ty:ty { $($variant:ident => $name:literal),+ $(,)? }) => {
+        impl ToVal for $ty {
+            fn to_val(self) -> Val {
+                Val::Enum(match self { $(Self::$variant => $name),+ }.to_owned())
+            }
+        }
+
+        impl FromVal for $ty {
+            fn from_val(value: Val) -> Result<Self, CallError> {
+                let Val::Enum(value) = value else { return Err(shape("enum")); };
+                match value.as_str() {
+                    $($name => Ok(Self::$variant),)+
+                    _ => Err(shape(stringify!($ty))),
+                }
+            }
+        }
+    };
+}
+
 #[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
 macro_rules! gate_concurrent_drop {
     ($linker:ident, $iface:ident, $name:ident, $drop:literal, $ty:ty, $method:path) => {
@@ -1285,6 +1305,8 @@ macro_rules! gate_concurrent_drop {
 #[cfg(feature = "wasi-p3")]
 mod cli;
 mod filesystem;
+#[cfg(feature = "wasi-p3")]
+mod filesystem_p3;
 #[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
 mod http;
 #[cfg(feature = "wasi-http")]

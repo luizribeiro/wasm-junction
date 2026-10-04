@@ -41,26 +41,6 @@ impl WitResource for types::DirectoryEntryStream {
     const NAME: &'static str = DIRECTORY_ENTRY_STREAM;
 }
 
-macro_rules! enum_value {
-    ($ty:ty { $($variant:ident => $name:literal),+ $(,)? }) => {
-        impl ToVal for $ty {
-            fn to_val(self) -> Val {
-                Val::Enum(match self { $(Self::$variant => $name),+ }.to_owned())
-            }
-        }
-
-        impl FromVal for $ty {
-            fn from_val(value: Val) -> Result<Self, wasm_junction_core::CallError> {
-                let Val::Enum(value) = value else { return Err(shape("enum")); };
-                match value.as_str() {
-                    $($name => Ok(Self::$variant),)+
-                    _ => Err(shape(stringify!($ty))),
-                }
-            }
-        }
-    };
-}
-
 enum_value!(Advice {
     Normal => "normal",
     Sequential => "sequential",
