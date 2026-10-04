@@ -262,6 +262,7 @@ pub(super) fn add_identity(linker: &mut Linker<StoreData>) -> wasmtime::Result<(
 
 #[cfg(test)]
 mod tests {
+    use wasm_junction_core::{CallErrorKind, InvocationId, Resource as JunctionResource};
     use wasmtime::component::Resource;
     use wasmtime_wasi::FsPerms;
 
@@ -326,6 +327,51 @@ mod tests {
                     add_context(&mut args, &[0, 2], access.get()).unwrap();
                     assert!(matches!(args.get(4), Some(Val::String(root)) if root == "/first"));
                     assert!(matches!(args.get(5), Some(Val::String(root)) if root == "/second"));
+                });
+                Ok(())
+            })
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn p3_gates_refuse_wrong_or_missing_descriptor_provenance() {
+        let directory = TestDirectory::new("p3-provenance");
+        let mut store = store(
+            &[(directory.path(), "/data", FsPerms::ReadWrite)],
+            TestDispatcher::passing(),
+        );
+
+        store
+            .run_concurrent(async |accessor| -> wasmtime::Result<()> {
+                let descriptor = preopens(accessor)[0].0;
+                accessor.with(|mut access| {
+                    let invocation = access.get().context.invocation_id().unwrap();
+                    let invalid = [
+                        JunctionResource::__borrowed_for_invocation(
+                            "wasi:filesystem/types@0.2.12",
+                            DESCRIPTOR,
+                            descriptor,
+                            invocation,
+                        ),
+                        JunctionResource::__borrowed_for_invocation(
+                            INTERFACE,
+                            DESCRIPTOR,
+                            descriptor,
+                            InvocationId::__from_counter(2),
+                        ),
+                        JunctionResource::borrowed(INTERFACE, DESCRIPTOR, descriptor),
+                    ];
+                    for resource in invalid {
+                        let error = validate_context(
+                            &[Val::Resource(resource), Val::String("/data".to_owned())],
+                            &[0],
+                            access.get(),
+                        )
+                        .unwrap_err();
+                        assert_eq!(error.kind(), CallErrorKind::Refused);
+                    }
                 });
                 Ok(())
             })
