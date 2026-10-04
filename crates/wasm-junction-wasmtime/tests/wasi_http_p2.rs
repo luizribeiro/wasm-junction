@@ -4,6 +4,8 @@
 
 mod support;
 
+use std::path::Path;
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use support::HttpServer;
@@ -353,5 +355,67 @@ fn one_middleware_refuses_both_http_versions() {
             "wasi:http/client@0.3.0".into(),
             "wasi:http/outgoing-handler@0.2.12".into(),
         ])
+    );
+}
+
+#[test]
+fn every_stable_function_in_the_resolved_preview_2_http_wit_has_a_gate() {
+    let output = Command::new("cargo")
+        .args(["metadata", "--format-version", "1", "--locked"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "cargo metadata failed");
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let manifests: Vec<_> = metadata["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|package| package["name"] == "wasmtime-wasi-http")
+        .map(|package| package["manifest_path"].as_str().unwrap())
+        .collect();
+    assert_eq!(manifests.len(), 1, "expected one resolved HTTP package");
+    let wit = Path::new(manifests[0]).parent().unwrap().join("wit");
+    let mut resolve = wit_parser::Resolve::default();
+    resolve.push_dir(wit).unwrap();
+
+    let gates = concat!(
+        include_str!("../src/wasi/gates/http_p2.rs"),
+        include_str!("../src/wasi/gates/http_p2/bodies.rs"),
+        include_str!("../src/wasi/gates/http_p2/outgoing.rs"),
+        include_str!("../src/wasi/gates/http_p2/outgoing_responses.rs"),
+        include_str!("../src/wasi/gates/http_p2/requests.rs"),
+        include_str!("../src/wasi/gates/http_p2/responses.rs"),
+    );
+    let mut missing = Vec::new();
+    for (_, package) in &resolve.packages {
+        for (name, interface) in &package.interfaces {
+            let interface_name = package.name.interface_id(name);
+            if !matches!(
+                interface_name.as_str(),
+                "wasi:http/types@0.2.12" | "wasi:http/outgoing-handler@0.2.12"
+            ) {
+                continue;
+            }
+            let definition = &resolve.interfaces[*interface];
+            for function in definition.functions.keys() {
+                if !gates.contains(&format!("\"{function}\"")) {
+                    missing.push((interface_name.clone(), function.clone()));
+                }
+            }
+            for (resource, type_id) in &definition.types {
+                if matches!(
+                    resolve.types[*type_id].kind,
+                    wit_parser::TypeDefKind::Resource
+                ) && !gates.contains(&format!("\"{resource}\""))
+                {
+                    missing.push((interface_name.clone(), format!("[drop]{resource}")));
+                }
+            }
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "HTTP functions without gates: {missing:?}"
     );
 }
