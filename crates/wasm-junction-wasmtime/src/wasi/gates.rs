@@ -1313,6 +1313,8 @@ macro_rules! gate_concurrent_drop {
 
 #[cfg(feature = "wasi-p3")]
 mod cli;
+#[cfg(feature = "wasi-p3")]
+mod deferred;
 mod filesystem;
 #[cfg(feature = "wasi-p3")]
 mod filesystem_p3;
