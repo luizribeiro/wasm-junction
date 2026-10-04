@@ -8,7 +8,9 @@ use wasmtime_wasi::p2::{DynPollable, SocketError, SocketResult};
 use super::super::{
     FromVal, Real, ToVal, finish, open_channel, scope_values, shape, trampoline, views,
 };
-use super::{StoreData, gate_socket, validate_incoming, validate_outgoing, validate_udp};
+use super::{
+    StoreData, copy_context, gate_socket, validate_incoming, validate_outgoing, validate_udp,
+};
 
 async fn start_bind(
     store: &mut StoreData,
@@ -81,12 +83,6 @@ fn subscribe_outgoing(
     let pollable = udp::HostOutgoingDatagramStream::subscribe(&mut views::sockets(store), stream)?;
     copy_context(store, stream_id, pollable.rep());
     Ok(pollable)
-}
-
-fn copy_context(store: &mut StoreData, source: u32, target: u32) {
-    if let Some(context) = store.wasi_handle_context(source).cloned() {
-        store.set_wasi_handle_context(target, context);
-    }
 }
 
 macro_rules! udp_options {

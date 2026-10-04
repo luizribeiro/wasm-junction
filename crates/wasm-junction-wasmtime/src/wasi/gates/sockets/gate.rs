@@ -26,6 +26,12 @@ pub(super) fn finish_result<T: FromVal>(
     }
 }
 
+pub(super) fn copy_context(store: &mut StoreData, source: u32, target: u32) {
+    if let Some(context) = store.wasi_handle_context(source).cloned() {
+        store.set_wasi_handle_context(target, context);
+    }
+}
+
 macro_rules! gate_socket {
     ($linker:ident, $iface:expr, $name:literal, $method:path, $mode:ident, $validate:expr,
      ($($arg:ident: $ty:ty),*) -> $ok:ty) => {

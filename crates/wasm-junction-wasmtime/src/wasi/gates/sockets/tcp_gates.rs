@@ -9,7 +9,7 @@ use wasmtime_wasi::p2::{DynInputStream, DynOutputStream, DynPollable, SocketErro
 use super::super::{
     FromVal, Real, ToVal, finish, open_channel, scope_values, shape, trampoline, views,
 };
-use super::{StoreData, gate_socket, validate_tcp};
+use super::{StoreData, copy_context, gate_socket, validate_tcp};
 
 async fn start_bind(
     store: &mut StoreData,
@@ -85,9 +85,7 @@ fn subscribe(
 ) -> wasmtime::Result<Resource<DynPollable>> {
     let socket_id = socket.rep();
     let pollable = HostTcpSocket::subscribe(&mut views::sockets(store), socket)?;
-    if let Some(context) = store.wasi_handle_context(socket_id).cloned() {
-        store.set_wasi_handle_context(pollable.rep(), context);
-    }
+    copy_context(store, socket_id, pollable.rep());
     Ok(pollable)
 }
 
