@@ -3,9 +3,12 @@
     reason = "CLI gates share the parent module's private gate machinery"
 )]
 use super::*;
+use wasmtime::AsContextMut;
+use wasmtime::component::{Access, FutureReader, StreamReader};
+use wasmtime_wasi::cli::{WasiCli, WasiCliView};
 use wasmtime_wasi::p3::bindings::cli::{
-    environment, exit, terminal_input, terminal_output, terminal_stderr, terminal_stdin,
-    terminal_stdout,
+    environment, exit, stdin, terminal_input, terminal_output, terminal_stderr, terminal_stdin,
+    terminal_stdout, types::ErrorCode,
 };
 use wasmtime_wasi::p3::cli::{TerminalInput, TerminalOutput};
 
@@ -22,6 +25,78 @@ impl WitResource for TerminalInput {
 impl WitResource for TerminalOutput {
     const INTERFACE: &'static str = TERMINAL_OUTPUT_INTERFACE;
     const NAME: &'static str = TERMINAL_OUTPUT_NAME;
+}
+
+type TransferResult = Result<(), ErrorCode>;
+
+fn refused_future(
+    store: &mut StoreContextMut<'_, StoreData>,
+) -> wasmtime::Result<FutureReader<TransferResult>> {
+    FutureReader::new(store.as_context_mut(), async {
+        Ok::<TransferResult, wasmtime::Error>(Err(ErrorCode::Io))
+    })
+}
+
+fn add_stdin(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    const INTERFACE: &str = "wasi:cli/stdin@0.3.0";
+    linker
+        .instance(INTERFACE)?
+        .func_wrap_async("read-via-stream", |mut store, (): ()| {
+            Box::new(async move {
+                let real: Real = |mut store, _args| {
+                    Box::pin(async move {
+                        let access = Access::<StoreData, WasiCli>::new(
+                            store.as_context_mut(),
+                            WasiCliView::cli,
+                        );
+                        let (stream, future) = stdin::HostWithStore::read_via_stream(access)
+                            .map_err(|error| CallError::trap(error.to_string()))?;
+                        Ok(vec![Val::Tuple(vec![
+                            lift_stream_with_direction_plain(
+                                &mut store,
+                                stream,
+                                ChannelDirection::HostToGuest,
+                            )
+                            .map_err(|error| CallError::trap(error.to_string()))?,
+                            lift_future_plain(&mut store, future)
+                                .map_err(|error| CallError::trap(error.to_string()))?,
+                        ])])
+                    })
+                };
+                let outcome =
+                    trampoline::gate(&mut store, INTERFACE, "read-via-stream", Vec::new(), real)
+                        .await;
+                let values = match outcome {
+                    Ok(values) => values,
+                    Err(error) if error.kind() != CallErrorKind::Refused => {
+                        return Err(wasmtime::Error::new(error));
+                    }
+                    Err(_) => {
+                        let (writer, stream) = wasm_junction_core::OutputStream::channel();
+                        drop(writer);
+                        let stream = crate::streams::lower_stream(
+                            wasm_junction_core::StreamHandle::from(stream),
+                            store.as_context_mut(),
+                        )?;
+                        return Ok(((
+                            StreamReader::try_from_stream_any(stream)?,
+                            refused_future(&mut store)?,
+                        ),));
+                    }
+                };
+                let [Val::Tuple(values)] = values.as_slice() else {
+                    return Err(wasmtime::Error::new(shape("stream and future")));
+                };
+                let [stream, future] = values.as_slice() else {
+                    return Err(wasmtime::Error::new(shape("stream and future")));
+                };
+                Ok(((
+                    lower_stream_handoff_plain(&mut store, stream.clone())?,
+                    lower_future_plain(&mut store, future.clone())?,
+                ),))
+            })
+        })?;
+    Ok(())
 }
 
 fn drop_terminal_input(
@@ -50,6 +125,7 @@ pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         exit::Host::exit, plain, (status: Result<(), ()>) -> ());
     gate!(linker, "wasi:cli/exit@0.3.0", "exit-with-code", cli,
         exit::Host::exit_with_code, plain, (status_code: u8) -> ());
+    add_stdin(linker)?;
     gate_drop!(
         linker,
         TERMINAL_INPUT_INTERFACE,

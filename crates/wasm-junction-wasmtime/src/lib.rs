@@ -54,10 +54,11 @@ const P2_WASI_INTERFACES: &[&str] = &[
 ];
 
 #[cfg(feature = "wasi-p3")]
-const P3_WASI_INTERFACES: [&str; 14] = [
+const P3_WASI_INTERFACES: [&str; 15] = [
     "wasi:cli/environment@0.3.0",
     "wasi:cli/exit@0.3.0",
     "wasi:cli/types@0.3.0",
+    "wasi:cli/stdin@0.3.0",
     "wasi:cli/terminal-input@0.3.0",
     "wasi:cli/terminal-output@0.3.0",
     "wasi:cli/terminal-stderr@0.3.0",

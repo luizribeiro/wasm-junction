@@ -2,7 +2,7 @@ use wasm_junction_core::{
     CallError, CallErrorKind, ChannelDirection, EngineEvent, InvocationId,
     Resource as JunctionResource, ResourceOwnership, Val, Vals, validate_resource_for_invocation,
 };
-#[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
+#[cfg(feature = "wasi-p3")]
 use wasmtime::component::StreamReader;
 #[cfg(feature = "wasi-p3")]
 use wasmtime::component::{ComponentType, FutureReader};
@@ -223,8 +223,18 @@ fn lift_stream_plain(
     store: &mut StoreContextMut<'_, StoreData>,
     stream: StreamReader<u8>,
 ) -> wasmtime::Result<Val> {
+    lift_stream_with_direction_plain(store, stream, ChannelDirection::GuestToHost)
+}
+
+#[cfg(feature = "wasi-p3")]
+fn lift_stream_with_direction_plain(
+    store: &mut StoreContextMut<'_, StoreData>,
+    stream: StreamReader<u8>,
+    direction: ChannelDirection,
+) -> wasmtime::Result<Val> {
     let stream = stream.try_into_stream_any(store.as_context_mut())?;
-    crate::streams::lift_stream(stream, store.as_context_mut()).map(Val::Stream)
+    crate::streams::lift_stream_with_direction(stream, store.as_context_mut(), direction)
+        .map(Val::Stream)
 }
 
 #[cfg(all(feature = "wasi-http", feature = "wasi-p3"))]
@@ -236,6 +246,18 @@ fn lower_stream_plain(
         return Err(wasmtime::Error::new(shape("stream")));
     };
     let stream = crate::streams::lower_stream(stream, store.as_context_mut())?;
+    StreamReader::try_from_stream_any(stream)
+}
+
+#[cfg(feature = "wasi-p3")]
+fn lower_stream_handoff_plain(
+    store: &mut StoreContextMut<'_, StoreData>,
+    value: Val,
+) -> wasmtime::Result<StreamReader<u8>> {
+    let Val::Stream(stream) = value else {
+        return Err(wasmtime::Error::new(shape("stream")));
+    };
+    let stream = crate::streams::lower_stream_with_direction(stream, store.as_context_mut(), None)?;
     StreamReader::try_from_stream_any(stream)
 }
 
