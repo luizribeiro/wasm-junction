@@ -180,6 +180,12 @@ pub(super) fn convert_header<T>(
     }
 }
 
+pub(super) fn convert_plain<T, E>(
+    result: wasmtime::Result<Result<T, E>>,
+) -> Result<Result<T, E>, CallError> {
+    result.map_err(|error| CallError::trap(error.to_string()))
+}
+
 pub(super) fn finish_result<T: FromHttpVal, E: FromHttpVal>(
     outcome: Result<Vals, CallError>,
     denied: E,
