@@ -7,7 +7,10 @@ mod support;
 use std::sync::{Arc, Mutex};
 
 use support::HttpServer;
-use wasm_junction::{App, Call, CallError, Component, Middleware, Next, Val, Vals, WasiSettings};
+use wasm_junction::{
+    App, Call, CallError, ChannelDirection, Component, Event, Middleware, Next, Resource, Val,
+    Vals, WasiSettings,
+};
 use wasm_junction_wasmtime::WasmtimeEngine;
 
 const COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wasi-http-p2-test.wasm"));
@@ -142,4 +145,143 @@ fn refusal_and_disabled_network_return_http_request_denied() {
         request(&disabled, "127.0.0.1:9".into(), "/disabled"),
         [Val::from("denied")]
     );
+}
+
+type BodyContexts = Arc<Mutex<Vec<(String, Val)>>>;
+type ChannelEvents = Arc<Mutex<Vec<(bool, ChannelDirection)>>>;
+
+struct ObserveBodies {
+    contexts: BodyContexts,
+    events: ChannelEvents,
+}
+
+impl Middleware for ObserveBodies {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        if matches!(
+            call.function.as_ref(),
+            "[method]outgoing-body.write" | "[method]incoming-body.stream"
+        ) {
+            self.contexts
+                .lock()
+                .unwrap()
+                .push((call.function.to_string(), call.args.last().unwrap().clone()));
+        }
+        next.run(call).await
+    }
+
+    fn event(&self, event: &Event) {
+        let observed = match event {
+            Event::ChannelOpen { direction, .. } => Some((true, *direction)),
+            Event::ChannelClose { direction, .. } => Some((false, *direction)),
+            _ => None,
+        };
+        if let Some(observed) = observed {
+            self.events.lock().unwrap().push(observed);
+        }
+    }
+}
+
+#[test]
+fn body_streams_carry_request_context_and_channel_lifecycle() {
+    let server = HttpServer::start(b"body");
+    let contexts = Arc::new(Mutex::new(Vec::new()));
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let app = load(
+        ObserveBodies {
+            contexts: contexts.clone(),
+            events: events.clone(),
+        },
+        true,
+    );
+    assert_eq!(
+        request(&app, server.authority(), "/channels"),
+        [Val::from("200:body")]
+    );
+    server.finish();
+
+    let contexts = contexts.lock().unwrap();
+    assert_eq!(contexts.len(), 2);
+    for (_, context) in contexts.iter() {
+        let Val::Tuple(values) = context else {
+            panic!("body call did not carry request context")
+        };
+        assert_eq!(values[0], variant("post"));
+        assert_eq!(
+            values[3],
+            Val::Option(Some(Box::new(Val::from("/channels"))))
+        );
+    }
+    let events = events.lock().unwrap();
+    for direction in [ChannelDirection::GuestToHost, ChannelDirection::HostToGuest] {
+        assert!(events.contains(&(true, direction)));
+        assert!(events.contains(&(false, direction)));
+    }
+}
+
+#[derive(Clone, Copy)]
+enum HandleFault {
+    Foreign,
+    Mistyped,
+    Unscoped,
+}
+
+struct CorruptHandle {
+    fault: HandleFault,
+    previous: Mutex<Option<Resource>>,
+}
+
+impl Middleware for CorruptHandle {
+    async fn call(&self, mut call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.interface.as_ref() != "wasi:http/outgoing-handler@0.2.12"
+            || call.function.as_ref() != "handle"
+        {
+            return next.run(call).await;
+        }
+        let Val::Resource(current) = &call.args[0] else {
+            return Err(CallError::trap("request handle had the wrong shape"));
+        };
+        let replacement = match self.fault {
+            HandleFault::Foreign => {
+                let mut previous = self.previous.lock().unwrap();
+                let Some(resource) = previous.clone() else {
+                    *previous = Some(current.clone());
+                    return Err(CallError::refused("saved for another invocation"));
+                };
+                resource
+            }
+            HandleFault::Mistyped => Resource::owned(current.interface(), "fields", current.id()),
+            HandleFault::Unscoped => {
+                Resource::owned(current.interface(), current.name(), current.id())
+            }
+        };
+        call.args[0] = Val::Resource(replacement);
+        next.run(call).await
+    }
+}
+
+#[test]
+fn invalid_preview_2_http_handles_are_refused() {
+    for fault in [
+        HandleFault::Foreign,
+        HandleFault::Mistyped,
+        HandleFault::Unscoped,
+    ] {
+        let app = load(
+            CorruptHandle {
+                fault,
+                previous: Mutex::new(None),
+            },
+            true,
+        );
+        if matches!(fault, HandleFault::Foreign) {
+            assert_eq!(
+                request(&app, "127.0.0.1:9".into(), "/saved"),
+                [Val::from("denied")]
+            );
+        }
+        assert_eq!(
+            request(&app, "127.0.0.1:9".into(), "/invalid"),
+            [Val::from("denied")]
+        );
+    }
 }
