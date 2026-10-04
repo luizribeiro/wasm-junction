@@ -250,6 +250,40 @@ macro_rules! gate_http {
 
 pub(super) use gate_http;
 
+macro_rules! gate_http_unit {
+    ($linker:ident, $name:literal, $method:path, $validate:ident,
+     ($($arg:ident: $ty:ty),*)) => {
+        $linker.instance(TYPES)?.func_wrap_async(
+            $name,
+            |mut store, ($($arg,)*): ($($ty,)*)| Box::new(async move {
+                let invocation = store.data().context.invocation_id()
+                    .ok_or_else(|| wasmtime::Error::msg("WASI call has no invocation id"))?;
+                let mut args = scope_values(vec![$($arg.to_http_val()),*], invocation);
+                add_handle_contexts(&mut args, store.data());
+                let real: Real = |mut store, args| Box::pin(async move {
+                    $validate(&args, store.data_mut())?;
+                    let mut args = args.into_iter();
+                    $(let $arg = <$ty>::from_http_val(
+                        args.next().ok_or_else(|| shape("another argument"))?
+                    )?;)*
+                    $method(&mut views::http(store.data_mut()) $(, $arg)*)
+                        .map_err(|error| CallError::trap(error.to_string()))?;
+                    Ok(Vec::new())
+                });
+                let values = trampoline::gate(&mut store, TYPES, $name, args, real)
+                    .await
+                    .map_err(wasmtime::Error::new)?;
+                if !values.is_empty() {
+                    return Err(wasmtime::Error::new(shape("no results")));
+                }
+                Ok(())
+            }),
+        )?;
+    };
+}
+
+pub(super) use gate_http_unit;
+
 macro_rules! gate_http_result {
     ($linker:ident, $name:literal, $method:path, $validate:ident, $convert:path, $denied:expr,
      ($($arg:ident: $ty:ty),*) -> Result<$ok:ty, $error:ty>) => {

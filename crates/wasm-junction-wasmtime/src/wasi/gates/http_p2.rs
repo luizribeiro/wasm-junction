@@ -3,7 +3,10 @@
     reason = "HTTP gates share the parent module's private gate machinery"
 )]
 use super::*;
-use codec::{FromHttpVal, HttpResource, ToHttpVal, gate_http, gate_http_drop, gate_http_result};
+use codec::{
+    FromHttpVal, HttpResource, ToHttpVal, gate_http, gate_http_drop, gate_http_result,
+    gate_http_unit,
+};
 use wasmtime::component::{Linker, Resource};
 use wasmtime_wasi::{p2::DynInputStream, p2::DynOutputStream, p2::DynPollable};
 use wasmtime_wasi_http::p2::bindings::http::types::{
@@ -28,6 +31,7 @@ mod codec;
 mod context;
 mod error_values;
 mod outgoing;
+mod outgoing_responses;
 mod requests;
 mod responses;
 mod values;
@@ -83,6 +87,7 @@ validator!(validate_request, HostOutgoingRequest);
 validator!(validate_incoming_request, HostIncomingRequest);
 validator!(validate_options, RequestOptions);
 validator!(validate_outgoing_body, HostOutgoingBody);
+validator!(validate_outgoing_response, HostOutgoingResponse);
 validator!(validate_incoming_body, HostIncomingBody);
 validator!(validate_future_response, HostFutureIncomingResponse);
 validator!(validate_incoming_response, HostIncomingResponse);
@@ -110,6 +115,7 @@ pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     add_request_options(linker)?;
     bodies::add(linker)?;
     outgoing::add(linker)?;
+    outgoing_responses::add(linker)?;
     requests::add(linker)?;
     responses::add(linker)
 }
