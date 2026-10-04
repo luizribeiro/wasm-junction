@@ -140,6 +140,28 @@ pub(super) fn validate_borrowed<T: HttpResource>(
     Ok(())
 }
 
+pub(super) fn validate_owned<T: HttpResource>(
+    resource: &JunctionResource,
+    store: &mut StoreData,
+) -> Result<(), CallError> {
+    let invocation = store
+        .context
+        .invocation_id()
+        .ok_or_else(|| CallError::trap("WASI call has no invocation id"))?;
+    wasm_junction_core::validate_resource_for_invocation(
+        resource,
+        T::INTERFACE,
+        T::NAME,
+        ResourceOwnership::Own,
+        invocation,
+    )?;
+    store
+        .wasi_table()
+        .get(&Resource::<T>::new_borrow(resource.id()))
+        .map_err(|_| CallError::refused(format!("unknown {} handle {}", T::NAME, resource.id())))?;
+    Ok(())
+}
+
 pub(super) fn finish_http<T: FromHttpVal>(outcome: Result<Vals, CallError>) -> wasmtime::Result<T> {
     let values = outcome.map_err(wasmtime::Error::new)?;
     let [value] = <[Val; 1]>::try_from(values).map_err(|_| shape("one result"))?;
@@ -230,3 +252,54 @@ macro_rules! gate_http_result {
 }
 
 pub(super) use gate_http_result;
+
+macro_rules! gate_http_drop {
+    ($linker:ident, $name:literal, $ty:ty, $method:path) => {
+        $linker.instance(TYPES)?.resource_async(
+            $name,
+            wasmtime::component::ResourceType::host::<$ty>(),
+            |mut store, id| {
+                Box::new(async move {
+                    let invocation =
+                        store.data().context.invocation_id().ok_or_else(|| {
+                            wasmtime::Error::msg("WASI drop has no invocation id")
+                        })?;
+                    let resource =
+                        JunctionResource::__owned_for_invocation(TYPES, $name, id, invocation);
+                    store.data().imports.emit(EngineEvent::ResourceDrop {
+                        invocation,
+                        resource: resource.clone(),
+                    });
+                    let real: Real = |mut store, args| {
+                        Box::pin(async move {
+                            validate_handle_contexts(&args, store.data())?;
+                            let Some(Val::Resource(resource)) = args.first() else {
+                                return Err(shape($name));
+                            };
+                            codec::validate_owned::<$ty>(resource, store.data_mut())?;
+                            $method(
+                                &mut views::http(store.data_mut()),
+                                Resource::<$ty>::new_own(resource.id()),
+                            )
+                            .map_err(|error| CallError::trap(error.to_string()))?;
+                            Ok(Vec::new())
+                        })
+                    };
+                    let mut args = vec![Val::Resource(resource)];
+                    add_handle_contexts(&mut args, store.data());
+                    let values =
+                        trampoline::gate(&mut store, TYPES, concat!("[drop]", $name), args, real)
+                            .await
+                            .map_err(wasmtime::Error::new)?;
+                    if !values.is_empty() {
+                        return Err(wasmtime::Error::new(shape("no results")));
+                    }
+                    store.data_mut().remove_wasi_handle_context(id);
+                    Ok(())
+                })
+            },
+        )?;
+    };
+}
+
+pub(super) use gate_http_drop;

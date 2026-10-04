@@ -3,10 +3,17 @@
     reason = "HTTP gates share the parent module's private gate machinery"
 )]
 use super::*;
-use codec::{FromHttpVal, HttpResource, ToHttpVal, gate_http, gate_http_result};
+use codec::{FromHttpVal, HttpResource, ToHttpVal, gate_http, gate_http_drop, gate_http_result};
 use wasmtime::component::{Linker, Resource};
 use wasmtime_wasi::{p2::DynInputStream, p2::DynOutputStream, p2::DynPollable};
-use wasmtime_wasi_http::p2::bindings::http::types::{HeaderError, HostFields};
+use wasmtime_wasi_http::p2::bindings::http::types::{
+    HeaderError, HostFields, HostFutureIncomingResponse as FutureIncomingResponseApi,
+    HostFutureTrailers as FutureTrailersApi, HostIncomingBody as IncomingBodyApi,
+    HostIncomingRequest as IncomingRequestApi, HostIncomingResponse as IncomingResponseApi,
+    HostOutgoingBody as OutgoingBodyApi, HostOutgoingRequest as OutgoingRequestApi,
+    HostOutgoingResponse as OutgoingResponseApi, HostRequestOptions as RequestOptionsApi,
+    HostResponseOutparam as ResponseOutparamApi,
+};
 use wasmtime_wasi_http::p2::body::{HostFutureTrailers, HostIncomingBody, HostOutgoingBody};
 use wasmtime_wasi_http::p2::types::{
     HostFutureIncomingResponse, HostIncomingRequest, HostIncomingResponse, HostOutgoingRequest,
@@ -55,6 +62,67 @@ fn validate_fields(values: &[Val], store: &mut StoreData) -> Result<(), CallErro
 
 pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     linker.instance(OUTGOING_HANDLER)?;
+    gate_http_drop!(linker, "fields", FieldMap, HostFields::drop);
+    gate_http_drop!(
+        linker,
+        "incoming-request",
+        HostIncomingRequest,
+        IncomingRequestApi::drop
+    );
+    gate_http_drop!(
+        linker,
+        "outgoing-request",
+        HostOutgoingRequest,
+        OutgoingRequestApi::drop
+    );
+    gate_http_drop!(
+        linker,
+        "request-options",
+        RequestOptions,
+        RequestOptionsApi::drop
+    );
+    gate_http_drop!(
+        linker,
+        "response-outparam",
+        HostResponseOutparam,
+        ResponseOutparamApi::drop
+    );
+    gate_http_drop!(
+        linker,
+        "incoming-response",
+        HostIncomingResponse,
+        IncomingResponseApi::drop
+    );
+    gate_http_drop!(
+        linker,
+        "incoming-body",
+        HostIncomingBody,
+        IncomingBodyApi::drop
+    );
+    gate_http_drop!(
+        linker,
+        "future-trailers",
+        HostFutureTrailers,
+        FutureTrailersApi::drop
+    );
+    gate_http_drop!(
+        linker,
+        "outgoing-response",
+        HostOutgoingResponse,
+        OutgoingResponseApi::drop
+    );
+    gate_http_drop!(
+        linker,
+        "outgoing-body",
+        HostOutgoingBody,
+        OutgoingBodyApi::drop
+    );
+    gate_http_drop!(
+        linker,
+        "future-incoming-response",
+        HostFutureIncomingResponse,
+        FutureIncomingResponseApi::drop
+    );
     gate_http!(linker, "[constructor]fields", HostFields::new, no_resource_validation,
         () -> Resource<FieldMap>);
     gate_http_result!(linker, "[static]fields.from-list", HostFields::from_list,
