@@ -7,8 +7,8 @@ use wasmtime_wasi::p3::bindings::filesystem::types::{
 
 use super::{
     CallError, DESCRIPTOR, Descriptor, FromVal, INTERFACE, RealConcurrent, ToVal, Val, Vals,
-    convert_trappable, finish_p3_error, resource_from_val, resource_to_val, scope_values, shape,
-    trampoline,
+    convert_trappable, finish, finish_p3_error, resource_from_val, resource_to_val, scope_values,
+    shape, trampoline,
 };
 use crate::engine::StoreData;
 use crate::wasi::gates::filesystem::gate::{add_context_for, validate_context_for};
@@ -148,5 +148,79 @@ pub(super) fn add_metadata(linker: &mut Linker<StoreData>) -> wasmtime::Result<(
         HostDescriptorWithStore::metadata_hash_at, [0],
         (descriptor: Resource<Descriptor>, path_flags: PathFlags,
             path: String) -> MetadataHashValue);
+    Ok(())
+}
+
+pub(super) fn add_paths(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    gate_descriptor!(linker, "[method]descriptor.create-directory-at",
+        HostDescriptorWithStore::create_directory_at, [0],
+        (descriptor: Resource<Descriptor>, path: String) -> ());
+    gate_descriptor!(linker, "[method]descriptor.stat-at", HostDescriptorWithStore::stat_at, [0],
+        (descriptor: Resource<Descriptor>, path_flags: PathFlags,
+            path: String) -> DescriptorStat);
+    gate_descriptor!(linker, "[method]descriptor.set-times-at",
+        HostDescriptorWithStore::set_times_at, [0],
+        (descriptor: Resource<Descriptor>, path_flags: PathFlags, path: String,
+            accessed: NewTimestamp, modified: NewTimestamp) -> ());
+    gate_descriptor!(linker, "[method]descriptor.link-at", HostDescriptorWithStore::link_at,
+        [0, 3], (descriptor: Resource<Descriptor>, old_path_flags: PathFlags,
+            old_path: String, new_descriptor: Resource<Descriptor>, new_path: String) -> ());
+    gate_descriptor!(linker, "[method]descriptor.readlink-at",
+        HostDescriptorWithStore::readlink_at, [0],
+        (descriptor: Resource<Descriptor>, path: String) -> String);
+    gate_descriptor!(linker, "[method]descriptor.remove-directory-at",
+        HostDescriptorWithStore::remove_directory_at, [0],
+        (descriptor: Resource<Descriptor>, path: String) -> ());
+    gate_descriptor!(linker, "[method]descriptor.rename-at", HostDescriptorWithStore::rename_at,
+        [0, 2], (descriptor: Resource<Descriptor>, old_path: String,
+            new_descriptor: Resource<Descriptor>, new_path: String) -> ());
+    gate_descriptor!(linker, "[method]descriptor.symlink-at", HostDescriptorWithStore::symlink_at,
+        [0], (descriptor: Resource<Descriptor>, old_path: String, new_path: String) -> ());
+    gate_descriptor!(linker, "[method]descriptor.unlink-file-at",
+        HostDescriptorWithStore::unlink_file_at, [0],
+        (descriptor: Resource<Descriptor>, path: String) -> ());
+    Ok(())
+}
+
+pub(super) fn add_identity(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    const NAME: &str = "[method]descriptor.is-same-object";
+    linker.instance(INTERFACE)?.func_wrap_concurrent(
+        NAME,
+        |accessor, (descriptor, other): (Resource<Descriptor>, Resource<Descriptor>)| {
+            Box::pin(async move {
+                let invocation = accessor
+                    .with(|mut access| access.get().context.invocation_id())
+                    .ok_or_else(|| wasmtime::Error::msg("WASI call has no invocation id"))?;
+                let mut args =
+                    scope_values(vec![descriptor.to_p3_val(), other.to_p3_val()], invocation);
+                accessor
+                    .with(|mut access| add_context(&mut args, &[0, 1], access.get()))
+                    .map_err(wasmtime::Error::new)?;
+                let real: RealConcurrent = |accessor, args| {
+                    Box::pin(async move {
+                        accessor
+                            .with(|mut access| validate_context(&args, &[0, 1], access.get()))?;
+                        let mut args = args.into_iter();
+                        let descriptor = Resource::<Descriptor>::from_p3_val(
+                            args.next().ok_or_else(|| shape(DESCRIPTOR))?,
+                        )?;
+                        let other = Resource::<Descriptor>::from_p3_val(
+                            args.next().ok_or_else(|| shape(DESCRIPTOR))?,
+                        )?;
+                        let view =
+                            accessor.with_getter::<WasiFilesystem>(WasiFilesystemView::filesystem);
+                        let same =
+                            HostDescriptorWithStore::is_same_object(&view, descriptor, other)
+                                .await
+                                .map_err(|error| CallError::trap(error.to_string()))?;
+                        Ok(vec![same.to_val()])
+                    })
+                };
+                let outcome =
+                    trampoline::gate_concurrent(accessor, INTERFACE, NAME, args, real).await;
+                Ok((finish::<bool>(outcome)?,))
+            })
+        },
+    )?;
     Ok(())
 }
