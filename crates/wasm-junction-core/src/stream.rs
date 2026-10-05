@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Poll, Waker};
 
-use crate::{CallError, CompiledComponent, FromVal, ToVal, TypeError, Val};
+use crate::{CallError, CompiledComponent, FromVal, HostBound, ToVal, TypeError, Val};
 
 static NEXT_STREAM_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -38,7 +38,6 @@ type ChunkMap = Arc<dyn Fn(Vec<u8>) -> Vec<u8> + Send + Sync>;
 #[cfg(target_arch = "wasm32")]
 type ChunkMap = Arc<dyn Fn(Vec<u8>) -> Vec<u8>>;
 
-#[allow(dead_code)]
 #[derive(Clone)]
 enum Transform {
     MapItems(ItemMap),
@@ -84,6 +83,45 @@ impl StreamHandle {
     #[must_use]
     pub const fn id(&self) -> u64 {
         self.id
+    }
+
+    /// Replaces this handle with an empty stream and returns its previous value.
+    #[must_use]
+    pub fn take(&mut self) -> Self {
+        std::mem::replace(self, Self::new(VecDeque::new(), StreamEnd::Closed, 0))
+    }
+
+    /// Maps each engine-neutral item when the stream is read.
+    #[must_use]
+    pub fn map_items(mut self, map: impl Fn(Val) -> Val + HostBound + 'static) -> Self {
+        self.transforms.push(Transform::MapItems(Arc::new(map)));
+        self
+    }
+
+    /// Keeps engine-neutral items that satisfy `predicate` when the stream is read.
+    ///
+    /// ```
+    /// use wasm_junction_core::{InputStream, OutputStream, StreamHandle, Val};
+    ///
+    /// let stream = OutputStream::from_items(["public".to_owned(), ".hidden".to_owned()]);
+    /// let visible = StreamHandle::from(stream).filter_items(|item| {
+    ///     !matches!(item, Val::String(name) if name.starts_with('.'))
+    /// });
+    /// let _reader = InputStream::<String>::from_handle(visible)?;
+    /// # Ok::<(), wasm_junction_core::StreamError>(())
+    /// ```
+    #[must_use]
+    pub fn filter_items(mut self, predicate: impl Fn(&Val) -> bool + HostBound + 'static) -> Self {
+        self.transforms
+            .push(Transform::FilterItems(Arc::new(predicate)));
+        self
+    }
+
+    /// Maps each byte chunk when the stream is read.
+    #[must_use]
+    pub fn map_chunks(mut self, map: impl Fn(Vec<u8>) -> Vec<u8> + HostBound + 'static) -> Self {
+        self.transforms.push(Transform::MapChunks(Arc::new(map)));
+        self
     }
 
     /// Keeps the component generation that returned this stream alive while the handle exists.
@@ -503,6 +541,7 @@ impl Error for StreamError {}
 #[cfg(test)]
 mod tests {
     use std::future::Future;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::task::{Context, Waker};
 
     use super::*;
@@ -593,6 +632,61 @@ mod tests {
             ready(input.read()).unwrap_err().to_string(),
             "expected note"
         );
+    }
+
+    #[test]
+    fn transforms_are_pull_based_and_preserve_end_and_abort() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        let handle = StreamHandle::from(OutputStream::from_items([
+            "first".to_owned(),
+            "hidden".to_owned(),
+            "last".to_owned(),
+        ]))
+        .map_items(move |item| {
+            observed.fetch_add(1, Ordering::Relaxed);
+            item
+        })
+        .filter_items(|item| item != &Val::String("hidden".to_owned()));
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+        let input = InputStream::<String>::from_handle(handle).unwrap();
+        assert_eq!(
+            ready(input.read_all()).unwrap(),
+            ["first".to_owned(), "last".to_owned()]
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 3);
+
+        let handle =
+            StreamHandle::from(OutputStream::from_bytes(b"quiet")).map_chunks(|mut bytes| {
+                bytes.make_ascii_uppercase();
+                bytes
+            });
+        let input = InputStream::try_from(handle).unwrap();
+        assert_eq!(ready(input.read_all()).unwrap(), b"QUIET");
+
+        let handle = StreamHandle::from(OutputStream::from_bytes([1, 2])).map_items(|item| {
+            let Val::U8(byte) = item else {
+                panic!("byte stream exposed a non-byte item")
+            };
+            Val::U8(byte + 1)
+        });
+        let input = InputStream::try_from(handle).unwrap();
+        assert_eq!(ready(input.read_all()).unwrap(), [2, 3]);
+
+        let handle =
+            StreamHandle::from(OutputStream::from_items([7_u32])).map_chunks(|bytes| bytes);
+        let mut input = InputStream::<u32>::from_handle(handle).unwrap();
+        assert_eq!(
+            ready(input.read()).unwrap_err().to_string(),
+            "expected byte stream"
+        );
+
+        let (writer, output) = OutputStream::<u32>::channel();
+        let mut input =
+            InputStream::<u32>::from_handle(StreamHandle::from(output).filter_items(|_| true))
+                .unwrap();
+        writer.abort();
+        assert_eq!(ready(input.read()), Err(StreamError::aborted()));
     }
 
     #[test]
