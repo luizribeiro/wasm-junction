@@ -217,7 +217,7 @@ pub enum EngineEvent {
         /// The resource being dropped.
         resource: Resource,
     },
-    /// A byte stream began crossing an engine boundary.
+    /// A stream began crossing an engine boundary.
     ChannelOpen {
         /// The invocation whose call opened the channel.
         invocation: InvocationId,
@@ -226,7 +226,7 @@ pub enum EngineEvent {
         /// The direction bytes travel.
         direction: ChannelDirection,
     },
-    /// A byte stream stopped crossing an engine boundary.
+    /// A stream stopped crossing an engine boundary.
     ChannelClose {
         /// The invocation whose call opened the channel.
         invocation: InvocationId,

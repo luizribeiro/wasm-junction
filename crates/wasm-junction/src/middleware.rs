@@ -58,22 +58,22 @@ pub enum Event {
         /// The provider-assigned resource id.
         id: u32,
     },
-    /// A byte stream began crossing the engine boundary.
+    /// A stream began crossing the engine boundary.
     ChannelOpen {
         /// The invocation whose call opened the channel.
         invocation: InvocationId,
         /// The opaque stream id.
         stream: u64,
-        /// The direction bytes travel.
+        /// The direction items travel.
         direction: ChannelDirection,
     },
-    /// A byte stream stopped crossing the engine boundary.
+    /// A stream stopped crossing the engine boundary.
     ChannelClose {
         /// The invocation whose call opened the channel.
         invocation: InvocationId,
         /// The opaque stream id.
         stream: u64,
-        /// The direction bytes traveled.
+        /// The direction items traveled.
         direction: ChannelDirection,
     },
 }
