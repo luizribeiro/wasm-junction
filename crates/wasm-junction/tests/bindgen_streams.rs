@@ -5,12 +5,37 @@
 mod support;
 
 use wasm_junction::{
-    App, CallContext, CallError, Component, InputStream, OutputStream, StreamHandle, TypedCall,
+    App, Call, CallContext, CallError, Component, InputStream, Middleware, Next, OutputStream,
+    StreamHandle, TypedCall, Val, Vals,
 };
 
 wasm_junction::bindgen!({ path: "tests/fixtures/streams/wit" });
 
 struct Echo;
+
+struct TransformStreams;
+
+impl Middleware for TransformStreams {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        let function = call.function.clone();
+        let mut values = next.run(call).await?;
+        if let Some(Val::Stream(stream)) = values.first_mut() {
+            *stream = match function.as_ref() {
+                "top" => stream.take().map_chunks(|mut bytes| {
+                    bytes.make_ascii_uppercase();
+                    bytes
+                }),
+                "records" => stream.take().filter_items(|item| {
+                    !matches!(item, Val::Record(fields) if matches!(
+                        fields.first(), Some((_, Val::String(title))) if title == "second"
+                    ))
+                }),
+                _ => return Ok(values),
+            };
+        }
+        Ok(values)
+    }
+}
 
 impl host::Host for Echo {
     async fn top(&self, _cx: &CallContext, value: InputStream) -> Result<OutputStream, CallError> {
@@ -51,6 +76,7 @@ impl host::Host for Echo {
 fn app() -> (App, guest::Guest) {
     let app = App::builder()
         .engine(support::FakeEngine)
+        .middleware(TransformStreams)
         .provide(host::provider(Echo))
         .build()
         .unwrap();
@@ -74,7 +100,7 @@ fn app_maps_streams_at_top_level_and_inside_option_and_result() {
     let (_app, handle) = app();
     assert_eq!(
         bytes(support::block_on(handle.top(OutputStream::from_bytes(b"top"))).unwrap()),
-        b"top"
+        b"TOP"
     );
     assert_eq!(
         support::block_on(handle.optional(None)).unwrap().map(bytes),
@@ -113,14 +139,9 @@ fn generated_handles_and_hosts_convert_record_streams() {
     let input = support::block_on(handle.records(output)).unwrap();
     assert_eq!(
         support::block_on(input.read_all()).unwrap(),
-        [
-            guest::Note {
-                title: "first".to_owned()
-            },
-            guest::Note {
-                title: "second".to_owned()
-            }
-        ]
+        [guest::Note {
+            title: "first".to_owned()
+        }]
     );
 }
 
