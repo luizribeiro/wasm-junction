@@ -1,21 +1,28 @@
+use std::any::Any;
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt::{self, Debug, Display};
 use std::future::poll_fn;
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Poll, Waker};
 
-use crate::{CallError, CompiledComponent, TypeError, Val};
+use crate::{CallError, CompiledComponent, FromVal, ToVal, TypeError, Val};
 
 static NEXT_STREAM_ID: AtomicU64 = AtomicU64::new(1);
 
 struct StreamState {
-    chunks: VecDeque<Vec<u8>>,
+    chunks: VecDeque<StreamChunk>,
     end: StreamEnd,
     reader_taken: bool,
     reader_waker: Option<Waker>,
     writers: usize,
+}
+
+enum StreamChunk {
+    Bytes(Vec<u8>),
+    Values(Vec<Val>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -27,7 +34,7 @@ enum StreamEnd {
     Abandoned,
 }
 
-/// An opaque, cloneable reference to a byte stream.
+/// An opaque, cloneable reference to a WIT value stream.
 #[derive(Clone)]
 pub struct StreamHandle {
     id: u64,
@@ -36,7 +43,7 @@ pub struct StreamHandle {
 }
 
 impl StreamHandle {
-    fn new(chunks: VecDeque<Vec<u8>>, end: StreamEnd, writers: usize) -> Self {
+    fn new(chunks: VecDeque<StreamChunk>, end: StreamEnd, writers: usize) -> Self {
         Self {
             id: NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed),
             state: Arc::new(Mutex::new(StreamState {
@@ -103,23 +110,44 @@ impl PartialEq for StreamHandle {
 
 impl Eq for StreamHandle {}
 
-/// A byte stream consumed by a host provider.
-pub struct InputStream {
+/// A stream consumed by a host provider.
+pub struct InputStream<T = u8> {
     handle: StreamHandle,
     finished: bool,
+    item: PhantomData<T>,
 }
 
-impl InputStream {
+impl<T: FromVal + 'static> InputStream<T> {
+    /// Claims the single reader for an opaque stream handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if another reader already claimed the stream.
+    pub fn from_handle(handle: StreamHandle) -> Result<Self, StreamError> {
+        {
+            let mut state = handle.state();
+            if state.reader_taken {
+                return Err(StreamError::already_read());
+            }
+            state.reader_taken = true;
+        }
+        Ok(Self {
+            handle,
+            finished: false,
+            item: PhantomData,
+        })
+    }
+
     /// Reads the next available chunk, or `None` after a clean end of stream.
     ///
     /// # Errors
     ///
     /// Returns an error if the stream cannot be read.
-    pub async fn read(&mut self) -> Result<Option<Vec<u8>>, StreamError> {
+    pub async fn read(&mut self) -> Result<Option<Vec<T>>, StreamError> {
         let result = poll_fn(|context| {
             let mut state = self.handle.state();
             if let Some(chunk) = state.chunks.pop_front() {
-                return Poll::Ready(Ok(Some(chunk)));
+                return Poll::Ready(decode_chunk(chunk).map(Some));
             }
             match state.end {
                 StreamEnd::Open => {
@@ -137,17 +165,17 @@ impl InputStream {
         result
     }
 
-    /// Collects every remaining chunk into one byte vector.
+    /// Collects every remaining chunk into one item vector.
     ///
     /// # Errors
     ///
     /// Returns an error rather than silently truncating a stream whose invocation ended early.
-    pub async fn read_all(mut self) -> Result<Vec<u8>, StreamError> {
-        let mut bytes = Vec::new();
+    pub async fn read_all(mut self) -> Result<Vec<T>, StreamError> {
+        let mut items = Vec::new();
         while let Some(chunk) = self.read().await? {
-            bytes.extend(chunk);
+            items.extend(chunk);
         }
-        Ok(bytes)
+        Ok(items)
     }
     /// Releases this reader back into an opaque handle for an engine boundary transfer.
     #[doc(hidden)]
@@ -170,7 +198,7 @@ impl InputStream {
     }
 }
 
-impl Drop for InputStream {
+impl<T> Drop for InputStream<T> {
     fn drop(&mut self) {
         if !self.finished {
             let mut state = self.handle.state();
@@ -182,47 +210,55 @@ impl Drop for InputStream {
     }
 }
 
-impl TryFrom<StreamHandle> for InputStream {
+impl TryFrom<StreamHandle> for InputStream<u8> {
     type Error = StreamError;
 
     fn try_from(handle: StreamHandle) -> Result<Self, Self::Error> {
-        {
-            let mut state = handle.state();
-            if state.reader_taken {
-                return Err(StreamError::already_read());
-            }
-            state.reader_taken = true;
-        }
-        Ok(Self {
-            handle,
-            finished: false,
-        })
+        Self::from_handle(handle)
     }
 }
 
-impl TryFrom<Val> for InputStream {
+impl TryFrom<Val> for InputStream<u8> {
     type Error = TypeError;
 
     fn try_from(value: Val) -> Result<Self, Self::Error> {
         let Val::Stream(handle) = value else {
-            return Err(TypeError::new("expected stream<u8>"));
+            return Err(TypeError::new("expected stream"));
         };
-        Self::try_from(handle).map_err(|error| TypeError::new(error.to_string()))
+        Self::from_handle(handle).map_err(|error| TypeError::new(error.to_string()))
     }
 }
 
-/// A byte stream produced by a host provider.
-pub struct OutputStream(StreamHandle);
+/// A stream produced by a host provider.
+pub struct OutputStream<T = u8>(StreamHandle, PhantomData<T>);
 
-impl OutputStream {
+impl OutputStream<u8> {
     /// Creates a stream containing one byte chunk and a clean end marker.
     #[must_use]
     pub fn from_bytes(bytes: impl Into<Vec<u8>>) -> Self {
-        Self(StreamHandle::new(
-            VecDeque::from([bytes.into()]),
-            StreamEnd::Closed,
-            0,
-        ))
+        Self(
+            StreamHandle::new(
+                VecDeque::from([StreamChunk::Bytes(bytes.into())]),
+                StreamEnd::Closed,
+                0,
+            ),
+            PhantomData,
+        )
+    }
+}
+
+impl<T: ToVal + 'static> OutputStream<T> {
+    /// Creates a stream containing the supplied items and a clean end marker.
+    #[must_use]
+    pub fn from_items(items: impl IntoIterator<Item = T>) -> Self {
+        Self(
+            StreamHandle::new(
+                VecDeque::from([encode_chunk(items.into_iter().collect())]),
+                StreamEnd::Closed,
+                0,
+            ),
+            PhantomData,
+        )
     }
 
     /// Creates an open stream and the writer used to produce its chunks.
@@ -230,23 +266,26 @@ impl OutputStream {
     /// The channel is unbounded. A slow or absent reader leaves every written chunk buffered in
     /// memory until it is read or the reader is dropped.
     #[must_use]
-    pub fn channel() -> (OutputStreamWriter, Self) {
+    pub fn channel() -> (OutputStreamWriter<T>, Self) {
         let handle = StreamHandle::new(VecDeque::new(), StreamEnd::Open, 1);
-        (OutputStreamWriter(handle.clone()), Self(handle))
+        (
+            OutputStreamWriter(handle.clone(), PhantomData),
+            Self(handle, PhantomData),
+        )
     }
 }
 
 /// A cloneable producer for an [`OutputStream`].
-pub struct OutputStreamWriter(StreamHandle);
+pub struct OutputStreamWriter<T = u8>(StreamHandle, PhantomData<T>);
 
-impl Clone for OutputStreamWriter {
+impl<T> Clone for OutputStreamWriter<T> {
     fn clone(&self) -> Self {
         self.0.state().writers += 1;
-        Self(self.0.clone())
+        Self(self.0.clone(), PhantomData)
     }
 }
 
-impl OutputStreamWriter {
+impl<T: ToVal + 'static> OutputStreamWriter<T> {
     /// Appends one chunk without blocking on the reader.
     ///
     /// The channel is unbounded, so a slow or absent reader leaves every written chunk buffered
@@ -255,12 +294,12 @@ impl OutputStreamWriter {
     /// # Errors
     ///
     /// Returns an error if the reader abandoned the stream or the stream was aborted.
-    pub async fn write(&self, chunk: impl Into<Vec<u8>>) -> Result<(), StreamError> {
+    pub async fn write(&self, chunk: impl Into<Vec<T>>) -> Result<(), StreamError> {
         let (result, waker) = {
             let mut state = self.0.state();
             match state.end {
                 StreamEnd::Open => {
-                    state.chunks.push_back(chunk.into());
+                    state.chunks.push_back(encode_chunk(chunk.into()));
                     (Ok(()), state.reader_waker.take())
                 }
                 StreamEnd::Closed => (Err(StreamError::closed()), None),
@@ -292,7 +331,7 @@ impl OutputStreamWriter {
     }
 }
 
-impl Drop for OutputStreamWriter {
+impl<T> Drop for OutputStreamWriter<T> {
     fn drop(&mut self) {
         let waker = {
             let mut state = self.0.state();
@@ -310,15 +349,38 @@ impl Drop for OutputStreamWriter {
     }
 }
 
-impl From<OutputStream> for StreamHandle {
-    fn from(stream: OutputStream) -> Self {
+impl<T> From<OutputStream<T>> for StreamHandle {
+    fn from(stream: OutputStream<T>) -> Self {
         stream.0
     }
 }
 
-impl From<OutputStream> for Val {
-    fn from(stream: OutputStream) -> Self {
+impl<T> From<OutputStream<T>> for Val {
+    fn from(stream: OutputStream<T>) -> Self {
         Self::Stream(stream.into())
+    }
+}
+
+fn encode_chunk<T: ToVal + 'static>(items: Vec<T>) -> StreamChunk {
+    let erased = &items as &dyn Any;
+    if let Some(bytes) = erased.downcast_ref::<Vec<u8>>() {
+        StreamChunk::Bytes(bytes.clone())
+    } else {
+        StreamChunk::Values(items.into_iter().map(ToVal::to_val).collect())
+    }
+}
+
+fn decode_chunk<T: FromVal + 'static>(chunk: StreamChunk) -> Result<Vec<T>, StreamError> {
+    match chunk {
+        StreamChunk::Bytes(bytes) => (Box::new(bytes) as Box<dyn Any>)
+            .downcast::<Vec<T>>()
+            .map(|items| *items)
+            .map_err(|_| StreamError::shape("expected value stream")),
+        StreamChunk::Values(values) => values
+            .into_iter()
+            .map(FromVal::from_val)
+            .collect::<Result<_, _>>()
+            .map_err(|error| StreamError::shape(error.to_string())),
     }
 }
 
@@ -347,7 +409,6 @@ impl StreamError {
         Self("stream reader abandoned the stream".to_owned())
     }
 
-    #[allow(dead_code)]
     fn shape(message: impl Into<String>) -> Self {
         Self(message.into())
     }
@@ -367,6 +428,35 @@ mod tests {
     use std::task::{Context, Waker};
 
     use super::*;
+
+    #[derive(Debug, PartialEq)]
+    struct Note {
+        text: String,
+    }
+
+    impl From<Note> for Val {
+        fn from(note: Note) -> Self {
+            Self::Record(vec![("text".to_owned(), note.text.into())])
+        }
+    }
+
+    impl TryFrom<Val> for Note {
+        type Error = TypeError;
+
+        fn try_from(value: Val) -> Result<Self, Self::Error> {
+            let Val::Record(fields) = value else {
+                return Err(TypeError::new("expected note"));
+            };
+            let [(name, value)] = <[(String, Val); 1]>::try_from(fields)
+                .map_err(|_| TypeError::new("expected note"))?;
+            if name != "text" {
+                return Err(TypeError::new("expected note text"));
+            }
+            Ok(Self {
+                text: String::try_from(value)?,
+            })
+        }
+    }
 
     fn ready<F: Future>(future: F) -> F::Output {
         let mut future = std::pin::pin!(future);
@@ -393,6 +483,38 @@ mod tests {
 
         let handle = input.into_handle();
         assert!(InputStream::try_from(handle).is_ok());
+    }
+
+    #[test]
+    fn value_stream_preserves_item_order_and_reports_wrong_shapes() {
+        let output = OutputStream::from_items([
+            Note {
+                text: "first".to_owned(),
+            },
+            Note {
+                text: "second".to_owned(),
+            },
+        ]);
+        let mut input = InputStream::<Note>::from_handle(StreamHandle::from(output)).unwrap();
+        assert_eq!(
+            ready(input.read()).unwrap(),
+            Some(vec![
+                Note {
+                    text: "first".to_owned()
+                },
+                Note {
+                    text: "second".to_owned()
+                }
+            ])
+        );
+        assert_eq!(ready(input.read()).unwrap(), None);
+
+        let output = OutputStream::from_items(["not a note".to_owned()]);
+        let mut input = InputStream::<Note>::from_handle(StreamHandle::from(output)).unwrap();
+        assert_eq!(
+            ready(input.read()).unwrap_err().to_string(),
+            "expected note"
+        );
     }
 
     #[test]

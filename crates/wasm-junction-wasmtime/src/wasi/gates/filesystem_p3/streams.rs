@@ -205,7 +205,7 @@ fn add_read(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let outcome = match outcome {
                     Ok(values) => values,
                     Err(error) if error.kind() == CallErrorKind::Refused => {
-                        let (writer, stream) = wasm_junction_core::OutputStream::channel();
+                        let (writer, stream) = wasm_junction_core::OutputStream::<u8>::channel();
                         drop(writer);
                         let (stream, future) =
                             accessor.with(|mut access| -> wasmtime::Result<_> {

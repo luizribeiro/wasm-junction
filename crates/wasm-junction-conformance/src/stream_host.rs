@@ -325,7 +325,7 @@ mod tests {
     fn failed_read_fails_the_host_call() {
         let host = StreamHost::default();
         let context = CallContext::for_test("streams");
-        let (writer, output) = OutputStream::channel();
+        let (writer, output) = OutputStream::<u8>::channel();
         let input = InputStream::try_from(StreamHandle::from(output)).unwrap();
         writer.abort();
 

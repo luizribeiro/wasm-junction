@@ -137,7 +137,7 @@ fn add_stdin(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         return Err(wasmtime::Error::new(error));
                     }
                     Err(_) => {
-                        let (writer, stream) = wasm_junction_core::OutputStream::channel();
+                        let (writer, stream) = wasm_junction_core::OutputStream::<u8>::channel();
                         drop(writer);
                         let stream = crate::streams::lower_stream(
                             wasm_junction_core::StreamHandle::from(stream),
