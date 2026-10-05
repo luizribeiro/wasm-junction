@@ -27,4 +27,4 @@ pub use resource::{
     validate_resource_lowering,
 };
 pub use stream::{InputStream, OutputStream, OutputStreamWriter, StreamError, StreamHandle};
-pub use values::{TypeError, Val, Vals};
+pub use values::{FromVal, ToVal, TypeError, Val, Vals};

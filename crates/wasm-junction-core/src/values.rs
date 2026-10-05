@@ -3,6 +3,44 @@ use std::fmt::{self, Display};
 
 use crate::{FutureHandle, Resource, StreamHandle};
 
+/// Converts a Rust representation of a WIT value into [`Val`].
+///
+/// Generated bindings implement this through their ordinary [`From`] conversion.
+pub trait ToVal {
+    /// Converts this value into its engine-neutral representation.
+    fn to_val(self) -> Val;
+}
+
+impl<T> ToVal for T
+where
+    Val: From<T>,
+{
+    fn to_val(self) -> Val {
+        self.into()
+    }
+}
+
+/// Converts a [`Val`] into a Rust representation of a WIT value.
+///
+/// A mismatched value shape returns a [`TypeError`].
+pub trait FromVal: Sized {
+    /// Converts an engine-neutral value into this type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the value does not have this type's WIT shape.
+    fn from_val(value: Val) -> Result<Self, TypeError>;
+}
+
+impl<T> FromVal for T
+where
+    T: TryFrom<Val, Error = TypeError>,
+{
+    fn from_val(value: Val) -> Result<Self, TypeError> {
+        value.try_into()
+    }
+}
+
 /// An engine-neutral representation of a plain WIT value.
 ///
 /// Generated bindings convert their Rust types to and from this representation at call
@@ -61,7 +99,7 @@ pub enum Val {
     Result(Result<Option<Box<Self>>, Option<Box<Self>>>),
     /// A host-defined WIT resource handle.
     Resource(Resource),
-    /// A WIT `stream<u8>` handle.
+    /// A WIT `stream<T>` handle, with a chunked representation for `stream<u8>`.
     Stream(StreamHandle),
     /// An invocation-scoped WIT `future<T>` handle.
     Future(FutureHandle),
@@ -152,7 +190,7 @@ impl Error for TypeError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{TypeError, Val};
+    use super::{FromVal, ToVal, TypeError, Val};
 
     #[test]
     fn bytes_are_the_only_byte_list_shape() {
@@ -161,6 +199,16 @@ mod tests {
         assert_eq!(
             Vec::<u8>::try_from(Val::List(vec![Val::U8(1)])),
             Err(TypeError::new("expected list<u8>"))
+        );
+    }
+
+    #[test]
+    fn conversion_traits_use_the_value_conversions() {
+        assert_eq!(7_u32.to_val(), Val::U32(7));
+        assert_eq!(u32::from_val(Val::U32(7)), Ok(7));
+        assert_eq!(
+            u32::from_val(Val::String("seven".to_owned())),
+            Err(TypeError::new("expected u32"))
         );
     }
 }
