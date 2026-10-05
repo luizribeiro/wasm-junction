@@ -746,6 +746,19 @@ mod tests {
     }
 
     #[test]
+    fn resource_stream_preserves_handles() {
+        let resources = [
+            crate::Resource::owned("example:notes/store@1.0.0", "note", 3),
+            crate::Resource::owned("example:notes/store@1.0.0", "note", 5),
+        ];
+        let input = InputStream::<crate::Resource>::from_handle(StreamHandle::from(
+            OutputStream::from_items(resources.clone()),
+        ))
+        .unwrap();
+        assert_eq!(ready(input.read_all()).unwrap(), resources);
+    }
+
+    #[test]
     fn transforms_are_pull_based_and_preserve_end_and_abort() {
         let calls = Arc::new(AtomicUsize::new(0));
         let observed = calls.clone();
