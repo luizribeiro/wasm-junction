@@ -1,5 +1,0 @@
-package test:streams-invalid;
-
-interface data {
-  invalid: func(value: stream<string>);
-}

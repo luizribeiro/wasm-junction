@@ -171,17 +171,27 @@ impl Generator<'_> {
         match &self.resolve.types[id].kind {
             TypeDefKind::Type(ty) => self.provider_argument(*ty, name),
             TypeDefKind::Handle(_) => self.map_handle(id, name),
-            TypeDefKind::Stream(Some(Type::U8)) => Ok((
-                quote!(),
-                quote!(::wasm_junction::InputStream::try_from(#name).map_err(
-                    |error| ::wasm_junction::CallError::trap(error.to_string())
-                )?),
-            )),
+            TypeDefKind::Stream(_) => {
+                let payload = self
+                    .stream_item(ty)
+                    .ok_or_else(|| Self::unsupported(&name.to_string(), "stream"))?;
+                let payload = self.rust_type(payload, &name.to_string())?;
+                Ok((
+                    quote!(),
+                    quote!(::wasm_junction::InputStream::<#payload>::from_handle(#name)
+                        .map_err(|error|
+                            ::wasm_junction::CallError::trap(error.to_string()))?),
+                ))
+            }
             TypeDefKind::Option(ty) => {
                 if self.direct_stream(*ty) {
+                    let payload = self
+                        .stream_item(*ty)
+                        .ok_or_else(|| Self::unsupported(&name.to_string(), "stream"))?;
+                    let payload = self.rust_type(payload, &name.to_string())?;
                     return Ok((
                         quote!(),
-                        quote!(#name.map(::wasm_junction::InputStream::try_from)
+                        quote!(#name.map(::wasm_junction::InputStream::<#payload>::from_handle)
                             .transpose().map_err(|error|
                                 ::wasm_junction::CallError::trap(error.to_string()))?),
                     ));
@@ -258,7 +268,7 @@ impl Generator<'_> {
                     borrowed,
                 })))
             }
-            TypeDefKind::Stream(Some(Type::U8)) => Ok(Some(BoundaryUse::Stream)),
+            TypeDefKind::Stream(_) => Ok(Some(BoundaryUse::Stream)),
             _ => Ok(None),
         }
     }
@@ -282,7 +292,7 @@ impl Generator<'_> {
                 let table = resource.table;
                 Ok(quote!(self.#table.insert(#value)?))
             }
-            TypeDefKind::Stream(Some(Type::U8)) => {
+            TypeDefKind::Stream(_) => {
                 Ok(quote!(::std::convert::Into::<::wasm_junction::StreamHandle>::into(#value)))
             }
             TypeDefKind::Option(ty) => {

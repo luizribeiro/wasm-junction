@@ -157,7 +157,13 @@ impl Generator<'_> {
                 })
             }
             TypeDefKind::Type(ty) => self.host_type(interface, *ty, item),
-            TypeDefKind::Stream(Some(Type::U8)) => Ok(quote!(::wasm_junction::InputStream)),
+            TypeDefKind::Stream(_) => {
+                let payload = self
+                    .stream_item(ty)
+                    .ok_or_else(|| Self::unsupported(item, "stream without an item"))?;
+                let payload = self.host_type(interface, payload, item)?;
+                Ok(quote!(::wasm_junction::InputStream<#payload>))
+            }
             TypeDefKind::Option(ty) => {
                 let ty = self.host_type(interface, *ty, item)?;
                 Ok(quote!(::std::option::Option<#ty>))
@@ -181,7 +187,13 @@ impl Generator<'_> {
         };
         match &self.resolve.types[id].kind {
             TypeDefKind::Type(ty) => self.host_output_type(interface, *ty, item),
-            TypeDefKind::Stream(Some(Type::U8)) => Ok(quote!(::wasm_junction::OutputStream)),
+            TypeDefKind::Stream(_) => {
+                let payload = self
+                    .stream_item(ty)
+                    .ok_or_else(|| Self::unsupported(item, "stream without an item"))?;
+                let payload = self.host_type(interface, payload, item)?;
+                Ok(quote!(::wasm_junction::OutputStream<#payload>))
+            }
             TypeDefKind::Option(ty) => {
                 let ty = self.host_output_type(interface, *ty, item)?;
                 Ok(quote!(::std::option::Option<#ty>))

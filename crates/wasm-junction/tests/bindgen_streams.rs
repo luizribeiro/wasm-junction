@@ -17,6 +17,14 @@ impl host::Host for Echo {
         Ok(OutputStream::from_bytes(value.read_all().await?))
     }
 
+    async fn records(
+        &self,
+        _cx: &CallContext,
+        value: InputStream<host::Note>,
+    ) -> Result<OutputStream<host::Note>, CallError> {
+        Ok(OutputStream::from_items(value.read_all().await?))
+    }
+
     async fn optional(
         &self,
         _cx: &CallContext,
@@ -89,6 +97,31 @@ fn app_maps_streams_at_top_level_and_inside_option_and_result() {
             .map_err(bytes);
         assert_eq!(actual, expected);
     }
+}
+
+#[test]
+fn generated_handles_and_hosts_convert_record_streams() {
+    let (_app, handle) = app();
+    let output = OutputStream::from_items([
+        guest::Note {
+            title: "first".to_owned(),
+        },
+        guest::Note {
+            title: "second".to_owned(),
+        },
+    ]);
+    let input = support::block_on(handle.records(output)).unwrap();
+    assert_eq!(
+        support::block_on(input.read_all()).unwrap(),
+        [
+            guest::Note {
+                title: "first".to_owned()
+            },
+            guest::Note {
+                title: "second".to_owned()
+            }
+        ]
+    );
 }
 
 #[test]

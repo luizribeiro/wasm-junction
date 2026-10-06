@@ -9,8 +9,6 @@ pub(super) fn interfaces(resolve: &Resolve, roots: &[InterfaceId], span: Span) -
             Type::ErrorContext => Some("error-context"),
             Type::Id(id) => match resolve.types[id].kind {
                 TypeDefKind::Future(_) => Some("future"),
-                TypeDefKind::Stream(Some(Type::U8)) => None,
-                TypeDefKind::Stream(_) => Some("stream<T> other than stream<u8>"),
                 _ => None,
             },
             _ => None,
@@ -47,9 +45,7 @@ fn validate_boundary_shape(
 ) -> syn::Result<()> {
     let Type::Id(id) = ty else { return Ok(()) };
     match &resolve.types[id].kind {
-        TypeDefKind::Resource | TypeDefKind::Handle(_) | TypeDefKind::Stream(Some(Type::U8)) => {
-            Ok(())
-        }
+        TypeDefKind::Resource | TypeDefKind::Handle(_) | TypeDefKind::Stream(_) => Ok(()),
         TypeDefKind::Type(ty) => {
             validate_boundary_shape(resolve, *ty, function, allow_wrapper, span)
         }
@@ -70,7 +66,7 @@ fn validate_boundary_shape(
                 };
                 nested_shape = match resolve.types[id].kind {
                     TypeDefKind::Resource | TypeDefKind::Handle(_) => Some("resource"),
-                    TypeDefKind::Stream(Some(Type::U8)) => Some("stream"),
+                    TypeDefKind::Stream(_) => Some("stream"),
                     _ => nested_shape,
                 };
                 Ok(())
@@ -109,16 +105,8 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_errors_name_futures_and_non_byte_streams() {
-        for (path, expected) in [
-            ("tests/fixtures/future", "WIT future in `delayed`"),
-            (
-                "tests/fixtures/stream-invalid",
-                "WIT stream<T> other than stream<u8> in `invalid`",
-            ),
-        ] {
-            assert!(validation_error(path).contains(expected));
-        }
+    fn unsupported_errors_name_futures() {
+        assert!(validation_error("tests/fixtures/future").contains("WIT future in `delayed`"));
     }
 
     #[test]

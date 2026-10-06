@@ -1,13 +1,23 @@
 package test:bindgen-streams@1.0.0;
 
 interface host {
+  record note {
+    title: string,
+  }
+
   top: async func(value: stream<u8>) -> stream<u8>;
+  records: async func(value: stream<note>) -> stream<note>;
   optional: async func(value: option<stream<u8>>) -> option<stream<u8>>;
   choose: async func(value: result<stream<u8>, stream<u8>>) -> result<stream<u8>, stream<u8>>;
 }
 
 interface guest {
+  record note {
+    title: string,
+  }
+
   top: async func(value: stream<u8>) -> stream<u8>;
+  records: async func(value: stream<note>) -> stream<note>;
   optional: async func(value: option<stream<u8>>) -> option<stream<u8>>;
   choose: async func(value: result<stream<u8>, stream<u8>>) -> result<stream<u8>, stream<u8>>;
 }

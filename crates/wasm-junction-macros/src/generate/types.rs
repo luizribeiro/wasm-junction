@@ -57,8 +57,17 @@ impl Generator<'_> {
                 Ok(quote!((#(#types,)*)))
             }
             TypeDefKind::Resource | TypeDefKind::Handle(_) => Ok(quote!(::wasm_junction::Resource)),
-            TypeDefKind::Stream(Some(Type::U8)) => Ok(quote!(::wasm_junction::StreamHandle)),
+            TypeDefKind::Stream(_) => Ok(quote!(::wasm_junction::StreamHandle)),
             other => Err(Self::unsupported(item, other.as_str())),
+        }
+    }
+
+    pub(super) fn stream_item(&self, ty: Type) -> Option<Type> {
+        let Type::Id(id) = ty else { return None };
+        match self.resolve.types[id].kind {
+            TypeDefKind::Type(ty) => self.stream_item(ty),
+            TypeDefKind::Stream(item) => item,
+            _ => None,
         }
     }
 

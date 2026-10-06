@@ -184,21 +184,24 @@ mod tests {
         assert!(tokens.contains("StreamHandle"), "{tokens}");
         assert!(tokens.contains("Val :: Stream"), "{tokens}");
         assert!(
-            tokens.contains("Option < :: wasm_junction :: InputStream >"),
+            tokens.contains("Option < :: wasm_junction :: InputStream < u8 > >"),
             "{tokens}"
         );
         assert!(
-            tokens.contains("Result < :: wasm_junction :: OutputStream"),
+            tokens.contains("Result < :: wasm_junction :: OutputStream < u8 >"),
             "{tokens}"
         );
-        assert!(tokens.contains("InputStream :: try_from"), "{tokens}");
+        assert!(
+            tokens.contains("InputStream :: < u8 > :: from_handle"),
+            "{tokens}"
+        );
         assert!(
             tokens.contains("Into :: < :: wasm_junction :: StreamHandle >"),
             "{tokens}"
         );
         assert!(
             tokens.contains(
-                "pub async fn send (& self , value : :: std :: option :: Option < :: wasm_junction :: OutputStream >)"
+                "pub async fn send (& self , value : :: std :: option :: Option < :: wasm_junction :: OutputStream < u8 > >)"
             ),
             "{tokens}"
         );
