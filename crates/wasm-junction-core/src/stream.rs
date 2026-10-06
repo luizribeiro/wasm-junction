@@ -1,4 +1,4 @@
-use std::any::Any;
+use std::any::{Any, TypeId};
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt::{self, Debug, Display};
@@ -76,10 +76,16 @@ pub struct StreamHandle {
     generation: Option<Arc<dyn CompiledComponent>>,
     transforms: Vec<Transform>,
     item_encoder: Option<ItemEncoder>,
+    byte_stream: bool,
 }
 
 impl StreamHandle {
-    fn new(chunks: VecDeque<StreamChunk>, end: StreamEnd, writers: usize) -> Self {
+    fn new(
+        chunks: VecDeque<StreamChunk>,
+        end: StreamEnd,
+        writers: usize,
+        byte_stream: bool,
+    ) -> Self {
         Self {
             id: NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed),
             state: Arc::new(Mutex::new(StreamState {
@@ -92,6 +98,7 @@ impl StreamHandle {
             generation: None,
             transforms: Vec::new(),
             item_encoder: None,
+            byte_stream,
         }
     }
 
@@ -101,10 +108,28 @@ impl StreamHandle {
         self.id
     }
 
+    /// Reports whether this handle carries chunked bytes rather than `Val` items.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn is_byte_stream(&self) -> bool {
+        self.byte_stream
+    }
+
     /// Replaces this handle with an empty stream and returns its previous value.
     #[must_use]
     pub fn take(&mut self) -> Self {
-        std::mem::replace(self, Self::new(VecDeque::new(), StreamEnd::Closed, 0))
+        let replacement = Self::new(VecDeque::new(), StreamEnd::Closed, 0, self.byte_stream);
+        std::mem::replace(self, replacement)
+    }
+
+    /// Closes this stream's read end without knowing its item type.
+    #[doc(hidden)]
+    pub fn __close_reader(&self) {
+        let mut state = self.state();
+        if state.end == StreamEnd::Open {
+            state.end = StreamEnd::ReaderClosed;
+            state.chunks.clear();
+        }
     }
 
     /// Maps each engine-neutral item when the stream is read.
@@ -304,11 +329,7 @@ impl<T: 'static> InputStream<T> {
     /// Closes the reader while preserving the reason for subsequent writer failures.
     #[doc(hidden)]
     pub fn close_reader(mut self) {
-        let mut state = self.handle.state();
-        if state.end == StreamEnd::Open {
-            state.end = StreamEnd::ReaderClosed;
-            state.chunks.clear();
-        }
+        self.handle.__close_reader();
         self.finished = true;
     }
 }
@@ -356,6 +377,7 @@ impl OutputStream<u8> {
                 VecDeque::from([StreamChunk::Bytes(bytes.into())]),
                 StreamEnd::Closed,
                 0,
+                true,
             ),
             PhantomData,
         )
@@ -371,6 +393,7 @@ impl<T: HostBound + 'static> OutputStream<T> {
                 VecDeque::from([encode_chunk(items.into_iter().collect())]),
                 StreamEnd::Closed,
                 0,
+                TypeId::of::<T>() == TypeId::of::<u8>(),
             ),
             PhantomData,
         )
@@ -382,7 +405,12 @@ impl<T: HostBound + 'static> OutputStream<T> {
     /// memory until it is read or the reader is dropped.
     #[must_use]
     pub fn channel() -> (OutputStreamWriter<T>, Self) {
-        let handle = StreamHandle::new(VecDeque::new(), StreamEnd::Open, 1);
+        let handle = StreamHandle::new(
+            VecDeque::new(),
+            StreamEnd::Open,
+            1,
+            TypeId::of::<T>() == TypeId::of::<u8>(),
+        );
         (
             OutputStreamWriter(handle.clone(), PhantomData),
             Self(handle, PhantomData),
@@ -397,15 +425,19 @@ impl<T: HostBound + 'static> OutputStream<T> {
         encoder: impl Fn(T) -> Result<Val, CallError> + HostBound + 'static,
     ) -> StreamHandle {
         let mut handle = self.0;
-        handle.item_encoder = Some(Arc::new(move |items| {
-            let items = items
-                .downcast::<Vec<T>>()
-                .map_err(|_| StreamError::shape("stream item type does not match its encoder"))?;
-            items
-                .into_iter()
-                .map(|item| encoder(item).map_err(|error| StreamError::shape(error.to_string())))
-                .collect()
-        }));
+        if !handle.byte_stream {
+            handle.item_encoder = Some(Arc::new(move |items| {
+                let items = items.downcast::<Vec<T>>().map_err(|_| {
+                    StreamError::shape("stream item type does not match its encoder")
+                })?;
+                items
+                    .into_iter()
+                    .map(|item| {
+                        encoder(item).map_err(|error| StreamError::shape(error.to_string()))
+                    })
+                    .collect()
+            }));
+        }
         handle
     }
 }
@@ -766,6 +798,18 @@ mod tests {
                 .unwrap();
         writer.abort();
         assert_eq!(ready(input.read()), Err(StreamError::aborted()));
+    }
+
+    #[test]
+    fn erased_handles_report_byte_shape_and_close_readers() {
+        let bytes = StreamHandle::from(OutputStream::from_bytes(b"bytes"));
+        assert!(bytes.is_byte_stream());
+
+        let (writer, output) = OutputStream::<u32>::channel();
+        let values = StreamHandle::from(output);
+        assert!(!values.is_byte_stream());
+        values.__close_reader();
+        assert_eq!(ready(writer.write([1])), Err(StreamError::reader_closed()));
     }
 
     #[test]
