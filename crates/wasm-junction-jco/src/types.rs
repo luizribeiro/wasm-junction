@@ -32,7 +32,7 @@ pub(crate) enum ValueType {
         ok: Option<Box<ValueType>>,
         err: Option<Box<ValueType>>,
     },
-    Stream,
+    Stream(Box<ValueType>),
     Future,
     Resource(ResourceType),
     Unsupported(&'static str),
@@ -75,7 +75,7 @@ pub(crate) struct CaseType {
 }
 
 impl ValueType {
-    pub(crate) const fn name(&self) -> &'static str {
+    pub(crate) fn name(&self) -> &'static str {
         match self {
             Self::Bool => "bool",
             Self::S8 => "s8",
@@ -98,7 +98,8 @@ impl ValueType {
             Self::Flags(_) => "flags",
             Self::Option(_) => "option",
             Self::Result { .. } => "result",
-            Self::Stream => "stream<u8>",
+            Self::Stream(item) if **item == Self::U8 => "stream<u8>",
+            Self::Stream(_) => "stream",
             Self::Future => "future",
             Self::Resource(resource) => match resource.ownership {
                 ResourceOwnership::Own => "own",
@@ -352,7 +353,7 @@ fn value_type(resolve: &Resolve, ty: Type) -> ValueType {
                 ok: result.ok.map(|ty| Box::new(value_type(resolve, ty))),
                 err: result.err.map(|ty| Box::new(value_type(resolve, ty))),
             },
-            TypeDefKind::Stream(Some(Type::U8)) => ValueType::Stream,
+            TypeDefKind::Stream(Some(ty)) => ValueType::Stream(Box::new(value_type(resolve, *ty))),
             TypeDefKind::Future(_) => ValueType::Future,
             TypeDefKind::Handle(handle) => resource_type(resolve, *handle),
             kind => ValueType::Unsupported(kind.as_str()),
@@ -457,7 +458,7 @@ mod tests {
                 .export(wasm_junction_conformance::STREAM_PROBE, "accept")
                 .unwrap()
                 .params,
-            [ValueType::Stream]
+            [ValueType::Stream(Box::new(ValueType::U8))]
         );
     }
 

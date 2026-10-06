@@ -240,7 +240,7 @@ fn default_value(ty: &ValueType) -> Result<Val, CallError> {
             .map(default_value)
             .transpose()?
             .map(Box::new))),
-        ValueType::Stream => return Err(unsupported(ty.name())),
+        ValueType::Stream(_) => return Err(unsupported(ty.name())),
         ValueType::Future => return Err(unsupported(ty.name())),
         ValueType::Resource(resource) => Val::Resource(match resource.ownership {
             ResourceOwnership::Own => {
@@ -414,7 +414,12 @@ fn lower(
         (Val::Resource(resource), ValueType::Resource(expected)) => {
             lower_resource(resource, expected, resources)?
         }
-        (Val::Stream(handle), ValueType::Stream) => {
+        (Val::Stream(handle), ValueType::Stream(item)) => {
+            if **item != ValueType::U8 || !handle.is_byte_stream() {
+                return Err(CallError::refused(
+                    "jco does not yet support WIT value streams",
+                ));
+            }
             let ResourceRetention::Track(resources) = resources else {
                 return Err(CallError::trap("cannot synthesize a byte stream"));
             };
@@ -425,7 +430,7 @@ fn lower(
             resources.channel_open(id, ChannelDirection::HostToGuest);
             stream_marker("host", id)
         }
-        (_, ValueType::Stream) => return Err(unsupported(expected.name())),
+        (_, ValueType::Stream(_)) => return Err(unsupported(expected.name())),
         (_, ValueType::Future) => return Err(unsupported(expected.name())),
         (_, ValueType::Unsupported(name)) => return Err(unsupported(name)),
         (value, expected) => {
@@ -501,7 +506,10 @@ fn lift(
             lift_nested_result(value, ok.as_deref(), err.as_deref(), expected, resources)
         }
         ValueType::Resource(expected) => lift_resource(value, expected, resources),
-        ValueType::Stream => lift_stream(value, resources),
+        ValueType::Stream(item) if **item == ValueType::U8 => {
+            lift_stream(value, expected, resources)
+        }
+        ValueType::Stream(_) => refuse_value_stream(value, expected, resources),
         ValueType::Future => Err(unsupported(expected.name())),
         ValueType::Unsupported(name) => Err(unsupported(name)),
     }
@@ -514,18 +522,20 @@ fn stream_marker(kind: &str, id: u64) -> JsValue {
     marker.into()
 }
 
-fn lift_stream(value: JsValue, resources: &ResourceTracker) -> Result<Val, CallError> {
-    let marker = Reflect::get(&value, &STREAM_MARKER.into())
-        .map_err(|error| mismatch(&ValueType::Stream, &error, "could not read stream marker"))?;
-    let marker = js_array(marker, &ValueType::Stream)?;
-    let kind = marker
-        .get(0)
-        .as_string()
-        .ok_or_else(|| mismatch(&ValueType::Stream, &value, "missing stream direction"))?;
-    let id = bigint::<u64>(marker.get(1), &ValueType::U64)?;
+fn lift_stream(
+    value: JsValue,
+    expected: &ValueType,
+    resources: &ResourceTracker,
+) -> Result<Val, CallError> {
+    let (kind, id) = stream_identity(&value, expected)?;
     let handle = match kind.as_str() {
         "host" => resources.take_host(id).map(InputStream::into_handle),
         "guest" if resources.refuse_guest_streams.get() => {
+            let handle = resources.take_guest(id).ok_or_else(|| {
+                CallError::trap(format!("stream `guest#{id}` is no longer available"))
+            })?;
+            handle.__close_reader();
+            resources.close_guest(id);
             return Err(CallError::refused(
                 "guest-created streams cannot be returned because the component store ends with each call",
             ));
@@ -536,6 +546,47 @@ fn lift_stream(value: JsValue, resources: &ResourceTracker) -> Result<Val, CallE
     handle
         .map(Val::Stream)
         .ok_or_else(|| CallError::trap(format!("stream `{kind}#{id}` is no longer available")))
+}
+
+fn refuse_value_stream(
+    value: JsValue,
+    expected: &ValueType,
+    resources: &ResourceTracker,
+) -> Result<Val, CallError> {
+    let (kind, id) = stream_identity(&value, expected)?;
+    match kind.as_str() {
+        "host" => resources
+            .take_host(id)
+            .ok_or_else(|| CallError::trap(format!("stream `host#{id}` is no longer available")))?
+            .close_reader(),
+        "guest" => {
+            let handle = resources.take_guest(id).ok_or_else(|| {
+                CallError::trap(format!("stream `guest#{id}` is no longer available"))
+            })?;
+            handle.__close_reader();
+            resources.close_guest(id);
+        }
+        _ => {
+            return Err(CallError::trap(format!(
+                "stream `{kind}#{id}` is no longer available"
+            )));
+        }
+    }
+    Err(CallError::refused(
+        "jco does not yet support WIT value streams",
+    ))
+}
+
+fn stream_identity(value: &JsValue, expected: &ValueType) -> Result<(String, u64), CallError> {
+    let marker = Reflect::get(&value, &STREAM_MARKER.into())
+        .map_err(|error| mismatch(expected, &error, "could not read stream marker"))?;
+    let marker = js_array(marker, expected)?;
+    let kind = marker
+        .get(0)
+        .as_string()
+        .ok_or_else(|| mismatch(expected, &value, "missing stream direction"))?;
+    let id = bigint::<u64>(marker.get(1), &ValueType::U64)?;
+    Ok((kind, id))
 }
 
 fn lower_sequence(
@@ -1066,7 +1117,7 @@ mod tests {
     async fn recovers_host_streams_and_refuses_guest_stream_results() {
         let tracker = ResourceTracker::default();
         let signature = FunctionType {
-            params: vec![ValueType::Stream],
+            params: vec![ValueType::Stream(Box::new(ValueType::U8))],
             result: None,
         };
         let lowered = lower_args_tracked(
@@ -1079,13 +1130,13 @@ mod tests {
         let input = InputStream::try_from(values.remove(0)).unwrap();
         assert_eq!(input.read_all().await.unwrap(), b"host");
 
-        let (_, output) = wasm_junction_core::OutputStream::channel();
+        let (_, output) = wasm_junction_core::OutputStream::<u8>::channel();
         let marker = tracker.register_guest(StreamHandle::from(output));
         let error = lift_result_tracked(
             marker,
             &FunctionType {
                 params: Vec::new(),
-                result: Some(ValueType::Stream),
+                result: Some(ValueType::Stream(Box::new(ValueType::U8))),
             },
             &tracker,
         )
