@@ -1032,11 +1032,57 @@ fn unsupported(name: &str) -> CallError {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+
     use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
+    use wasm_junction_core::{BoxFuture, CallErrorKind, ImportTarget, InvocationContext, Resource};
 
     use super::*;
 
     wasm_bindgen_test_configure!(run_in_dedicated_worker);
+
+    #[derive(Default)]
+    struct EventDispatcher(RefCell<Vec<EngineEvent>>);
+
+    impl ImportDispatcher for EventDispatcher {
+        fn call(
+            &self,
+            _context: InvocationContext,
+            _caller: Arc<str>,
+            _interface: Arc<str>,
+            _function: Arc<str>,
+            _args: Vals,
+        ) -> BoxFuture<'_, Result<Vals, CallError>> {
+            Box::pin(std::future::ready(Err(CallError::trap("unused call"))))
+        }
+
+        fn call_engine(
+            &self,
+            _context: InvocationContext,
+            _caller: Arc<str>,
+            _interface: Arc<str>,
+            _function: Arc<str>,
+            _args: Vals,
+            _target: Arc<dyn ImportTarget>,
+        ) -> BoxFuture<'_, Result<Vals, CallError>> {
+            Box::pin(std::future::ready(Err(CallError::trap(
+                "unused engine call",
+            ))))
+        }
+
+        fn drop_resource(
+            &self,
+            _context: InvocationContext,
+            _caller: Arc<str>,
+            _resource: Resource,
+        ) -> BoxFuture<'_, Result<(), CallError>> {
+            Box::pin(std::future::ready(Err(CallError::trap("unused drop"))))
+        }
+
+        fn emit(&self, event: EngineEvent) {
+            self.0.borrow_mut().push(event);
+        }
+    }
 
     #[wasm_bindgen_test]
     fn round_trips_primitive_values() {
@@ -1142,6 +1188,78 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("store ends with each call"));
+    }
+
+    #[wasm_bindgen_test]
+    async fn refuses_value_streams_without_panicking() {
+        let error = lower_args_tracked(
+            vec![wasm_junction_core::OutputStream::from_items([7_u32]).into()],
+            &FunctionType {
+                params: vec![ValueType::Stream(Box::new(ValueType::U32))],
+                result: None,
+            },
+            &ResourceTracker::default(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "jco does not yet support WIT value streams"
+        );
+
+        let dispatcher = Arc::new(EventDispatcher::default());
+        let tracker = ResourceTracker::with_imports(
+            dispatcher.clone(),
+            Some(InvocationId::__from_counter(7)),
+        );
+        let (writer, output) = wasm_junction_core::OutputStream::<u32>::channel();
+        let marker = tracker.register_guest(StreamHandle::from(output));
+        let error = lift_result_tracked(
+            marker,
+            &FunctionType {
+                params: Vec::new(),
+                result: Some(ValueType::Stream(Box::new(ValueType::U32))),
+            },
+            &tracker,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), CallErrorKind::Refused);
+        assert_eq!(
+            error.to_string(),
+            "jco does not yet support WIT value streams"
+        );
+        assert_eq!(
+            writer.write([8]).await.unwrap_err().to_string(),
+            "stream reader is closed"
+        );
+        let events = dispatcher.0.borrow();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, EngineEvent::ChannelOpen { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, EngineEvent::ChannelClose { .. }))
+                .count(),
+            1
+        );
+        drop(events);
+
+        assert_eq!(
+            lift_result_tracked(
+                JsValue::from_f64(9.0),
+                &FunctionType {
+                    params: Vec::new(),
+                    result: Some(ValueType::U32),
+                },
+                &tracker,
+            )
+            .unwrap(),
+            [Val::U32(9)]
+        );
     }
 
     #[wasm_bindgen_test]
