@@ -17,4 +17,6 @@ interface resources {
   maybe: func(value: option<session>) -> option<session>;
   choose: func(value: result<session, string>) -> result<session, string>;
   make-host: func() -> host;
+  sessions: func() -> stream<session>;
+  consume-stream: async func(values: stream<session>) -> list<string>;
 }

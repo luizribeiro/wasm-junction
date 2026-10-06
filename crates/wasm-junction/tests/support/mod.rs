@@ -12,7 +12,8 @@ use std::task::{Context, Poll, Waker};
 
 use wasm_junction::{
     BoxFuture, Call, CallContext, CallError, Caller, CompiledComponent, Engine, EngineError,
-    ImportDispatcher, InvocationContext, Provider, TypeError, TypedCall, Val, Vals,
+    ImportDispatcher, InputStream, InvocationContext, Provider, Resource, TypeError, TypedCall,
+    Val, Vals,
 };
 use wit_component::{ComponentEncoder, StringEncoding, dummy_module, embed_component_metadata};
 use wit_parser::{ManglingAndAbi, Resolve};
@@ -424,6 +425,9 @@ impl CompiledComponent for UnusedComponent {
                 }
                 SETTINGS_CALLER => settings_route(imports, context, component).await,
                 RESOURCE_BINDGEN_CLIENT => {
+                    if function.as_ref() == "consume-sessions" {
+                        return consume_sessions(imports, context, component).await;
+                    }
                     let import = resource_import(&function)?;
                     imports
                         .call(
@@ -536,9 +540,51 @@ fn resource_import(function: &str) -> Result<&str, CallError> {
         "profile" => Ok("[method]session.profile"),
         "new" => Ok("[method]session.new"),
         "lookup" => Ok("[static]session.lookup"),
-        "consume" | "maybe" | "choose" | "make-host" => Ok(function),
+        "consume" | "maybe" | "choose" | "make-host" | "sessions" | "consume-stream" => {
+            Ok(function)
+        }
         _ => Err(CallError::trap("unknown resource fixture function")),
     }
+}
+
+async fn consume_sessions(
+    imports: Arc<dyn ImportDispatcher>,
+    context: InvocationContext,
+    component: Arc<str>,
+) -> Result<Vals, CallError> {
+    let mut values = imports
+        .call(
+            context.clone(),
+            component.clone(),
+            Arc::from(RESOURCE_BINDGEN_HOST),
+            Arc::from("sessions"),
+            Vec::new(),
+        )
+        .await?;
+    let [Val::Stream(stream)] = values.as_mut_slice() else {
+        return Err(CallError::trap("sessions returned the wrong value"));
+    };
+    let resources = InputStream::<Resource>::from_handle(stream.take())
+        .map_err(CallError::from)?
+        .read_all()
+        .await?;
+    let mut names = Vec::with_capacity(resources.len());
+    for resource in resources {
+        let values = imports
+            .call(
+                context.clone(),
+                component.clone(),
+                Arc::from(RESOURCE_BINDGEN_HOST),
+                Arc::from("consume"),
+                vec![Val::Resource(resource)],
+            )
+            .await?;
+        let [Val::String(name)] = values.as_slice() else {
+            return Err(CallError::trap("consume returned the wrong value"));
+        };
+        names.push(Val::String(name.clone()));
+    }
+    Ok(vec![Val::List(names)])
 }
 
 fn handle_call(function: &str, args: Vals) -> Result<Vals, CallError> {

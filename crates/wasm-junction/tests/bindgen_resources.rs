@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
 use wasm_junction::{
-    App, CallContext, CallError, CallErrorKind, Component, ImportDispatcher, InvocationContext,
-    Provided, Resource, TypedCall, Val,
+    App, Call, CallContext, CallError, CallErrorKind, Component, ImportDispatcher, InputStream,
+    InvocationContext, Middleware, Next, OutputStream, Provided, Resource, TypedCall, Val, Vals,
 };
 
 wasm_junction::bindgen!({ path: "tests/fixtures/resources/wit" });
@@ -27,6 +27,8 @@ const PLUGIN_WIT: &str = r"
       maybe: func(value: option<session>) -> option<session>;
       choose: func(value: result<session, string>) -> result<session, string>;
       make-host: func() -> host;
+      consume-sessions: async func() -> list<string>;
+      consume-stream: async func(values: stream<session>) -> list<string>;
     }
     world plugin { import test:resources/resources@1.0.0; export client; }
 ";
@@ -81,7 +83,26 @@ impl Drop for DropProbe {
 struct ResourceHost {
     dropped: Mutex<Vec<String>>,
     default_drops: Arc<AtomicUsize>,
+    stream_items: AtomicUsize,
     gate: Gate,
+}
+
+struct ObserveResourceItems(Arc<ResourceHost>);
+
+impl Middleware for ObserveResourceItems {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        let mut values = next.run(call).await?;
+        if let Some(Val::Stream(stream)) = values.first_mut() {
+            let host = self.0.clone();
+            *stream = stream.take().map_items(move |item| {
+                if matches!(item, Val::Resource(_)) {
+                    host.stream_items.fetch_add(1, Ordering::Relaxed);
+                }
+                item
+            });
+        }
+        Ok(values)
+    }
 }
 
 impl resources::Host for ResourceHost {
@@ -139,6 +160,26 @@ impl resources::Host for ResourceHost {
 
     fn make_host(&self, _cx: &CallContext) -> Result<DropProbe, CallError> {
         Ok(DropProbe(self.default_drops.clone()))
+    }
+
+    fn sessions(&self, _cx: &CallContext) -> Result<OutputStream<SessionState>, CallError> {
+        Ok(OutputStream::from_items([
+            SessionState("Ada".to_owned()),
+            SessionState("Grace".to_owned()),
+        ]))
+    }
+
+    async fn consume_stream(
+        &self,
+        _cx: &CallContext,
+        values: InputStream<SessionState>,
+    ) -> Result<Vec<String>, CallError> {
+        Ok(values
+            .read_all()
+            .await?
+            .into_iter()
+            .map(|value| value.0)
+            .collect())
     }
 
     fn drop_session(&self, _cx: &CallContext, value: SessionState) -> Result<(), CallError> {
@@ -314,16 +355,65 @@ fn generated_provider_reports_resource_id_exhaustion() {
     assert!(error.to_string().contains("is exhausted"), "{error}");
 }
 
+#[test]
+fn resource_streams_use_host_values_and_reject_invalid_handles() {
+    let host = Arc::new(ResourceHost::default());
+    let app = resource_app(host.clone());
+    let values = support::block_on(app.call(
+        "plugin",
+        support::RESOURCE_BINDGEN_CLIENT,
+        "consume-sessions",
+        Vec::new(),
+    ))
+    .unwrap();
+    assert_eq!(
+        values,
+        [Val::List(vec![Val::from("Ada"), Val::from("Grace")])]
+    );
+    assert_eq!(host.stream_items.load(Ordering::Relaxed), 2);
+
+    for (resource, message) in [
+        (
+            Resource::owned(resources::INTERFACE, "session", u32::MAX),
+            "unknown resource",
+        ),
+        (
+            Resource::owned(resources::INTERFACE, "host", 0),
+            "expected resource",
+        ),
+        (
+            Resource::owned("test:foreign/resources@1.0.0", "session", 0),
+            "expected resource",
+        ),
+    ] {
+        let error = support::block_on(app.call(
+            "plugin",
+            support::RESOURCE_BINDGEN_CLIENT,
+            "consume-stream",
+            vec![OutputStream::from_items([resource]).into()],
+        ))
+        .unwrap_err();
+        assert_eq!(error.kind(), CallErrorKind::Trap);
+        assert!(error.to_string().contains(message), "{error}");
+    }
+}
+
 fn resource_app(host: Arc<ResourceHost>) -> App {
-    resource_app_with(resources::provider(host))
+    let observer = host.clone();
+    resource_app_with_builder(
+        App::builder()
+            .engine(support::FakeEngine)
+            .middleware(ObserveResourceItems(observer))
+            .provide(resources::provider(host)),
+    )
 }
 
 fn resource_app_with(provider: Provided) -> App {
-    let app = App::builder()
-        .engine(support::FakeEngine)
-        .provide(provider)
-        .build()
-        .unwrap();
+    resource_app_with_builder(App::builder().engine(support::FakeEngine).provide(provider))
+}
+
+fn resource_app_with_builder(builder: wasm_junction::AppBuilder) -> App {
+    let app = builder.build().unwrap();
     let bytes = support::component_bytes_from(
         &[
             (
