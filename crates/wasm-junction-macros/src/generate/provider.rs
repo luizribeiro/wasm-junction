@@ -172,6 +172,31 @@ impl Generator<'_> {
             TypeDefKind::Type(ty) => self.provider_argument(*ty, name),
             TypeDefKind::Handle(_) => self.map_handle(id, name),
             TypeDefKind::Stream(_) => {
+                if let Some(resource) = self.stream_resource(ty)? {
+                    if resource.borrowed {
+                        return Err(Self::unsupported(
+                            &name.to_string(),
+                            "stream of borrowed resources",
+                        ));
+                    }
+                    let table = resource.table;
+                    let storage =
+                        super::rust_ident(&format!("__wasm_junction_{name}_stream_table"))?;
+                    return Ok((
+                        quote!(let #storage = self.#table.clone();),
+                        quote!(::wasm_junction::InputStream::__from_handle_with(
+                            #name,
+                            move |value| {
+                                let ::wasm_junction::Val::Resource(value) = value else {
+                                    return Err(::wasm_junction::CallError::trap(
+                                        "expected resource stream item",
+                                    ));
+                                };
+                                #storage.take(&value)
+                            },
+                        )?),
+                    ));
+                }
                 let payload = self
                     .stream_item(ty)
                     .ok_or_else(|| Self::unsupported(&name.to_string(), "stream"))?;
@@ -293,7 +318,20 @@ impl Generator<'_> {
                 Ok(quote!(self.#table.insert(#value)?))
             }
             TypeDefKind::Stream(_) => {
-                Ok(quote!(::std::convert::Into::<::wasm_junction::StreamHandle>::into(#value)))
+                if let Some(resource) = self.stream_resource(ty)? {
+                    if resource.borrowed {
+                        return Err(Self::unsupported(item, "stream of borrowed resources"));
+                    }
+                    let table = resource.table;
+                    Ok(quote!({
+                        let table = self.#table.clone();
+                        #value.__into_handle_with(move |value| {
+                            table.insert(value).map(::wasm_junction::Val::Resource)
+                        })
+                    }))
+                } else {
+                    Ok(quote!(::std::convert::Into::<::wasm_junction::StreamHandle>::into(#value)))
+                }
             }
             TypeDefKind::Option(ty) => {
                 if self.direct_stream(*ty) {
@@ -371,6 +409,13 @@ impl Generator<'_> {
     ) -> syn::Result<(Option<ResourceUse>, Option<ResourceUse>)> {
         let direct = |ty: Option<Type>| ty.map(|ty| self.direct_resource(ty)).transpose();
         Ok((direct(ok)?.flatten(), direct(err)?.flatten()))
+    }
+
+    fn stream_resource(&self, ty: Type) -> syn::Result<Option<ResourceUse>> {
+        self.stream_item(ty)
+            .map(|payload| self.direct_resource(payload))
+            .transpose()
+            .map(Option::flatten)
     }
 
     fn borrowed_result(
