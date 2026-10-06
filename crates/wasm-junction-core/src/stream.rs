@@ -322,35 +322,40 @@ impl From<OutputStream> for Val {
     }
 }
 
-/// A failure to read from or write to a byte stream.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct StreamError(&'static str);
+/// A failure to read from or write to a stream.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamError(String);
 
 impl StreamError {
-    const fn aborted() -> Self {
-        Self("stream was aborted when its invocation ended")
+    fn aborted() -> Self {
+        Self("stream was aborted when its invocation ended".to_owned())
     }
 
-    const fn already_read() -> Self {
-        Self("stream already has a reader")
+    fn already_read() -> Self {
+        Self("stream already has a reader".to_owned())
     }
 
-    const fn closed() -> Self {
-        Self("stream is closed")
+    fn closed() -> Self {
+        Self("stream is closed".to_owned())
     }
 
-    const fn reader_closed() -> Self {
-        Self("stream reader is closed")
+    fn reader_closed() -> Self {
+        Self("stream reader is closed".to_owned())
     }
 
-    const fn abandoned() -> Self {
-        Self("stream reader abandoned the stream")
+    fn abandoned() -> Self {
+        Self("stream reader abandoned the stream".to_owned())
+    }
+
+    #[allow(dead_code)]
+    fn shape(message: impl Into<String>) -> Self {
+        Self(message.into())
     }
 }
 
 impl Display for StreamError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.0)
+        formatter.write_str(&self.0)
     }
 }
 
