@@ -142,6 +142,88 @@ fn open_guest_stream_is_aborted_when_its_store_ends() {
 }
 
 #[test]
+fn guest_value_stream_import_is_closed_and_refused_without_poisoning_later_calls() {
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let host = StreamHost::default();
+            let app = App::builder()
+                .engine(WasmtimeEngine::new().unwrap())
+                .provide(host.clone().provided())
+                .build()
+                .unwrap();
+            app.load(
+                Component::from_bytes(stream_component())
+                    .unwrap()
+                    .named("streams"),
+            )
+            .await
+            .unwrap();
+
+            let error = app
+                .call("streams", STREAM_PROBE, "send-values", Vec::new())
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind(), CallErrorKind::Refused);
+            assert_eq!(
+                error.to_string(),
+                "Wasmtime 49 cannot dynamically bridge WIT value streams"
+            );
+            assert_eq!(host.value_calls(), 0);
+            assert_eq!(
+                app.call("streams", STREAM_PROBE, "motd", Vec::new())
+                    .await
+                    .unwrap(),
+                [Val::from("Have a good day.")]
+            );
+        });
+}
+
+#[test]
+fn guest_value_stream_export_is_closed_and_refused_without_poisoning_later_calls() {
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let host = StreamHost::default();
+            let app = App::builder()
+                .engine(WasmtimeEngine::new().unwrap())
+                .provide(host.provided())
+                .build()
+                .unwrap();
+            app.load(
+                Component::from_bytes(stream_component())
+                    .unwrap()
+                    .named("streams"),
+            )
+            .await
+            .unwrap();
+
+            let error = app
+                .call("streams", STREAM_PROBE, "return-values", Vec::new())
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind(), CallErrorKind::Refused);
+            assert_eq!(
+                error.to_string(),
+                "Wasmtime 49 cannot dynamically bridge WIT value streams"
+            );
+            assert_eq!(
+                app.call(
+                    "streams",
+                    STREAM_PROBE,
+                    "echo-bytes",
+                    vec![Val::Bytes(b"next".to_vec())],
+                )
+                .await
+                .unwrap(),
+                [Val::Bytes(b"next".to_vec())]
+            );
+        });
+}
+
+#[test]
 fn poisoned_invocation_blocks_further_stream_effects() {
     tokio::runtime::Builder::new_current_thread()
         .build()
