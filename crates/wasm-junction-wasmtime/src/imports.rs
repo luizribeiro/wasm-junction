@@ -138,8 +138,8 @@ fn define_concurrent(
                     LiftValue::Future(future) => accessor
                         .with(|mut store| lift_future(future, store.data_mut()))
                         .map(Val::Future),
-                    LiftValue::Stream(stream) => accessor
-                        .with(|store| lift_stream(stream, store))
+                    LiftValue::Stream(stream, byte_stream) => accessor
+                        .with(|store| lift_stream(stream, byte_stream, store))
                         .map(Val::Stream),
                 })
             })?;
@@ -190,8 +190,8 @@ fn define_plain(
                     LiftValue::Future(future) => {
                         lift_future(future, store.data_mut()).map(Val::Future)
                     }
-                    LiftValue::Stream(stream) => {
-                        lift_stream(stream, store.as_context_mut()).map(Val::Stream)
+                    LiftValue::Stream(stream, byte_stream) => {
+                        lift_stream(stream, byte_stream, store.as_context_mut()).map(Val::Stream)
                     }
                 })
             })?;

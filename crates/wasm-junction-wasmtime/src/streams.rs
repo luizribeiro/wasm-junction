@@ -35,9 +35,19 @@ pub(crate) fn abort_streams(store: &StoreData) {
 }
 
 pub(crate) fn lift_stream(
-    stream: StreamAny,
+    mut stream: StreamAny,
+    byte_stream: bool,
     store: impl AsContextMut<Data = StoreData>,
 ) -> Result<StreamHandle, wasmtime::Error> {
+    if !byte_stream {
+        let mut store = store;
+        stream.close(store.as_context_mut())?;
+        return Err(wasmtime::Error::new(
+            wasm_junction_core::CallError::refused(
+                "Wasmtime 49 cannot dynamically bridge WIT value streams",
+            ),
+        ));
+    }
     lift_stream_with_direction(stream, store, ChannelDirection::GuestToHost)
 }
 

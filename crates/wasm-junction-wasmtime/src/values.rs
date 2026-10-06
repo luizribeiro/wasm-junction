@@ -12,7 +12,7 @@ pub(crate) struct ExpectedResource {
 pub(crate) enum LiftValue {
     Future(FutureAny),
     Resource(ResourceAny),
-    Stream(StreamAny),
+    Stream(StreamAny, bool),
 }
 
 pub(crate) enum LowerValue {
@@ -110,7 +110,10 @@ pub(crate) fn from_wasmtime(
         })),
         WasmtimeVal::Resource(value) => store(LiftValue::Resource(value)),
         WasmtimeVal::Future(value) => store(LiftValue::Future(value)),
-        WasmtimeVal::Stream(value) => store(LiftValue::Stream(value)),
+        WasmtimeVal::Stream(value) => store(LiftValue::Stream(
+            value,
+            expected.is_none_or(stream_is_bytes),
+        )),
         other => Err(wasmtime::Error::msg(format!(
             "unsupported component value: {other:?}"
         ))),
@@ -217,7 +220,7 @@ pub(crate) fn to_wasmtime(
         })),
         Val::Resource(value) => store(LowerValue::Resource(value, expected_resource(expected))),
         Val::Future(value) => store(LowerValue::Future(value)),
-        Val::Stream(value) => store(LowerValue::Stream(value)),
+        Val::Stream(value) => lower_stream_value(value, expected, store),
         other => Err(wasmtime::Error::msg(format!(
             "unsupported framework value: {other:?}"
         ))),
@@ -295,6 +298,26 @@ fn expected_resource(expected: Option<&Type>) -> Option<ExpectedResource> {
             ty: *ty,
         }),
         _ => None,
+    }
+}
+
+fn stream_is_bytes(expected: &Type) -> bool {
+    matches!(expected, Type::Stream(stream) if matches!(stream.ty(), Some(Type::U8)))
+}
+
+fn lower_stream_value(
+    value: StreamHandle,
+    expected: Option<&Type>,
+    store: &mut impl FnMut(LowerValue) -> Result<WasmtimeVal, wasmtime::Error>,
+) -> Result<WasmtimeVal, wasmtime::Error> {
+    if value.is_byte_stream() && expected.is_none_or(stream_is_bytes) {
+        store(LowerValue::Stream(value))
+    } else {
+        Err(wasmtime::Error::new(
+            wasm_junction_core::CallError::refused(
+                "Wasmtime 49 cannot dynamically bridge WIT value streams",
+            ),
+        ))
     }
 }
 
@@ -447,5 +470,14 @@ mod tests {
         })
         .unwrap_err();
         assert!(error.to_string().starts_with("saw stream "));
+
+        let value = Val::from(wasm_junction_core::OutputStream::from_items([7_u32]));
+        let error = to_wasmtime(value, None, &mut |_| unreachable!()).unwrap_err();
+        assert_eq!(
+            error
+                .downcast_ref::<wasm_junction_core::CallError>()
+                .map(ToString::to_string),
+            Some("Wasmtime 49 cannot dynamically bridge WIT value streams".to_owned())
+        );
     }
 }

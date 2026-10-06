@@ -435,7 +435,13 @@ impl Compiled {
                                         "guest-created futures cannot be returned because the Wasmtime store ends with each call",
                                     )))
                                 }),
-                                LiftValue::Stream(stream) => {
+                                LiftValue::Stream(mut stream, false) => accessor.with(|mut store| {
+                                    stream.close(store.as_context_mut())?;
+                                    Err(wasmtime::Error::new(CallError::refused(
+                                        "Wasmtime 49 cannot dynamically bridge WIT value streams",
+                                    )))
+                                }),
+                                LiftValue::Stream(stream, true) => {
                                     let reader = stream.try_into_stream_reader::<u8>()?;
                                     accessor.with(|mut store| {
                                         match reader
