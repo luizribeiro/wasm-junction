@@ -25,6 +25,27 @@ enum StreamChunk {
     Values(Vec<Val>),
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+type ItemMap = Arc<dyn Fn(Val) -> Val + Send + Sync>;
+#[cfg(target_arch = "wasm32")]
+type ItemMap = Arc<dyn Fn(Val) -> Val>;
+#[cfg(not(target_arch = "wasm32"))]
+type ItemFilter = Arc<dyn Fn(&Val) -> bool + Send + Sync>;
+#[cfg(target_arch = "wasm32")]
+type ItemFilter = Arc<dyn Fn(&Val) -> bool>;
+#[cfg(not(target_arch = "wasm32"))]
+type ChunkMap = Arc<dyn Fn(Vec<u8>) -> Vec<u8> + Send + Sync>;
+#[cfg(target_arch = "wasm32")]
+type ChunkMap = Arc<dyn Fn(Vec<u8>) -> Vec<u8>>;
+
+#[allow(dead_code)]
+#[derive(Clone)]
+enum Transform {
+    MapItems(ItemMap),
+    FilterItems(ItemFilter),
+    MapChunks(ChunkMap),
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum StreamEnd {
     Open,
@@ -40,6 +61,7 @@ pub struct StreamHandle {
     id: u64,
     state: Arc<Mutex<StreamState>>,
     generation: Option<Arc<dyn CompiledComponent>>,
+    transforms: Vec<Transform>,
 }
 
 impl StreamHandle {
@@ -54,6 +76,7 @@ impl StreamHandle {
                 writers,
             })),
             generation: None,
+            transforms: Vec::new(),
         }
     }
 
@@ -145,19 +168,27 @@ impl<T: FromVal + 'static> InputStream<T> {
     /// Returns an error if the stream cannot be read.
     pub async fn read(&mut self) -> Result<Option<Vec<T>>, StreamError> {
         let result = poll_fn(|context| {
-            let mut state = self.handle.state();
-            if let Some(chunk) = state.chunks.pop_front() {
-                return Poll::Ready(decode_chunk(chunk).map(Some));
-            }
-            match state.end {
-                StreamEnd::Open => {
-                    state.reader_waker = Some(context.waker().clone());
-                    Poll::Pending
+            loop {
+                let mut state = self.handle.state();
+                if let Some(chunk) = state.chunks.pop_front() {
+                    drop(state);
+                    let chunk = match apply_transforms(chunk, &self.handle.transforms) {
+                        Ok(Some(chunk)) => chunk,
+                        Ok(None) => continue,
+                        Err(error) => return Poll::Ready(Err(error)),
+                    };
+                    return Poll::Ready(decode_chunk(chunk).map(Some));
                 }
-                StreamEnd::Closed | StreamEnd::ReaderClosed | StreamEnd::Abandoned => {
-                    Poll::Ready(Ok(None))
-                }
-                StreamEnd::Aborted => Poll::Ready(Err(StreamError::aborted())),
+                return match state.end {
+                    StreamEnd::Open => {
+                        state.reader_waker = Some(context.waker().clone());
+                        Poll::Pending
+                    }
+                    StreamEnd::Closed | StreamEnd::ReaderClosed | StreamEnd::Abandoned => {
+                        Poll::Ready(Ok(None))
+                    }
+                    StreamEnd::Aborted => Poll::Ready(Err(StreamError::aborted())),
+                };
             }
         })
         .await;
@@ -367,6 +398,53 @@ fn encode_chunk<T: ToVal + 'static>(items: Vec<T>) -> StreamChunk {
         StreamChunk::Bytes(bytes.clone())
     } else {
         StreamChunk::Values(items.into_iter().map(ToVal::to_val).collect())
+    }
+}
+
+fn apply_transforms(
+    mut chunk: StreamChunk,
+    transforms: &[Transform],
+) -> Result<Option<StreamChunk>, StreamError> {
+    for transform in transforms {
+        chunk = match (transform, chunk) {
+            (Transform::MapChunks(map), StreamChunk::Bytes(bytes)) => {
+                StreamChunk::Bytes(map(bytes))
+            }
+            (Transform::MapChunks(_), StreamChunk::Values(_)) => {
+                return Err(StreamError::shape("expected byte stream"));
+            }
+            (Transform::MapItems(map), chunk) => StreamChunk::Values(
+                chunk
+                    .into_values()
+                    .into_iter()
+                    .map(|item| map(item))
+                    .collect(),
+            ),
+            (Transform::FilterItems(predicate), chunk) => StreamChunk::Values(
+                chunk
+                    .into_values()
+                    .into_iter()
+                    .filter(|item| predicate(item))
+                    .collect(),
+            ),
+        };
+    }
+    Ok((!chunk.is_empty()).then_some(chunk))
+}
+
+impl StreamChunk {
+    fn into_values(self) -> Vec<Val> {
+        match self {
+            Self::Bytes(bytes) => bytes.into_iter().map(Val::U8).collect(),
+            Self::Values(values) => values,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        match self {
+            Self::Bytes(bytes) => bytes.is_empty(),
+            Self::Values(values) => values.is_empty(),
+        }
     }
 }
 
