@@ -184,9 +184,19 @@ pub struct ResourceTable<T: HostBound> {
     interface: Arc<str>,
     name: Arc<str>,
     #[cfg(target_arch = "wasm32")]
-    state: RefCell<TableState<T>>,
+    state: Arc<RefCell<TableState<T>>>,
     #[cfg(not(target_arch = "wasm32"))]
-    state: Mutex<TableState<T>>,
+    state: Arc<Mutex<TableState<T>>>,
+}
+
+impl<T: HostBound> Clone for ResourceTable<T> {
+    fn clone(&self) -> Self {
+        Self {
+            interface: self.interface.clone(),
+            name: self.name.clone(),
+            state: self.state.clone(),
+        }
+    }
 }
 
 struct TableState<T> {
@@ -219,9 +229,9 @@ impl<T: HostBound> ResourceTable<T> {
             interface: interface.into(),
             name: name.into(),
             #[cfg(target_arch = "wasm32")]
-            state: RefCell::new(TableState::with_next_id(next)),
+            state: Arc::new(RefCell::new(TableState::with_next_id(next))),
             #[cfg(not(target_arch = "wasm32"))]
-            state: Mutex::new(TableState::with_next_id(next)),
+            state: Arc::new(Mutex::new(TableState::with_next_id(next))),
         }
     }
 

@@ -168,6 +168,24 @@ impl TryFrom<Val> for Vec<u8> {
     }
 }
 
+impl From<Resource> for Val {
+    fn from(value: Resource) -> Self {
+        Self::Resource(value)
+    }
+}
+
+impl TryFrom<Val> for Resource {
+    type Error = TypeError;
+
+    fn try_from(value: Val) -> Result<Self, Self::Error> {
+        if let Val::Resource(value) = value {
+            Ok(value)
+        } else {
+            Err(TypeError::new("expected resource"))
+        }
+    }
+}
+
 /// An error converting an engine-neutral value to its expected WIT type.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TypeError(String);

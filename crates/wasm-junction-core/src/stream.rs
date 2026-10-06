@@ -23,7 +23,21 @@ struct StreamState {
 enum StreamChunk {
     Bytes(Vec<u8>),
     Values(Vec<Val>),
+    Items(ErasedItems),
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+type ErasedItems = Box<dyn Any + Send + Sync>;
+#[cfg(target_arch = "wasm32")]
+type ErasedItems = Box<dyn Any>;
+#[cfg(not(target_arch = "wasm32"))]
+type ItemEncoder = Arc<dyn Fn(ErasedItems) -> Result<Vec<Val>, StreamError> + Send + Sync>;
+#[cfg(target_arch = "wasm32")]
+type ItemEncoder = Arc<dyn Fn(ErasedItems) -> Result<Vec<Val>, StreamError>>;
+#[cfg(not(target_arch = "wasm32"))]
+type ItemDecoder<T> = Arc<dyn Fn(Val) -> Result<T, StreamError> + Send + Sync>;
+#[cfg(target_arch = "wasm32")]
+type ItemDecoder<T> = Arc<dyn Fn(Val) -> Result<T, StreamError>>;
 
 #[cfg(not(target_arch = "wasm32"))]
 type ItemMap = Arc<dyn Fn(Val) -> Val + Send + Sync>;
@@ -61,6 +75,7 @@ pub struct StreamHandle {
     state: Arc<Mutex<StreamState>>,
     generation: Option<Arc<dyn CompiledComponent>>,
     transforms: Vec<Transform>,
+    item_encoder: Option<ItemEncoder>,
 }
 
 impl StreamHandle {
@@ -76,6 +91,7 @@ impl StreamHandle {
             })),
             generation: None,
             transforms: Vec::new(),
+            item_encoder: None,
         }
     }
 
@@ -175,7 +191,7 @@ impl Eq for StreamHandle {}
 pub struct InputStream<T = u8> {
     handle: StreamHandle,
     finished: bool,
-    item: PhantomData<T>,
+    decoder: ItemDecoder<T>,
 }
 
 impl<T: FromVal + 'static> InputStream<T> {
@@ -185,6 +201,32 @@ impl<T: FromVal + 'static> InputStream<T> {
     ///
     /// Returns an error if another reader already claimed the stream.
     pub fn from_handle(handle: StreamHandle) -> Result<Self, StreamError> {
+        Self::with_decoder(handle, |value| {
+            T::from_val(value).map_err(|error| StreamError::shape(error.to_string()))
+        })
+    }
+}
+
+impl<T: 'static> InputStream<T> {
+    /// Claims a stream using a generated value decoder.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if another reader already claimed the stream.
+    #[doc(hidden)]
+    pub fn __from_handle_with(
+        handle: StreamHandle,
+        decoder: impl Fn(Val) -> Result<T, CallError> + HostBound + 'static,
+    ) -> Result<Self, StreamError> {
+        Self::with_decoder(handle, move |value| {
+            decoder(value).map_err(|error| StreamError::shape(error.to_string()))
+        })
+    }
+
+    fn with_decoder(
+        handle: StreamHandle,
+        decoder: impl Fn(Val) -> Result<T, StreamError> + HostBound + 'static,
+    ) -> Result<Self, StreamError> {
         {
             let mut state = handle.state();
             if state.reader_taken {
@@ -195,7 +237,7 @@ impl<T: FromVal + 'static> InputStream<T> {
         Ok(Self {
             handle,
             finished: false,
-            item: PhantomData,
+            decoder: Arc::new(decoder),
         })
     }
 
@@ -210,12 +252,16 @@ impl<T: FromVal + 'static> InputStream<T> {
                 let mut state = self.handle.state();
                 if let Some(chunk) = state.chunks.pop_front() {
                     drop(state);
-                    let chunk = match apply_transforms(chunk, &self.handle.transforms) {
+                    let chunk = match apply_transforms(
+                        chunk,
+                        self.handle.item_encoder.as_ref(),
+                        &self.handle.transforms,
+                    ) {
                         Ok(Some(chunk)) => chunk,
                         Ok(None) => continue,
                         Err(error) => return Poll::Ready(Err(error)),
                     };
-                    return Poll::Ready(decode_chunk(chunk).map(Some));
+                    return Poll::Ready(decode_chunk(chunk, &self.decoder).map(Some));
                 }
                 return match state.end {
                     StreamEnd::Open => {
@@ -316,7 +362,7 @@ impl OutputStream<u8> {
     }
 }
 
-impl<T: ToVal + 'static> OutputStream<T> {
+impl<T: HostBound + 'static> OutputStream<T> {
     /// Creates a stream containing the supplied items and a clean end marker.
     #[must_use]
     pub fn from_items(items: impl IntoIterator<Item = T>) -> Self {
@@ -342,6 +388,26 @@ impl<T: ToVal + 'static> OutputStream<T> {
             Self(handle, PhantomData),
         )
     }
+
+    /// Attaches a generated item encoder and releases the opaque handle.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn __into_handle_with(
+        self,
+        encoder: impl Fn(T) -> Result<Val, CallError> + HostBound + 'static,
+    ) -> StreamHandle {
+        let mut handle = self.0;
+        handle.item_encoder = Some(Arc::new(move |items| {
+            let items = items
+                .downcast::<Vec<T>>()
+                .map_err(|_| StreamError::shape("stream item type does not match its encoder"))?;
+            items
+                .into_iter()
+                .map(|item| encoder(item).map_err(|error| StreamError::shape(error.to_string())))
+                .collect()
+        }));
+        handle
+    }
 }
 
 /// A cloneable producer for an [`OutputStream`].
@@ -354,7 +420,7 @@ impl<T> Clone for OutputStreamWriter<T> {
     }
 }
 
-impl<T: ToVal + 'static> OutputStreamWriter<T> {
+impl<T: HostBound + 'static> OutputStreamWriter<T> {
     /// Appends one chunk without blocking on the reader.
     ///
     /// The channel is unbounded, so a slow or absent reader leaves every written chunk buffered
@@ -418,49 +484,57 @@ impl<T> Drop for OutputStreamWriter<T> {
     }
 }
 
-impl<T> From<OutputStream<T>> for StreamHandle {
+impl<T: ToVal + HostBound + 'static> From<OutputStream<T>> for StreamHandle {
     fn from(stream: OutputStream<T>) -> Self {
-        stream.0
+        stream.__into_handle_with(|item| Ok(item.to_val()))
     }
 }
 
-impl<T> From<OutputStream<T>> for Val {
+impl<T: ToVal + HostBound + 'static> From<OutputStream<T>> for Val {
     fn from(stream: OutputStream<T>) -> Self {
         Self::Stream(stream.into())
     }
 }
 
-fn encode_chunk<T: ToVal + 'static>(items: Vec<T>) -> StreamChunk {
-    let erased = &items as &dyn Any;
-    if let Some(bytes) = erased.downcast_ref::<Vec<u8>>() {
-        StreamChunk::Bytes(bytes.clone())
-    } else {
-        StreamChunk::Values(items.into_iter().map(ToVal::to_val).collect())
+fn encode_chunk<T: HostBound + 'static>(items: Vec<T>) -> StreamChunk {
+    let items: ErasedItems = Box::new(items);
+    match items.downcast::<Vec<u8>>() {
+        Ok(bytes) => StreamChunk::Bytes(*bytes),
+        Err(items) => StreamChunk::Items(items),
     }
 }
 
 fn apply_transforms(
     mut chunk: StreamChunk,
+    item_encoder: Option<&ItemEncoder>,
     transforms: &[Transform],
 ) -> Result<Option<StreamChunk>, StreamError> {
+    chunk = match chunk {
+        StreamChunk::Items(items) => {
+            let encoder = item_encoder
+                .ok_or_else(|| StreamError::shape("stream items have no value encoder"))?;
+            StreamChunk::Values(encoder(items)?)
+        }
+        chunk => chunk,
+    };
     for transform in transforms {
         chunk = match (transform, chunk) {
             (Transform::MapChunks(map), StreamChunk::Bytes(bytes)) => {
                 StreamChunk::Bytes(map(bytes))
             }
-            (Transform::MapChunks(_), StreamChunk::Values(_)) => {
+            (Transform::MapChunks(_), StreamChunk::Values(_) | StreamChunk::Items(_)) => {
                 return Err(StreamError::shape("expected byte stream"));
             }
             (Transform::MapItems(map), chunk) => StreamChunk::Values(
                 chunk
-                    .into_values()
+                    .into_values()?
                     .into_iter()
                     .map(|item| map(item))
                     .collect(),
             ),
             (Transform::FilterItems(predicate), chunk) => StreamChunk::Values(
                 chunk
-                    .into_values()
+                    .into_values()?
                     .into_iter()
                     .filter(|item| predicate(item))
                     .collect(),
@@ -471,10 +545,11 @@ fn apply_transforms(
 }
 
 impl StreamChunk {
-    fn into_values(self) -> Vec<Val> {
+    fn into_values(self) -> Result<Vec<Val>, StreamError> {
         match self {
-            Self::Bytes(bytes) => bytes.into_iter().map(Val::U8).collect(),
-            Self::Values(values) => values,
+            Self::Bytes(bytes) => Ok(bytes.into_iter().map(Val::U8).collect()),
+            Self::Values(values) => Ok(values),
+            Self::Items(_) => Err(StreamError::shape("stream items have no value encoder")),
         }
     }
 
@@ -482,21 +557,25 @@ impl StreamChunk {
         match self {
             Self::Bytes(bytes) => bytes.is_empty(),
             Self::Values(values) => values.is_empty(),
+            Self::Items(_) => false,
         }
     }
 }
 
-fn decode_chunk<T: FromVal + 'static>(chunk: StreamChunk) -> Result<Vec<T>, StreamError> {
+fn decode_chunk<T: 'static>(
+    chunk: StreamChunk,
+    decoder: &ItemDecoder<T>,
+) -> Result<Vec<T>, StreamError> {
     match chunk {
         StreamChunk::Bytes(bytes) => (Box::new(bytes) as Box<dyn Any>)
             .downcast::<Vec<T>>()
             .map(|items| *items)
             .map_err(|_| StreamError::shape("expected value stream")),
-        StreamChunk::Values(values) => values
-            .into_iter()
-            .map(FromVal::from_val)
-            .collect::<Result<_, _>>()
-            .map_err(|error| StreamError::shape(error.to_string())),
+        StreamChunk::Values(values) => values.into_iter().map(|value| decoder(value)).collect(),
+        StreamChunk::Items(items) => items
+            .downcast::<Vec<T>>()
+            .map(|items| *items)
+            .map_err(|_| StreamError::shape("stream item type does not match its reader")),
     }
 }
 
