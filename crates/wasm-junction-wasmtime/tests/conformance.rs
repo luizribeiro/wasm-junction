@@ -23,6 +23,10 @@ use wasm_junction_conformance::{
 };
 use wasm_junction_wasmtime::WasmtimeEngine;
 
+// Scenarios compile components inside this window, which can take tens of seconds on a loaded
+// machine; a deadlock never finishes, so a generous limit loses nothing.
+const DEADLOCK_TIMEOUT: Duration = Duration::from_secs(180);
+
 #[cfg(feature = "wasi")]
 const WASI_COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wasi-test.wasm"));
 #[cfg(feature = "wasi")]
@@ -113,7 +117,7 @@ fn reload_scenario_progresses_on_a_current_thread_runtime() {
         sender.send(runtime.block_on(run_reload(engine))).unwrap();
     });
     receiver
-        .recv_timeout(Duration::from_secs(30))
+        .recv_timeout(DEADLOCK_TIMEOUT)
         .expect("reload scenario deadlocked")
         .unwrap();
     worker.join().unwrap();
@@ -162,7 +166,7 @@ fn call_completes_while_reload_compiles_on_a_current_thread_runtime() {
         sender.send(result).unwrap();
     });
     let output = receiver
-        .recv_timeout(Duration::from_secs(30))
+        .recv_timeout(DEADLOCK_TIMEOUT)
         .expect("concurrent reload deadlocked")
         .unwrap();
     worker.join().unwrap();
@@ -256,7 +260,7 @@ fn retired_generation_drops_after_its_last_call() {
         sender.send(old).unwrap();
     });
     let old = receiver
-        .recv_timeout(Duration::from_secs(30))
+        .recv_timeout(DEADLOCK_TIMEOUT)
         .expect("generation retirement deadlocked");
     worker.join().unwrap();
     assert!(old.upgrade().is_none());
@@ -747,7 +751,7 @@ fn nested_routed_call_can_await_on_a_current_thread_tokio_runtime() {
     });
 
     let result = receiver
-        .recv_timeout(Duration::from_secs(30))
+        .recv_timeout(DEADLOCK_TIMEOUT)
         .expect("nested routed call deadlocked the current-thread Tokio runtime");
     assert_eq!(result.unwrap(), [Val::from("host: async #1")]);
 }
@@ -837,7 +841,7 @@ fn wasi_gate_can_await_on_a_current_thread_tokio_runtime() {
     });
 
     let result = receiver
-        .recv_timeout(Duration::from_secs(30))
+        .recv_timeout(DEADLOCK_TIMEOUT)
         .expect("WASI middleware deadlocked the current-thread Tokio runtime");
     assert!(result.is_ok(), "{result:?}");
     assert_eq!(awaits.load(Ordering::Relaxed), 3);
