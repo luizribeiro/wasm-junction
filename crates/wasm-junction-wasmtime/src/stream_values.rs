@@ -5,6 +5,8 @@ use wasmtime::component::{ComponentType, Lift, Lower, ResourceAny, Type};
 use crate::engine::{StoreData, lift_resource, lower_resource};
 use crate::values::expected_resource;
 
+mod compound;
+
 pub(crate) trait StreamValue:
     ComponentType + Lift + Lower + Send + Sync + Unpin + Sized + 'static
 {
@@ -104,6 +106,10 @@ impl StreamValue for ResourceAny {
             value => Err(shape("resource", value.as_ref())),
         }
     }
+}
+
+pub(super) fn required(value: Option<Val>, context: &str) -> Result<Val, wasmtime::Error> {
+    value.ok_or_else(|| wasmtime::Error::msg(format!("{context} cannot be unit")))
 }
 
 pub(super) fn shape(expected: &str, value: Option<&Val>) -> wasmtime::Error {
