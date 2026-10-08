@@ -14,6 +14,8 @@ use wasm_junction_conformance::{
     value_stream_component,
 };
 use wasm_junction_wasmtime::WasmtimeEngine;
+use wit_component::{ComponentEncoder, StringEncoding, dummy_module, embed_component_metadata};
+use wit_parser::{ManglingAndAbi, Resolve};
 
 #[derive(Clone, Default)]
 struct InvalidResourceStreamHost(Arc<AtomicUsize>);
@@ -445,6 +447,102 @@ fn later_invalid_resource_stream_item_cleans_earlier_items() {
             assert!(error.to_string().contains("does not import resource"));
             assert_eq!(host.0.load(Ordering::Relaxed), 0);
         });
+}
+
+#[test]
+fn unsupported_stream_items_are_refused_at_load_without_poisoning_the_app() {
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let host = StreamHost::default();
+            let app = App::builder()
+                .engine(WasmtimeEngine::new().unwrap())
+                .provide(host.provided())
+                .build()
+                .unwrap();
+            let cases = [
+                (
+                    "named-result",
+                    "interface host { record note { text: string } values: func() -> stream<note>; } world test { import host; }",
+                    "record",
+                ),
+                (
+                    "named-export",
+                    "interface probe { record note { text: string } accept: func(values: stream<note>); } world test { export probe; }",
+                    "record",
+                ),
+                (
+                    "named-nested",
+                    "interface host { record note { text: string } accept: func(values: stream<list<note>>); } world test { import host; }",
+                    "record",
+                ),
+                (
+                    "tuple-result",
+                    "interface host { values: func() -> stream<tuple<u32>>; } world test { import host; }",
+                    "tuple",
+                ),
+                (
+                    "tuple-export",
+                    "interface probe { accept: func(values: stream<tuple<u32>>); } world test { export probe; }",
+                    "tuple",
+                ),
+                (
+                    "tuple-nested",
+                    "interface host { accept: func(values: stream<option<tuple<u32>>>); } world test { import host; }",
+                    "tuple",
+                ),
+                (
+                    "result-item",
+                    "interface host { accept: func(values: stream<result<string, string>>); } world test { import host; }",
+                    "result",
+                ),
+            ];
+            for (name, wit, shape) in cases {
+                let error = app
+                    .load(
+                        Component::from_bytes(unsupported_stream_component(wit))
+                            .unwrap()
+                            .named(name),
+                    )
+                    .await
+                    .unwrap_err();
+                assert_eq!(
+                    error.to_string(),
+                    format!(
+                        "component compilation failed: stream item type `{shape}` is not supported on Wasmtime; supported item types are scalar values, strings, resources, and lists or options nested up to two layers"
+                    )
+                );
+            }
+
+            app.load(
+                Component::from_bytes(stream_component())
+                    .unwrap()
+                    .named("streams"),
+            )
+            .await
+            .unwrap();
+            assert!(
+                app.call("streams", STREAM_PROBE, "motd", Vec::new())
+                    .await
+                    .is_ok()
+            );
+        });
+}
+
+fn unsupported_stream_component(body: &str) -> Vec<u8> {
+    let wit = format!("package example:streams@0.1.0; {body}");
+    let mut resolve = Resolve::default();
+    let package = resolve.push_str("unsupported.wit", &wit).unwrap();
+    let world = resolve.select_world(&[package], Some("test")).unwrap();
+    let mut module = dummy_module(&resolve, world, ManglingAndAbi::Standard32);
+    embed_component_metadata(&mut module, &resolve, world, StringEncoding::UTF8).unwrap();
+    ComponentEncoder::default()
+        .module(&module)
+        .unwrap()
+        .validate(true)
+        .encode()
+        .unwrap()
 }
 
 #[test]
