@@ -3,7 +3,7 @@
 use std::sync::mpsc;
 use std::time::Duration;
 
-use wasm_junction::{App, CallErrorKind, Component, InputStream, OutputStream, Val};
+use wasm_junction::{App, CallErrorKind, Component, InputStream, OutputStream, StreamHandle, Val};
 use wasm_junction_conformance::{
     PoisonHost, RetainHost, STREAM_PROBE, StreamHost, VALUE_STREAM_PROBE, ValueStreamHost,
     run_streams, stream_component, value_stream_component,
@@ -212,6 +212,103 @@ fn string_streams_cross_imports_and_exports_in_order() {
                     .await
                     .unwrap(),
                 ["host one", "host two"]
+            );
+        });
+}
+
+#[test]
+fn nested_value_streams_round_trip_and_middleware_filters_items() {
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let host = ValueStreamHost::default();
+            let app = App::builder()
+                .engine(WasmtimeEngine::new().unwrap())
+                .provide(host.provided())
+                .build()
+                .unwrap();
+            app.load(
+                Component::from_bytes(value_stream_component())
+                    .unwrap()
+                    .named("value-streams"),
+            )
+            .await
+            .unwrap();
+
+            let lists = OutputStream::from_items([vec![1_u32, 2], vec![3]]);
+            let lists = lists.__into_handle_with(|items| {
+                Ok(Val::List(items.into_iter().map(Val::U32).collect()))
+            });
+            assert_eq!(
+                app.call(
+                    "value-streams",
+                    VALUE_STREAM_PROBE,
+                    "echo-lists",
+                    vec![Val::Stream(lists)],
+                )
+                .await
+                .unwrap(),
+                [Val::List(vec![
+                    Val::List(vec![Val::U32(1), Val::U32(2)]),
+                    Val::List(vec![Val::U32(3)]),
+                ])]
+            );
+
+            let nested = vec![
+                vec![Some("one".to_owned()), None],
+                vec![Some("two".to_owned())],
+            ];
+            let stream = OutputStream::from_items(nested.clone());
+            let stream = stream.__into_handle_with(|items| {
+                Ok(Val::List(
+                    items
+                        .into_iter()
+                        .map(|item| Val::Option(item.map(|value| Box::new(value.into()))))
+                        .collect(),
+                ))
+            });
+            let expected = Val::List(
+                nested
+                    .into_iter()
+                    .map(|items| {
+                        Val::List(
+                            items
+                                .into_iter()
+                                .map(|item| Val::Option(item.map(|value| Box::new(value.into()))))
+                                .collect(),
+                        )
+                    })
+                    .collect(),
+            );
+            assert_eq!(
+                app.call(
+                    "value-streams",
+                    VALUE_STREAM_PROBE,
+                    "echo-nested",
+                    vec![Val::Stream(stream)],
+                )
+                .await
+                .unwrap(),
+                [expected]
+            );
+
+            let stream = StreamHandle::from(OutputStream::from_items([
+                "visible".to_owned(),
+                "hidden".to_owned(),
+                "last".to_owned(),
+            ]))
+            .filter_items(|item| item != &Val::from("hidden"));
+            assert_eq!(
+                app.call(
+                    "value-streams",
+                    VALUE_STREAM_PROBE,
+                    "echo-strings",
+                    vec![Val::Stream(stream)],
+                )
+                .await
+                .unwrap(),
+                [Val::List(vec![Val::from("visible"), Val::from("last")])]
             );
         });
 }

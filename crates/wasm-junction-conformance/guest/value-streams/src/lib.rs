@@ -33,6 +33,13 @@ impl bindings::exports::example::value_streams::probe::Guest for Component {
         host::strings()
     }
 
+    async fn echo_lists(values: StreamReader<Vec<u32>>) -> Vec<Vec<u32>> {
+        values.collect().await
+    }
+
+    async fn echo_nested(values: StreamReader<Vec<Option<String>>>) -> Vec<Vec<Option<String>>> {
+        values.collect().await
+    }
 }
 
 bindings::export!(Component with_types_in bindings);

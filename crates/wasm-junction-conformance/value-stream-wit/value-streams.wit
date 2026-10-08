@@ -9,6 +9,8 @@ interface probe {
   exchange-strings: async func() -> list<string>;
   echo-strings: async func(values: stream<string>) -> list<string>;
   return-host-strings: func() -> stream<string>;
+  echo-lists: async func(values: stream<list<u32>>) -> list<list<u32>>;
+  echo-nested: async func(values: stream<list<option<string>>>) -> list<list<option<string>>>;
 }
 
 world value-streams {
