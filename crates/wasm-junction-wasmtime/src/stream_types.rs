@@ -5,8 +5,12 @@ use crate::stream_values::StreamValue;
 mod compound;
 #[cfg(test)]
 pub(crate) mod test_support;
+#[allow(dead_code)]
+mod validate;
 
 use compound::{WrapList, WrapOption};
+#[allow(unused_imports)]
+pub(crate) use validate::validate_component_streams;
 
 pub(crate) trait StreamTypeVisitor {
     type Output;
@@ -72,7 +76,24 @@ depth!(D1, D0);
 depth!(D2, D1);
 
 fn unsupported(ty: &Type) -> wasmtime::Error {
-    wasmtime::Error::msg(format!("unsupported stream item type: {ty:?}"))
+    wasmtime::Error::new(wasm_junction_core::CallError::refused(format!(
+        "stream item type `{}` is not supported on Wasmtime; supported item types are scalar values, strings, resources, and lists or options nested up to two layers",
+        type_name(ty),
+    )))
+}
+
+fn type_name(ty: &Type) -> &'static str {
+    match ty {
+        Type::Record(_) => "record",
+        Type::Variant(_) => "variant",
+        Type::Enum(_) => "enum",
+        Type::Flags(_) => "flags",
+        Type::List(_) => "list",
+        Type::Option(_) => "option",
+        Type::Result(_) => "result",
+        Type::Tuple(_) => "tuple",
+        _ => "value",
+    }
 }
 
 #[cfg(test)]
