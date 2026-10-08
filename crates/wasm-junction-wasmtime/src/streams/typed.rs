@@ -6,6 +6,7 @@ use crate::engine::StoreData;
 use crate::stream_types::{StreamTypeVisitor, visit_stream_type};
 
 mod consumer;
+mod producer;
 
 fn bridge<V: StreamTypeVisitor>(
     item_type: &Type,
