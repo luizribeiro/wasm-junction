@@ -173,23 +173,29 @@
           hooks = offlineHooks;
         };
 
-        devShells.default = pkgs.mkShell ({
-          packages = [
-            toolchain
-            pkgs.wasm-tools
-            pkgs.cargo-nextest
-            pkgs.cargo-deny
-            pkgs.git-absorb
-            pkgs.libiconv
-            pkgs.nodejs_24
-            pkgs.playwright-driver
-            pkgs.wasm-bindgen-cli
-            typescriptCheck
-          ]
-          ++ gitHooks.enabledPackages;
-          PLAYWRIGHT_NODE_PATH = "${pkgs.playwright-driver}";
-          inherit (gitHooks) shellHook;
-        });
+        devShells = rec {
+          default = pkgs.mkShell ({
+            packages = [
+              toolchain
+              pkgs.wasm-tools
+              pkgs.cargo-nextest
+              pkgs.cargo-deny
+              pkgs.git-absorb
+              pkgs.libiconv
+              pkgs.nodejs_24
+              pkgs.playwright-driver
+              pkgs.wasm-bindgen-cli
+              typescriptCheck
+            ]
+            ++ gitHooks.enabledPackages;
+            PLAYWRIGHT_NODE_PATH = "${pkgs.playwright-driver}";
+            inherit (gitHooks) shellHook;
+          });
+          # NixOS can't run the generic Linux browsers Playwright downloads.
+          nixos = default.overrideAttrs {
+            PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
+          };
+        };
       }
     );
 }

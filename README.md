@@ -19,3 +19,5 @@ Run all checks with:
 ```sh
 nix develop -c pre-commit run --all-files --hook-stage pre-push
 ```
+
+On NixOS, use `nix develop .#nixos` instead, which supplies browsers that NixOS can run.
