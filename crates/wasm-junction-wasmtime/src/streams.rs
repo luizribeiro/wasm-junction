@@ -6,7 +6,7 @@ use std::task::{Context, Poll};
 
 use wasm_junction_core::{
     ChannelDirection, EngineEvent, ImportDispatcher, InputStream, InvocationId, OutputStream,
-    OutputStreamWriter, StreamHandle,
+    OutputStreamWriter, StreamHandle, Val,
 };
 use wasmtime::component::{
     Destination, Source, StreamAny, StreamConsumer, StreamProducer, StreamReader, StreamResult,
@@ -16,7 +16,25 @@ use wasmtime::{AsContextMut, StoreContextMut};
 
 use crate::engine::StoreData;
 
-pub(crate) type ActiveStreams = Arc<Mutex<HashMap<u64, (OutputStreamWriter, ChannelDirection)>>>;
+#[allow(dead_code)]
+mod typed;
+
+pub(crate) type ActiveStreams = Arc<Mutex<HashMap<u64, (ActiveWriter, ChannelDirection)>>>;
+
+pub(crate) enum ActiveWriter {
+    Bytes(OutputStreamWriter),
+    #[allow(dead_code)]
+    Values(OutputStreamWriter<Val>),
+}
+
+impl ActiveWriter {
+    fn abort(&self) {
+        match self {
+            Self::Bytes(writer) => writer.abort(),
+            Self::Values(writer) => writer.abort(),
+        }
+    }
+}
 
 pub(crate) fn abort_streams(store: &StoreData) {
     let streams = lock_active(&store.active_streams)
@@ -68,7 +86,7 @@ pub(crate) fn lift_stream_with_direction(
         direction,
     });
     let active = store.as_context().data().active_streams.clone();
-    lock_active(&active).insert(id, (writer.clone(), direction));
+    lock_active(&active).insert(id, (ActiveWriter::Bytes(writer.clone()), direction));
     reader.pipe(
         store.as_context_mut(),
         CoreConsumer {
@@ -264,7 +282,7 @@ fn invocation_id(store: &StoreData) -> Result<InvocationId, wasmtime::Error> {
 
 fn lock_active(
     active: &ActiveStreams,
-) -> MutexGuard<'_, HashMap<u64, (OutputStreamWriter, ChannelDirection)>> {
+) -> MutexGuard<'_, HashMap<u64, (ActiveWriter, ChannelDirection)>> {
     match active.lock() {
         Ok(streams) => streams,
         Err(poisoned) => poisoned.into_inner(),
