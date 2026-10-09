@@ -9,11 +9,19 @@ mod resources;
 mod runner;
 mod stream_host;
 mod trace;
+mod value_stream_host;
 
 wasm_junction::bindgen!({ path: "wit" });
 
 mod stream_bindings {
     wasm_junction::bindgen!({ path: "stream-wit", interfaces: ["example:streams/host"] });
+}
+
+mod value_stream_bindings {
+    wasm_junction::bindgen!({
+        path: "value-stream-wit",
+        interfaces: ["example:value-streams/host@0.1.0"]
+    });
 }
 
 pub use host::{FixtureHost, RoutedHost, sample_note, sample_summary};
@@ -28,6 +36,7 @@ pub use trace::{
     EXPECTED_RELOAD_TRACE, EXPECTED_RESOURCE_REFUSAL_TRACE, EXPECTED_RESOURCE_TRACE,
     EXPECTED_ROUTED_TRACE, EXPECTED_STREAM_TRACE, EXPECTED_TRACE, Trace,
 };
+pub use value_stream_host::ValueStreamHost;
 
 /// The fixture's types-only interface.
 pub const TYPES: &str = types::INTERFACE;
@@ -53,6 +62,10 @@ pub const RESOURCE_CLIENT: &str = "example:resources/client@1.0.0";
 pub const STREAM_HOST: &str = "example:streams/host@0.1.0";
 /// The byte-stream fixture's exported interface.
 pub const STREAM_PROBE: &str = "example:streams/probe@0.1.0";
+/// The value-stream fixture's imported host interface.
+pub const VALUE_STREAM_HOST: &str = "example:value-streams/host@0.1.0";
+/// The value-stream fixture's exported interface.
+pub const VALUE_STREAM_PROBE: &str = "example:value-streams/probe@0.1.0";
 /// The reload fixture's host gate interface.
 pub const RELOAD_GATE: &str = "example:reload/gate@0.1.0";
 /// The interface replaced by a breaking reload.
@@ -115,6 +128,12 @@ pub fn resource_component() -> &'static [u8] {
 #[must_use]
 pub fn stream_component() -> &'static [u8] {
     include_bytes!(concat!(env!("OUT_DIR"), "/streams.wasm"))
+}
+
+/// Returns the component that exchanges value streams with its host.
+#[must_use]
+pub fn value_stream_component() -> &'static [u8] {
+    include_bytes!(concat!(env!("OUT_DIR"), "/value-streams.wasm"))
 }
 
 /// Returns the first reload fixture generation.
@@ -194,5 +213,12 @@ mod tests {
         let component = Component::from_bytes(stream_component()).unwrap();
         assert_eq!(component.imports(), [STREAM_HOST]);
         assert_eq!(component.exports(), [STREAM_PROBE]);
+    }
+
+    #[test]
+    fn value_stream_component_has_complementary_interfaces() {
+        let component = Component::from_bytes(value_stream_component()).unwrap();
+        assert_eq!(component.imports(), [VALUE_STREAM_HOST]);
+        assert_eq!(component.exports(), [VALUE_STREAM_PROBE]);
     }
 }
