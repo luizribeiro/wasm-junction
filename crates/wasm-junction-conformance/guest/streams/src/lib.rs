@@ -92,7 +92,6 @@ impl bindings::exports::example::streams::probe::Guest for Component {
         let _ = host_stream.collect().await;
         host::advance();
     }
-
 }
 
 fn text(bytes: Vec<u8>) -> String {

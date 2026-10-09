@@ -159,27 +159,27 @@ impl Generator<'_> {
         item: &str,
         direction: StreamDirection,
     ) -> syn::Result<Option<(TokenStream, TokenStream)>> {
-        if let Some(payload) = self.stream_item(ty) {
-            let payload = self.rust_type(payload, item)?;
+        if let Some(payload_type) = self.stream_item(ty) {
+            let payload = self.rust_type(payload_type, item)?;
             return Ok(Some((
                 direction.ty(&payload),
-                direction.convert(value, &payload),
+                self.convert_stream(direction, value, payload_type, item)?,
             )));
         }
         let Type::Id(id) = ty else { return Ok(None) };
         match &self.resolve.types[id].kind {
             TypeDefKind::Option(payload) if self.direct_stream(*payload) => {
-                let payload = self
+                let payload_type = self
                     .stream_item(*payload)
                     .ok_or_else(|| Self::unsupported(item, "stream"))?;
-                let payload = self.rust_type(payload, item)?;
+                let payload = self.rust_type(payload_type, item)?;
                 let ty = direction.ty(&payload);
+                let converted =
+                    self.convert_stream(direction, &quote!(value), payload_type, item)?;
                 let mapped = match direction {
-                    StreamDirection::Output => {
-                        quote!(#value.map(::std::convert::Into::into))
-                    }
+                    StreamDirection::Output => quote!(#value.map(|value| #converted)),
                     StreamDirection::Input => quote!(#value
-                        .map(::wasm_junction::InputStream::<#payload>::from_handle)
+                        .map(|value| #converted)
                         .transpose()
                         .map_err(|error|
                             ::wasm_junction::CallError::trap(error.to_string()))),
@@ -213,11 +213,11 @@ impl Generator<'_> {
             return Ok((quote!(()), quote!(#constructor(()) => #constructor(()))));
         };
         if self.direct_stream(ty) {
-            let payload = self
+            let payload_type = self
                 .stream_item(ty)
                 .ok_or_else(|| Self::unsupported(item, "stream"))?;
-            let payload = self.rust_type(payload, item)?;
-            let mapped = direction.convert(&quote!(value), &payload);
+            let payload = self.rust_type(payload_type, item)?;
+            let mapped = self.convert_stream(direction, &quote!(value), payload_type, item)?;
             let arm = match direction {
                 StreamDirection::Output => {
                     quote!(#constructor(value) => #constructor(#mapped))
@@ -232,6 +232,39 @@ impl Generator<'_> {
                 self.rust_type(ty, item)?,
                 quote!(#constructor(value) => #constructor(value)),
             ))
+        }
+    }
+
+    fn convert_stream(
+        &self,
+        direction: StreamDirection,
+        value: &TokenStream,
+        payload: Type,
+        item: &str,
+    ) -> syn::Result<TokenStream> {
+        match direction {
+            StreamDirection::Output => {
+                let encoded = self.encode(payload, quote!(item), item)?;
+                Ok(quote!(#value.__into_handle_with(move |item| {
+                    Ok::<_, ::wasm_junction::CallError>(#encoded)
+                })))
+            }
+            StreamDirection::Input => {
+                let decoded = self.decode(payload, quote!(item), item)?;
+                let payload = self.rust_type(payload, item)?;
+                Ok(quote!(::wasm_junction::InputStream::__from_handle_with(
+                    #value,
+                    move |item| {
+                        let decoded: ::std::result::Result<
+                            #payload,
+                            ::wasm_junction::TypeError,
+                        > = #decoded;
+                        decoded.map_err(|error|
+                            ::wasm_junction::CallError::trap(error.to_string()))
+                    },
+                ).map_err(|error|
+                    ::wasm_junction::CallError::trap(error.to_string()))))
+            }
         }
     }
 
@@ -278,16 +311,6 @@ impl StreamDirection {
         match self {
             Self::Output => quote!(::wasm_junction::OutputStream<#payload>),
             Self::Input => quote!(::wasm_junction::InputStream<#payload>),
-        }
-    }
-
-    fn convert(self, value: &TokenStream, payload: &TokenStream) -> TokenStream {
-        match self {
-            Self::Output => quote!(::std::convert::Into::<
-                ::wasm_junction::StreamHandle,
-            >::into(#value)),
-            Self::Input => quote!(::wasm_junction::InputStream::<#payload>::from_handle(#value)
-                .map_err(|error| ::wasm_junction::CallError::trap(error.to_string()))),
         }
     }
 }

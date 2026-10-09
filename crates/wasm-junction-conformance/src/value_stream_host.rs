@@ -7,6 +7,7 @@ use crate::value_stream_bindings::host;
 #[derive(Default)]
 struct State {
     strings: Vec<String>,
+    lists: Vec<Vec<u32>>,
 }
 
 /// The host used by value-stream conformance scenarios.
@@ -26,6 +27,12 @@ impl ValueStreamHost {
         self.lock().strings.clone()
     }
 
+    /// Returns the list items received from the guest.
+    #[must_use]
+    pub fn lists(&self) -> Vec<Vec<u32>> {
+        self.lock().lists.clone()
+    }
+
     fn lock(&self) -> MutexGuard<'_, State> {
         match self.0.lock() {
             Ok(state) => state,
@@ -41,6 +48,15 @@ impl host::Host for ValueStreamHost {
         values: InputStream<String>,
     ) -> Result<(), CallError> {
         self.lock().strings = values.read_all().await?;
+        Ok(())
+    }
+
+    async fn accept_lists(
+        &self,
+        _cx: &CallContext,
+        values: InputStream<Vec<u32>>,
+    ) -> Result<(), CallError> {
+        self.lock().lists = values.read_all().await?;
         Ok(())
     }
 

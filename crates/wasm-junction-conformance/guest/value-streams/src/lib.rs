@@ -25,6 +25,14 @@ impl bindings::exports::example::value_streams::probe::Guest for Component {
         host::strings().collect().await
     }
 
+    async fn send_lists() {
+        let (mut writer, reader) = bindings::wit_stream::new();
+        wit_bindgen::spawn_local(async move {
+            let _ = writer.write_all(vec![vec![1, 2], vec![3]]).await;
+        });
+        host::accept_lists(reader).await;
+    }
+
     async fn echo_strings(values: StreamReader<String>) -> Vec<String> {
         values.collect().await
     }

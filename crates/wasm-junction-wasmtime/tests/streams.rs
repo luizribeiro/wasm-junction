@@ -216,6 +216,16 @@ fn string_streams_cross_imports_and_exports_in_order() {
             );
             assert_eq!(host.strings(), ["guest one", "guest two"]);
 
+            app.call(
+                "value-streams",
+                VALUE_STREAM_PROBE,
+                "send-lists",
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(host.lists(), [vec![1, 2], vec![3]]);
+
             let input = OutputStream::from_items(["first".to_owned(), "second".to_owned()]);
             assert_eq!(
                 app.call(

@@ -197,15 +197,24 @@ impl Generator<'_> {
                         )?),
                     ));
                 }
-                let payload = self
+                let payload_type = self
                     .stream_item(ty)
                     .ok_or_else(|| Self::unsupported(&name.to_string(), "stream"))?;
-                let payload = self.rust_type(payload, &name.to_string())?;
+                let payload = self.rust_type(payload_type, &name.to_string())?;
+                let decoded = self.decode(payload_type, quote!(value), &name.to_string())?;
                 Ok((
                     quote!(),
-                    quote!(::wasm_junction::InputStream::<#payload>::from_handle(#name)
-                        .map_err(|error|
-                            ::wasm_junction::CallError::trap(error.to_string()))?),
+                    quote!(::wasm_junction::InputStream::<#payload>::__from_handle_with(
+                        #name,
+                        move |value| {
+                            let decoded: ::std::result::Result<
+                                #payload,
+                                ::wasm_junction::TypeError,
+                            > = #decoded;
+                            decoded.map_err(|error|
+                                ::wasm_junction::CallError::trap(error.to_string()))
+                        },
+                    )?),
                 ))
             }
             TypeDefKind::Option(ty) => {
@@ -330,7 +339,13 @@ impl Generator<'_> {
                         })
                     }))
                 } else {
-                    Ok(quote!(::std::convert::Into::<::wasm_junction::StreamHandle>::into(#value)))
+                    let payload = self
+                        .stream_item(ty)
+                        .ok_or_else(|| Self::unsupported(item, "stream"))?;
+                    let encoded = self.encode(payload, quote!(value), item)?;
+                    Ok(quote!(#value.__into_handle_with(move |value| {
+                        Ok::<_, ::wasm_junction::CallError>(#encoded)
+                    })))
                 }
             }
             TypeDefKind::Option(ty) => {

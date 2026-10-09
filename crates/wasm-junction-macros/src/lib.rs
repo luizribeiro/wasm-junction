@@ -174,7 +174,7 @@ mod tests {
     }
 
     #[test]
-    fn byte_streams_generate_opaque_call_views() {
+    fn streams_generate_typed_call_views_and_item_conversions() {
         let config = Config {
             path: LitStr::new("tests/fixtures/stream", Span::call_site()),
             interfaces: None,
@@ -192,13 +192,15 @@ mod tests {
             "{tokens}"
         );
         assert!(
-            tokens.contains("InputStream :: < u8 > :: from_handle"),
+            tokens.contains("InputStream :: __from_handle_with"),
             "{tokens}"
         );
+        assert!(tokens.contains("__into_handle_with"), "{tokens}");
         assert!(
-            tokens.contains("Into :: < :: wasm_junction :: StreamHandle >"),
+            tokens.contains("InputStream < :: std :: vec :: Vec < u32 > >"),
             "{tokens}"
         );
+        assert!(tokens.contains("Val :: List"), "{tokens}");
         assert!(
             tokens.contains(
                 "pub async fn send (& self , value : :: std :: option :: Option < :: wasm_junction :: OutputStream < u8 > >)"

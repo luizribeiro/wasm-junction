@@ -3,4 +3,5 @@ package test:streams;
 interface data {
   type chunks = stream<u8>;
   send: func(value: option<chunks>) -> result<stream<u8>, string>;
+  exchange-lists: func(value: stream<list<u32>>) -> stream<list<u32>>;
 }

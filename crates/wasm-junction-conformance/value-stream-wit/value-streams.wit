@@ -2,11 +2,13 @@ package example:value-streams@0.1.0;
 
 interface host {
   accept-strings: async func(values: stream<string>);
+  accept-lists: async func(values: stream<list<u32>>);
   strings: func() -> stream<string>;
 }
 
 interface probe {
   exchange-strings: async func() -> list<string>;
+  send-lists: async func();
   echo-strings: async func(values: stream<string>) -> list<string>;
   return-host-strings: func() -> stream<string>;
   echo-lists: async func(values: stream<list<u32>>) -> list<list<u32>>;
