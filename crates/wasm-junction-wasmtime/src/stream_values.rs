@@ -16,6 +16,7 @@ pub(crate) trait StreamValue:
         store: &mut wasmtime::StoreContextMut<'_, StoreData>,
     ) -> Result<Option<Val>, wasmtime::Error>;
 
+    #[allow(dead_code)]
     fn from_val(
         value: Option<Val>,
         ty: Option<&Type>,
@@ -112,6 +113,7 @@ pub(super) fn required(value: Option<Val>, context: &str) -> Result<Val, wasmtim
     value.ok_or_else(|| wasmtime::Error::msg(format!("{context} cannot be unit")))
 }
 
+#[allow(dead_code)]
 pub(super) fn shape(expected: &str, value: Option<&Val>) -> wasmtime::Error {
     wasmtime::Error::new(CallError::refused(format!(
         "expected {expected} stream item, got {value:?}"

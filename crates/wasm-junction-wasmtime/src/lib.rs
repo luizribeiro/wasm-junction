@@ -17,7 +17,6 @@ mod futures;
 mod imports;
 #[cfg_attr(not(test), allow(dead_code))]
 mod stream_types;
-#[cfg_attr(not(test), allow(dead_code))]
 mod stream_values;
 mod streams;
 mod values;

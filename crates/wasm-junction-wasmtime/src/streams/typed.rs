@@ -5,6 +5,8 @@ use wasmtime::{AsContextMut, StoreContextMut};
 use crate::engine::StoreData;
 use crate::stream_types::{StreamTypeVisitor, visit_stream_type};
 
+mod consumer;
+
 fn bridge<V: StreamTypeVisitor>(
     item_type: &Type,
     visitor: V,

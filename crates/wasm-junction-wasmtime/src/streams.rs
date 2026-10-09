@@ -23,7 +23,6 @@ pub(crate) type ActiveStreams = Arc<Mutex<HashMap<u64, (ActiveWriter, ChannelDir
 
 pub(crate) enum ActiveWriter {
     Bytes(OutputStreamWriter),
-    #[allow(dead_code)]
     Values(OutputStreamWriter<Val>),
 }
 
