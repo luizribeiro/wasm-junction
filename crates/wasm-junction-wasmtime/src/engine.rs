@@ -47,6 +47,27 @@ pub(crate) struct StoreData {
     pub(crate) active_futures: ActiveFutures<FutureAny>,
 }
 
+#[cfg(test)]
+impl StoreData {
+    pub(crate) fn for_value_test(
+        imports: Arc<dyn ImportDispatcher>,
+    ) -> Result<Self, wasmtime::Error> {
+        #[cfg(feature = "wasi")]
+        let wasi = wasi_context(&WasiSettings::new())?;
+        Ok(Self {
+            imports,
+            context: InvocationContext::default(),
+            component: Arc::from("test"),
+            #[cfg(feature = "wasi")]
+            wasi,
+            resources: Arc::from([]),
+            owned_resources: HashSet::new(),
+            active_streams: Arc::new(Mutex::new(HashMap::new())),
+            active_futures: ActiveFutures::default(),
+        })
+    }
+}
+
 #[cfg(feature = "wasi")]
 impl WasiView for StoreData {
     fn ctx(&mut self) -> WasiCtxView<'_> {
