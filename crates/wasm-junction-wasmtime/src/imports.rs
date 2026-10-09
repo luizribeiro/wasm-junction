@@ -9,7 +9,7 @@ use wasmtime::component::{
 };
 
 use crate::engine::{StoreData, lift_future, lift_resource, lower_future, lower_resource};
-use crate::streams::{lift_stream, lower_stream};
+use crate::streams::{lift_stream, lower_typed_stream};
 use crate::values::{LiftValue, LowerValue, from_wasmtime, to_wasmtime};
 
 pub(crate) fn define_imports(
@@ -138,8 +138,8 @@ fn define_concurrent(
                     LiftValue::Future(future) => accessor
                         .with(|mut store| lift_future(future, store.data_mut()))
                         .map(Val::Future),
-                    LiftValue::Stream(stream, byte_stream) => accessor
-                        .with(|store| lift_stream(stream, byte_stream, store))
+                    LiftValue::Stream(stream, item_type) => accessor
+                        .with(|store| lift_stream(stream, item_type, store))
                         .map(Val::Stream),
                 })
             })?;
@@ -160,8 +160,8 @@ fn define_concurrent(
                     LowerValue::Future(future) => accessor
                         .with(|mut store| lower_future(&future, store.data_mut()))
                         .map(WasmtimeVal::Future),
-                    LowerValue::Stream(stream) => accessor
-                        .with(|store| lower_stream(stream, store))
+                    LowerValue::Stream(stream, item_type) => accessor
+                        .with(|store| lower_typed_stream(stream, item_type, store))
                         .map(WasmtimeVal::Stream),
                 })
             })
@@ -190,8 +190,8 @@ fn define_plain(
                     LiftValue::Future(future) => {
                         lift_future(future, store.data_mut()).map(Val::Future)
                     }
-                    LiftValue::Stream(stream, byte_stream) => {
-                        lift_stream(stream, byte_stream, store.as_context_mut()).map(Val::Stream)
+                    LiftValue::Stream(stream, item_type) => {
+                        lift_stream(stream, item_type, store.as_context_mut()).map(Val::Stream)
                     }
                 })
             })?;
@@ -214,8 +214,9 @@ fn define_plain(
                     LowerValue::Future(future) => {
                         lower_future(&future, store.data_mut()).map(WasmtimeVal::Future)
                     }
-                    LowerValue::Stream(stream) => {
-                        lower_stream(stream, store.as_context_mut()).map(WasmtimeVal::Stream)
+                    LowerValue::Stream(stream, item_type) => {
+                        lower_typed_stream(stream, item_type, store.as_context_mut())
+                            .map(WasmtimeVal::Stream)
                     }
                 })
             })

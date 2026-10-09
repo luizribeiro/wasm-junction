@@ -12,13 +12,13 @@ pub(crate) struct ExpectedResource {
 pub(crate) enum LiftValue {
     Future(FutureAny),
     Resource(ResourceAny),
-    Stream(StreamAny, bool),
+    Stream(StreamAny, Option<Type>),
 }
 
 pub(crate) enum LowerValue {
     Future(FutureHandle),
     Resource(Resource, Option<ExpectedResource>),
-    Stream(StreamHandle),
+    Stream(StreamHandle, Type),
 }
 
 pub(crate) fn from_wasmtime(
@@ -110,10 +110,7 @@ pub(crate) fn from_wasmtime(
         })),
         WasmtimeVal::Resource(value) => store(LiftValue::Resource(value)),
         WasmtimeVal::Future(value) => store(LiftValue::Future(value)),
-        WasmtimeVal::Stream(value) => store(LiftValue::Stream(
-            value,
-            expected.is_none_or(stream_is_bytes),
-        )),
+        WasmtimeVal::Stream(value) => store(LiftValue::Stream(value, stream_item_type(expected))),
         other => Err(wasmtime::Error::msg(format!(
             "unsupported component value: {other:?}"
         ))),
@@ -301,8 +298,11 @@ pub(crate) fn expected_resource(expected: Option<&Type>) -> Option<ExpectedResou
     }
 }
 
-fn stream_is_bytes(expected: &Type) -> bool {
-    matches!(expected, Type::Stream(stream) if matches!(stream.ty(), Some(Type::U8)))
+fn stream_item_type(expected: Option<&Type>) -> Option<Type> {
+    match expected {
+        Some(Type::Stream(stream)) => stream.ty(),
+        _ => None,
+    }
 }
 
 fn lower_stream_value(
@@ -310,15 +310,14 @@ fn lower_stream_value(
     expected: Option<&Type>,
     store: &mut impl FnMut(LowerValue) -> Result<WasmtimeVal, wasmtime::Error>,
 ) -> Result<WasmtimeVal, wasmtime::Error> {
-    if value.is_byte_stream() && expected.is_none_or(stream_is_bytes) {
-        store(LowerValue::Stream(value))
-    } else {
-        Err(wasmtime::Error::new(
-            wasm_junction_core::CallError::refused(
-                "Wasmtime 49 cannot dynamically bridge WIT value streams",
-            ),
-        ))
+    let item_type = stream_item_type(expected)
+        .ok_or_else(|| wasmtime::Error::msg("expected stream value type"))?;
+    if value.is_byte_stream() != (item_type == Type::U8) {
+        return Err(wasmtime::Error::new(
+            wasm_junction_core::CallError::refused("stream item type does not match its WIT type"),
+        ));
     }
+    store(LowerValue::Stream(value, item_type))
 }
 
 fn convert_values(
@@ -458,26 +457,11 @@ mod tests {
     }
 
     #[test]
-    fn nested_streams_use_the_store_aware_conversion() {
+    fn nested_streams_require_the_declared_value_type() {
         let value = Val::Option(Some(Box::new(Val::from(
             wasm_junction_core::OutputStream::from_bytes(b"nested"),
         ))));
-        let error = to_wasmtime(value, None, &mut |value| {
-            let LowerValue::Stream(stream) = value else {
-                unreachable!();
-            };
-            Err(wasmtime::Error::msg(format!("saw stream {}", stream.id())))
-        })
-        .unwrap_err();
-        assert!(error.to_string().starts_with("saw stream "));
-
-        let value = Val::from(wasm_junction_core::OutputStream::from_items([7_u32]));
         let error = to_wasmtime(value, None, &mut |_| unreachable!()).unwrap_err();
-        assert_eq!(
-            error
-                .downcast_ref::<wasm_junction_core::CallError>()
-                .map(ToString::to_string),
-            Some("Wasmtime 49 cannot dynamically bridge WIT value streams".to_owned())
-        );
+        assert_eq!(error.to_string(), "expected stream value type");
     }
 }

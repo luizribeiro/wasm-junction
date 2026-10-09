@@ -12,7 +12,7 @@ use wasm_junction_core::WASI_HTTP_PROVIDER_NAME;
 use wasm_junction_core::{Access, WASI_PROVIDER_NAME, WasiSettings};
 use wasm_junction_core::{
     BoxFuture, CallError, CompiledComponent, Engine, EngineError, FutureHandle, ImportDispatcher,
-    InvocationContext, Resource, StreamHandle, Val, Vals, validate_resource_lowering,
+    InvocationContext, Resource, Val, Vals, validate_resource_lowering,
 };
 use wasmtime::component::{
     Component, FutureAny, InstancePre, Linker, ResourceAny, ResourceDynamic, ResourceType,
@@ -30,7 +30,7 @@ use crate::WASI_HTTP_INTERFACES;
 use crate::WASI_INTERFACES;
 use crate::futures::ActiveFutures;
 use crate::imports::{ResourceDefinition, define_imports};
-use crate::streams::lower_stream;
+use crate::streams::{lower_typed_stream, recover_exported_stream};
 use crate::values::{ExpectedResource, LiftValue, LowerValue, from_wasmtime, to_wasmtime};
 #[cfg(feature = "wasi")]
 use crate::wasi::{WasiState, add_gates};
@@ -428,8 +428,8 @@ impl Compiled {
                                             lower_resource(&resource, expected, store)
                                         })
                                         .map(WasmtimeVal::Resource),
-                                    LowerValue::Stream(stream) => accessor
-                                        .with(|store| lower_stream(stream, store))
+                                    LowerValue::Stream(stream, item_type) => accessor
+                                        .with(|store| lower_typed_stream(stream, item_type, store))
                                         .map(WasmtimeVal::Stream),
                                     LowerValue::Future(future) => accessor
                                         .with(|mut store| lower_future(&future, store.data_mut()))
@@ -456,28 +456,9 @@ impl Compiled {
                                         "guest-created futures cannot be returned because the Wasmtime store ends with each call",
                                     )))
                                 }),
-                                LiftValue::Stream(mut stream, false) => accessor.with(|mut store| {
-                                    stream.close(store.as_context_mut())?;
-                                    Err(wasmtime::Error::new(CallError::refused(
-                                        "Wasmtime 49 cannot dynamically bridge WIT value streams",
-                                    )))
-                                }),
-                                LiftValue::Stream(stream, true) => {
-                                    let reader = stream.try_into_stream_reader::<u8>()?;
-                                    accessor.with(|mut store| {
-                                        match reader
-                                            .try_into::<StreamHandle>(store.as_context_mut())
-                                        {
-                                            Ok(handle) => Ok(Val::Stream(handle)),
-                                            Err(mut reader) => {
-                                                reader.close(store.as_context_mut())?;
-                                                Err(wasmtime::Error::new(CallError::refused(
-                                                    "guest-created streams cannot be returned because the Wasmtime store ends with each call",
-                                                )))
-                                            }
-                                        }
-                                    })
-                                }
+                                LiftValue::Stream(stream, item_type) => accessor
+                                    .with(|store| recover_exported_stream(stream, item_type, store))
+                                    .map(Val::Stream),
                             })
                         })
                         .collect::<Result<Vals, wasmtime::Error>>()

@@ -16,9 +16,9 @@ use wasmtime::{AsContextMut, StoreContextMut};
 
 use crate::engine::StoreData;
 
-#[allow(dead_code)]
 mod typed;
 
+pub(crate) use typed::{lift_stream, lower_typed_stream, recover_exported_stream};
 pub(crate) type ActiveStreams = Arc<Mutex<HashMap<u64, (ActiveWriter, ChannelDirection)>>>;
 
 pub(crate) enum ActiveWriter {
@@ -49,23 +49,6 @@ pub(crate) fn abort_streams(store: &StoreData) {
             });
         }
     }
-}
-
-pub(crate) fn lift_stream(
-    mut stream: StreamAny,
-    byte_stream: bool,
-    store: impl AsContextMut<Data = StoreData>,
-) -> Result<StreamHandle, wasmtime::Error> {
-    if !byte_stream {
-        let mut store = store;
-        stream.close(store.as_context_mut())?;
-        return Err(wasmtime::Error::new(
-            wasm_junction_core::CallError::refused(
-                "Wasmtime 49 cannot dynamically bridge WIT value streams",
-            ),
-        ));
-    }
-    lift_stream_with_direction(stream, store, ChannelDirection::GuestToHost)
 }
 
 pub(crate) fn lift_stream_with_direction(
@@ -272,14 +255,14 @@ fn close_channel(
     }
 }
 
-fn invocation_id(store: &StoreData) -> Result<InvocationId, wasmtime::Error> {
+pub(super) fn invocation_id(store: &StoreData) -> Result<InvocationId, wasmtime::Error> {
     store
         .context
         .invocation_id()
         .ok_or_else(|| wasmtime::Error::msg("stream has no invocation id"))
 }
 
-fn lock_active(
+pub(super) fn lock_active(
     active: &ActiveStreams,
 ) -> MutexGuard<'_, HashMap<u64, (ActiveWriter, ChannelDirection)>> {
     match active.lock() {

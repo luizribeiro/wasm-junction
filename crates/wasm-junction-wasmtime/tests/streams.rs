@@ -168,7 +168,7 @@ fn guest_value_stream_import_is_closed_and_refused_without_poisoning_later_calls
             assert_eq!(error.kind(), CallErrorKind::Refused);
             assert_eq!(
                 error.to_string(),
-                "Wasmtime 49 cannot dynamically bridge WIT value streams"
+                "stream item type `record` is not supported on Wasmtime; supported item types are scalar values, strings, resources, and lists or options nested up to two layers"
             );
             assert_eq!(host.value_calls(), 0);
             assert_eq!(
@@ -207,7 +207,7 @@ fn guest_value_stream_export_is_closed_and_refused_without_poisoning_later_calls
             assert_eq!(error.kind(), CallErrorKind::Refused);
             assert_eq!(
                 error.to_string(),
-                "Wasmtime 49 cannot dynamically bridge WIT value streams"
+                "stream item type `record` is not supported on Wasmtime; supported item types are scalar values, strings, resources, and lists or options nested up to two layers"
             );
             assert_eq!(
                 app.call(
