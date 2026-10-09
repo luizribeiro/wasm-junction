@@ -19,6 +19,45 @@ pub(crate) trait StreamValue:
     ) -> Result<Self, wasmtime::Error>;
 }
 
+macro_rules! scalar {
+    ($ty:ty, $variant:ident) => {
+        impl StreamValue for $ty {
+            fn into_val(
+                self,
+                _ty: Option<&Type>,
+                _store: &mut wasmtime::StoreContextMut<'_, StoreData>,
+            ) -> Result<Option<Val>, wasmtime::Error> {
+                Ok(Some(Val::$variant(self)))
+            }
+
+            fn from_val(
+                value: Option<Val>,
+                _ty: Option<&Type>,
+                _store: &mut wasmtime::StoreContextMut<'_, StoreData>,
+            ) -> Result<Self, wasmtime::Error> {
+                match value {
+                    Some(Val::$variant(value)) => Ok(value),
+                    value => Err(shape(stringify!($ty), value.as_ref())),
+                }
+            }
+        }
+    };
+}
+
+scalar!(bool, Bool);
+scalar!(i8, S8);
+scalar!(u8, U8);
+scalar!(i16, S16);
+scalar!(u16, U16);
+scalar!(i32, S32);
+scalar!(u32, U32);
+scalar!(i64, S64);
+scalar!(u64, U64);
+scalar!(f32, F32);
+scalar!(f64, F64);
+scalar!(char, Char);
+scalar!(String, String);
+
 impl StreamValue for () {
     fn into_val(
         self,
@@ -102,5 +141,24 @@ mod tests {
         let value = ().into_val(None, &mut context).unwrap();
         assert_eq!(value, None);
         assert_eq!(<()>::from_val(value, None, &mut context).unwrap(), ());
+    }
+    #[test]
+    fn scalar_items_convert_in_both_directions() {
+        let mut store = test_store();
+        let mut context = store.as_context_mut();
+        assert_eq!(
+            42_u32.into_val(None, &mut context).unwrap(),
+            Some(Val::U32(42))
+        );
+        assert_eq!(
+            String::from_val(Some(Val::from("notes")), None, &mut context).unwrap(),
+            "notes"
+        );
+        assert_eq!(
+            bool::from_val(Some(Val::String("wrong".to_owned())), None, &mut context)
+                .unwrap_err()
+                .to_string(),
+            "expected bool stream item, got Some(String(\"wrong\"))"
+        );
     }
 }
