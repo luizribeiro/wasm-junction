@@ -287,7 +287,7 @@ fn list_element_type(expected: Option<&Type>) -> Option<Type> {
     }
 }
 
-fn expected_resource(expected: Option<&Type>) -> Option<ExpectedResource> {
+pub(crate) fn expected_resource(expected: Option<&Type>) -> Option<ExpectedResource> {
     match expected {
         Some(Type::Own(ty)) => Some(ExpectedResource {
             ownership: ResourceOwnership::Own,

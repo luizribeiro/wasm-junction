@@ -1,7 +1,9 @@
 use wasm_junction_core::{CallError, Val};
-use wasmtime::component::{ComponentType, Lift, Lower, Type};
+use wasmtime::AsContextMut;
+use wasmtime::component::{ComponentType, Lift, Lower, ResourceAny, Type};
 
-use crate::engine::StoreData;
+use crate::engine::{StoreData, lift_resource, lower_resource};
+use crate::values::expected_resource;
 
 pub(crate) trait StreamValue:
     ComponentType + Lift + Lower + Send + Sync + Unpin + Sized + 'static
@@ -76,6 +78,31 @@ impl StreamValue for () {
             .is_none()
             .then_some(())
             .ok_or_else(|| shape("unit", value.as_ref()))
+    }
+}
+
+impl StreamValue for ResourceAny {
+    fn into_val(
+        self,
+        _ty: Option<&Type>,
+        store: &mut wasmtime::StoreContextMut<'_, StoreData>,
+    ) -> Result<Option<Val>, wasmtime::Error> {
+        lift_resource(self, store.as_context_mut())
+            .map(Val::Resource)
+            .map(Some)
+    }
+
+    fn from_val(
+        value: Option<Val>,
+        ty: Option<&Type>,
+        store: &mut wasmtime::StoreContextMut<'_, StoreData>,
+    ) -> Result<Self, wasmtime::Error> {
+        match value {
+            Some(Val::Resource(value)) => {
+                lower_resource(&value, expected_resource(ty), store.as_context_mut())
+            }
+            value => Err(shape("resource", value.as_ref())),
+        }
     }
 }
 
