@@ -136,16 +136,14 @@ impl CoreProducer {
         if let Some(input) = self.input.take() {
             input.close_reader();
         }
-        if !self.closed {
-            self.closed = true;
-            if let Some(direction) = self.direction {
-                self.imports.emit(EngineEvent::ChannelClose {
-                    invocation: self.invocation,
-                    stream: self.id,
-                    direction,
-                });
-            }
-        }
+        close_channel(
+            &mut self.closed,
+            &self.imports,
+            self.invocation,
+            self.id,
+            self.direction,
+            None,
+        );
     }
 }
 
@@ -224,18 +222,36 @@ struct CoreConsumer {
 
 impl CoreConsumer {
     fn close(&mut self) {
-        let was_active = lock_active(&self.active).remove(&self.id).is_some();
         self.writer.take();
-        if !self.closed {
-            self.closed = true;
-            if was_active {
-                self.imports.emit(EngineEvent::ChannelClose {
-                    invocation: self.invocation,
-                    stream: self.id,
-                    direction: self.direction,
-                });
-            }
-        }
+        close_channel(
+            &mut self.closed,
+            &self.imports,
+            self.invocation,
+            self.id,
+            Some(self.direction),
+            Some(&self.active),
+        );
+    }
+}
+
+fn close_channel(
+    closed: &mut bool,
+    imports: &Arc<dyn ImportDispatcher>,
+    invocation: InvocationId,
+    id: u64,
+    direction: Option<ChannelDirection>,
+    active: Option<&ActiveStreams>,
+) {
+    let was_active = active.is_none_or(|active| lock_active(active).remove(&id).is_some());
+    if std::mem::replace(closed, true) || !was_active {
+        return;
+    }
+    if let Some(direction) = direction {
+        imports.emit(EngineEvent::ChannelClose {
+            invocation,
+            stream: id,
+            direction,
+        });
     }
 }
 
