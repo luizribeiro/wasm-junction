@@ -1,17 +1,48 @@
 //! End-to-end byte-stream checks for the native engine.
 
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use wasm_junction::{
-    App, CallErrorKind, Component, InputStream, OutputStream, Resource, StreamHandle, Val,
+    App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Component, InputStream,
+    OutputStream, Provided, Provider, Resource, StreamHandle, Val, Vals,
 };
 use wasm_junction_conformance::{
-    PoisonHost, RESOURCE_CLIENT, ResourceHost, RetainHost, STREAM_PROBE, StreamHost,
+    PoisonHost, RESOURCE_CLIENT, RESOURCE_HOST, ResourceHost, RetainHost, STREAM_PROBE, StreamHost,
     VALUE_STREAM_PROBE, ValueStreamHost, resource_stream_component, run_streams, stream_component,
     value_stream_component,
 };
 use wasm_junction_wasmtime::WasmtimeEngine;
+
+#[derive(Clone, Default)]
+struct InvalidResourceStreamHost(Arc<AtomicUsize>);
+
+impl Provider for InvalidResourceStreamHost {
+    fn call<'a>(
+        &'a self,
+        _cx: &'a CallContext,
+        call: Call,
+    ) -> BoxFuture<'a, Result<Vals, CallError>> {
+        Box::pin(async move {
+            if call.function.as_ref() != "sessions" {
+                return Err(CallError::trap("unexpected resource call"));
+            }
+            self.0.fetch_add(1, Ordering::Relaxed);
+            let stream = OutputStream::from_items([
+                Val::Resource(Resource::owned(RESOURCE_HOST, "session", 0)),
+                Val::Resource(Resource::owned("example:foreign/host@1.0.0", "session", 7)),
+            ]);
+            Ok(vec![Val::Stream(stream.into())])
+        })
+    }
+
+    fn drop_resource(&self, _cx: &CallContext, resource: Resource) -> Result<(), CallError> {
+        assert_eq!(resource, Resource::owned(RESOURCE_HOST, "session", 0));
+        self.0.fetch_sub(1, Ordering::Relaxed);
+        Ok(())
+    }
+}
 
 #[test]
 fn bidirectional_streams_match_the_engine_neutral_trace() {
@@ -378,6 +409,41 @@ fn resource_stream_items_are_checked_as_invocation_handles() {
                 .await
                 .is_ok()
             );
+        });
+}
+
+#[test]
+fn later_invalid_resource_stream_item_cleans_earlier_items() {
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let host = InvalidResourceStreamHost::default();
+            let app = App::builder()
+                .engine(WasmtimeEngine::new().unwrap())
+                .provide(Provided::new(RESOURCE_HOST, host.clone()))
+                .build()
+                .unwrap();
+            app.load(
+                Component::from_bytes(resource_stream_component())
+                    .unwrap()
+                    .named("resources"),
+            )
+            .await
+            .unwrap();
+
+            let error = app
+                .call(
+                    "resources",
+                    RESOURCE_CLIENT,
+                    "use-host-sessions",
+                    Vec::new(),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind(), CallErrorKind::Refused);
+            assert!(error.to_string().contains("does not import resource"));
+            assert_eq!(host.0.load(Ordering::Relaxed), 0);
         });
 }
 
