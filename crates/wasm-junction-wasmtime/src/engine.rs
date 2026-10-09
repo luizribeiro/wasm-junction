@@ -30,6 +30,7 @@ use crate::WASI_HTTP_INTERFACES;
 use crate::WASI_INTERFACES;
 use crate::futures::ActiveFutures;
 use crate::imports::{ResourceDefinition, define_imports};
+use crate::stream_types::validate_component_streams;
 use crate::streams::{lower_typed_stream, recover_exported_stream};
 use crate::values::{ExpectedResource, LiftValue, LowerValue, from_wasmtime, to_wasmtime};
 #[cfg(feature = "wasi")]
@@ -329,6 +330,8 @@ fn compile_component(
 ) -> CompileResult {
     let component =
         Component::new(engine, bytes).map_err(|error| EngineError::new(error.to_string()))?;
+    validate_component_streams(&component, engine)
+        .map_err(|error| EngineError::new(error.to_string()))?;
     let resources = define_imports(&mut linker, &component)
         .map_err(|error| EngineError::new(error.to_string()))?;
     let pre = linker

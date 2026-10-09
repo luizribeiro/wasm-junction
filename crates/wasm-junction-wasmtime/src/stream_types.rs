@@ -5,11 +5,9 @@ use crate::stream_values::StreamValue;
 mod compound;
 #[cfg(test)]
 pub(crate) mod test_support;
-#[allow(dead_code)]
 mod validate;
 
 use compound::{WrapList, WrapOption};
-#[allow(unused_imports)]
 pub(crate) use validate::validate_component_streams;
 
 pub(crate) trait StreamTypeVisitor {
