@@ -1,0 +1,25 @@
+package example:resources@1.0.0;
+
+interface host {
+    resource file;
+
+    open-file: func(name: string) -> file;
+
+    resource session {
+        constructor(user: string);
+        profile: func() -> string;
+    }
+    sessions: func(users: list<string>) -> stream<session>;
+}
+
+interface client {
+    use host.{session};
+
+    use-host-sessions: async func() -> list<string>;
+    use-sessions: async func(values: stream<session>) -> list<string>;
+}
+
+world resource-stream {
+    import host;
+    export client;
+}

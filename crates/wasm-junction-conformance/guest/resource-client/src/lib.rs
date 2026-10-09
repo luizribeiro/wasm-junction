@@ -48,6 +48,7 @@ impl bindings::exports::example::resources::client::Guest for Component {
     fn round_trip(value: Session) -> Session {
         value
     }
+
     fn return_sessions() -> Vec<Session> {
         vec![Session::new("Ada"), Session::new("Grace")]
     }

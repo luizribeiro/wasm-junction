@@ -1,10 +1,10 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use wasm_junction::{CallContext, CallError, Provided};
+use wasm_junction::{CallContext, CallError, OutputStream, Provided};
 
 wasm_junction::bindgen!({
-    path: "resource-wit",
+    path: "resource-stream-wit",
     interfaces: ["example:resources/host@1.0.0"],
 });
 
@@ -51,6 +51,15 @@ impl host::Host for ResourceHost {
         } else {
             Ok(format!("profile:{session}"))
         }
+    }
+
+    fn sessions(
+        &self,
+        _cx: &CallContext,
+        users: Vec<String>,
+    ) -> Result<OutputStream<String>, CallError> {
+        self.0.active.fetch_add(users.len(), Ordering::Relaxed);
+        Ok(OutputStream::from_items(users))
     }
 
     fn drop_file(&self, _cx: &CallContext, _file: String) -> Result<(), CallError> {

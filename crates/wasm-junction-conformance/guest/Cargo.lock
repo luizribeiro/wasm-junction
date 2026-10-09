@@ -253,6 +253,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "resource-stream-guest"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen",
+]
+
+[[package]]
 name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -124,6 +124,11 @@ pub fn resource_component() -> &'static [u8] {
     include_bytes!(concat!(env!("OUT_DIR"), "/resource-client.wasm"))
 }
 
+/// Returns the component that exchanges resource streams with its host.
+#[must_use]
+pub fn resource_stream_component() -> &'static [u8] {
+    include_bytes!(concat!(env!("OUT_DIR"), "/resource-stream.wasm"))
+}
 /// Returns the component that exchanges byte streams with its host.
 #[must_use]
 pub fn stream_component() -> &'static [u8] {
@@ -204,6 +209,13 @@ mod tests {
     #[test]
     fn resource_component_imports_only_the_host_resource() {
         let component = Component::from_bytes(resource_component()).unwrap();
+        assert_eq!(component.imports(), [RESOURCE_HOST]);
+        assert_eq!(component.exports(), [RESOURCE_CLIENT]);
+    }
+
+    #[test]
+    fn resource_stream_component_uses_the_resource_interfaces() {
+        let component = Component::from_bytes(resource_stream_component()).unwrap();
         assert_eq!(component.imports(), [RESOURCE_HOST]);
         assert_eq!(component.exports(), [RESOURCE_CLIENT]);
     }
