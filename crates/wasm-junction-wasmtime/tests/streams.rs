@@ -3,10 +3,13 @@
 use std::sync::mpsc;
 use std::time::Duration;
 
-use wasm_junction::{App, CallErrorKind, Component, InputStream, OutputStream, StreamHandle, Val};
+use wasm_junction::{
+    App, CallErrorKind, Component, InputStream, OutputStream, Resource, StreamHandle, Val,
+};
 use wasm_junction_conformance::{
-    PoisonHost, RetainHost, STREAM_PROBE, StreamHost, VALUE_STREAM_PROBE, ValueStreamHost,
-    run_streams, stream_component, value_stream_component,
+    PoisonHost, RESOURCE_CLIENT, ResourceHost, RetainHost, STREAM_PROBE, StreamHost,
+    VALUE_STREAM_PROBE, ValueStreamHost, resource_stream_component, run_streams, stream_component,
+    value_stream_component,
 };
 use wasm_junction_wasmtime::WasmtimeEngine;
 
@@ -309,6 +312,71 @@ fn nested_value_streams_round_trip_and_middleware_filters_items() {
                 .await
                 .unwrap(),
                 [Val::List(vec![Val::from("visible"), Val::from("last")])]
+            );
+        });
+}
+
+#[test]
+fn resource_stream_items_are_checked_as_invocation_handles() {
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let host = ResourceHost::default();
+            let app = App::builder()
+                .engine(WasmtimeEngine::new().unwrap())
+                .provide(host.clone().provided())
+                .build()
+                .unwrap();
+            app.load(
+                Component::from_bytes(resource_stream_component())
+                    .unwrap()
+                    .named("resources"),
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(
+                app.call(
+                    "resources",
+                    RESOURCE_CLIENT,
+                    "use-host-sessions",
+                    Vec::new(),
+                )
+                .await
+                .unwrap(),
+                [Val::List(vec![
+                    Val::from("profile:Ada"),
+                    Val::from("profile:Grace")
+                ])]
+            );
+            assert_eq!(host.active_resources(), 0);
+
+            let foreign = OutputStream::from_items([Resource::owned(
+                "example:foreign/host@1.0.0",
+                "session",
+                7,
+            )]);
+            let error = app
+                .call(
+                    "resources",
+                    RESOURCE_CLIENT,
+                    "use-sessions",
+                    vec![foreign.into()],
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind(), CallErrorKind::Refused);
+            assert!(error.to_string().contains("does not import resource"));
+            assert!(
+                app.call(
+                    "resources",
+                    RESOURCE_CLIENT,
+                    "use-host-sessions",
+                    Vec::new()
+                )
+                .await
+                .is_ok()
             );
         });
 }
