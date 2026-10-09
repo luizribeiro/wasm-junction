@@ -1,7 +1,7 @@
 //! End-to-end byte-stream checks for the native engine.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use wasm_junction::{
@@ -17,8 +17,15 @@ use wasm_junction_wasmtime::WasmtimeEngine;
 use wit_component::{ComponentEncoder, StringEncoding, dummy_module, embed_component_metadata};
 use wit_parser::{ManglingAndAbi, Resolve};
 
+#[derive(Default)]
+struct InvalidResourceStreamState {
+    active: AtomicUsize,
+    constructor_calls: AtomicUsize,
+    read: Mutex<Option<tokio::task::JoinHandle<String>>>,
+}
+
 #[derive(Clone, Default)]
-struct InvalidResourceStreamHost(Arc<AtomicUsize>);
+struct InvalidResourceStreamHost(Arc<InvalidResourceStreamState>);
 
 impl Provider for InvalidResourceStreamHost {
     fn call<'a>(
@@ -27,21 +34,60 @@ impl Provider for InvalidResourceStreamHost {
         call: Call,
     ) -> BoxFuture<'a, Result<Vals, CallError>> {
         Box::pin(async move {
-            if call.function.as_ref() != "sessions" {
-                return Err(CallError::trap("unexpected resource call"));
+            match call.function.as_ref() {
+                "[constructor]session" => {
+                    let call = self.0.constructor_calls.fetch_add(1, Ordering::Relaxed);
+                    let id = match call {
+                        0 | 1 => 0,
+                        _ => 1,
+                    };
+                    if call != 1 {
+                        self.0.active.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Ok(vec![Val::Resource(Resource::owned(
+                        RESOURCE_HOST,
+                        "session",
+                        id,
+                    ))])
+                }
+                "sessions" => {
+                    self.0.active.fetch_add(1, Ordering::Relaxed);
+                    let valid = Val::Resource(Resource::owned(RESOURCE_HOST, "session", 0));
+                    let items = vec![
+                        valid,
+                        Val::Resource(Resource::owned("example:foreign/host@1.0.0", "session", 7)),
+                    ];
+                    Ok(vec![OutputStream::from_items(items).into()])
+                }
+                "[method]session.profile" => Ok(vec![Val::from("profile:recovered")]),
+                "accept-sessions" => {
+                    let [Val::Stream(stream)] = <[_; 1]>::try_from(call.args)
+                        .map_err(|_| CallError::trap("accept-sessions expects one stream"))?
+                    else {
+                        return Err(CallError::trap("accept-sessions expects a stream"));
+                    };
+                    let input = InputStream::<Resource>::from_handle(stream)?;
+                    let state = self.0.clone();
+                    *self.0.read.lock().unwrap() = Some(tokio::spawn(async move {
+                        match input.read_all().await {
+                            Ok(items) => {
+                                state.active.fetch_sub(items.len(), Ordering::Relaxed);
+                                "stream completed".to_owned()
+                            }
+                            Err(error) => error.to_string(),
+                        }
+                    }));
+                    Ok(vec![Val::from("reading")])
+                }
+                _ => Err(CallError::trap("unexpected resource call")),
             }
-            self.0.fetch_add(1, Ordering::Relaxed);
-            let stream = OutputStream::from_items([
-                Val::Resource(Resource::owned(RESOURCE_HOST, "session", 0)),
-                Val::Resource(Resource::owned("example:foreign/host@1.0.0", "session", 7)),
-            ]);
-            Ok(vec![Val::Stream(stream.into())])
         })
     }
 
     fn drop_resource(&self, _cx: &CallContext, resource: Resource) -> Result<(), CallError> {
-        assert_eq!(resource, Resource::owned(RESOURCE_HOST, "session", 0));
-        self.0.fetch_sub(1, Ordering::Relaxed);
+        assert_eq!(resource.interface(), RESOURCE_HOST);
+        assert_eq!(resource.name(), "session");
+        self.0.active.fetch_sub(1, Ordering::Relaxed);
         Ok(())
     }
 }
@@ -455,7 +501,54 @@ fn later_invalid_resource_stream_item_cleans_earlier_items() {
                 .unwrap_err();
             assert_eq!(error.kind(), CallErrorKind::Refused);
             assert!(error.to_string().contains("does not import resource"));
-            assert_eq!(host.0.load(Ordering::Relaxed), 0);
+            assert_eq!(host.0.active.load(Ordering::Relaxed), 0);
+        });
+}
+
+#[test]
+fn guest_resource_conversion_failure_aborts_the_host_stream() {
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let host = InvalidResourceStreamHost::default();
+            let app = App::builder()
+                .engine(WasmtimeEngine::new().unwrap())
+                .provide(Provided::new(RESOURCE_HOST, host.clone()))
+                .build()
+                .unwrap();
+            app.load(
+                Component::from_bytes(resource_stream_component())
+                    .unwrap()
+                    .named("resources"),
+            )
+            .await
+            .unwrap();
+
+            let error = app
+                .call(
+                    "resources",
+                    RESOURCE_CLIENT,
+                    "send-invalid-sessions",
+                    Vec::new(),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind(), CallErrorKind::Refused);
+            assert!(error.to_string().contains("is no longer owned"));
+            let read = host.0.read.lock().unwrap().take().unwrap();
+            assert_eq!(
+                read.await.unwrap(),
+                "stream was aborted when its invocation ended"
+            );
+            assert_eq!(host.0.active.load(Ordering::Relaxed), 0);
+            assert_eq!(
+                app.call("resources", RESOURCE_CLIENT, "run", vec![Val::Bool(false)])
+                    .await
+                    .unwrap(),
+                [Val::from("profile:recovered")]
+            );
+            assert_eq!(host.0.active.load(Ordering::Relaxed), 0);
         });
 }
 

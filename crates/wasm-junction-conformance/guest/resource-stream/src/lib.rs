@@ -42,7 +42,6 @@ impl bindings::exports::example::resources::client::Guest for Component {
         });
         host::accept_sessions(reader).await
     }
-
 }
 
 fn profiles(values: Vec<Session>) -> Vec<String> {
