@@ -93,29 +93,6 @@ impl bindings::exports::example::streams::probe::Guest for Component {
         host::advance();
     }
 
-    async fn send_values() {
-        let (mut writer, reader) = bindings::wit_stream::new();
-        wit_bindgen::spawn_local(async move {
-            let _ = writer
-                .write_all(vec![host::Note {
-                    text: "guest".to_owned(),
-                }])
-                .await;
-        });
-        host::accept_values(reader).await;
-    }
-
-    fn return_values() -> StreamReader<host::Note> {
-        let (mut writer, reader) = bindings::wit_stream::new();
-        wit_bindgen::spawn_local(async move {
-            let _ = writer
-                .write_all(vec![host::Note {
-                    text: "guest".to_owned(),
-                }])
-                .await;
-        });
-        reader
-    }
 }
 
 fn text(bytes: Vec<u8>) -> String {

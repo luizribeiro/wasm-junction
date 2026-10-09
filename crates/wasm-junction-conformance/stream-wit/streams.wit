@@ -1,10 +1,6 @@
 package example:streams@0.1.0;
 
 interface host {
-  record note {
-    text: string,
-  }
-
   motd: func() -> stream<u8>;
   audit: async func(lines: stream<u8>);
   optional: async func(bytes: option<stream<u8>>) -> option<stream<u8>>;
@@ -12,12 +8,9 @@ interface host {
   advance: func();
   checkpoint: async func();
   poison: async func(lines: stream<u8>);
-  accept-values: async func(values: stream<note>);
 }
 
 interface probe {
-  use host.{note};
-
   echo-bytes: func(bytes: list<u8>) -> list<u8>;
   motd: async func() -> string;
   audit: async func();
@@ -30,8 +23,6 @@ interface probe {
   return-host: func() -> stream<u8>;
   return-guest: func() -> stream<u8>;
   poison-streams: async func();
-  send-values: async func();
-  return-values: func() -> stream<note>;
 }
 
 world streams {

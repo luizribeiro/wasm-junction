@@ -5,7 +5,8 @@ use std::time::Duration;
 
 use wasm_junction::{App, CallErrorKind, Component, InputStream, OutputStream, Val};
 use wasm_junction_conformance::{
-    PoisonHost, RetainHost, STREAM_PROBE, StreamHost, run_streams, stream_component,
+    PoisonHost, RetainHost, STREAM_PROBE, StreamHost, VALUE_STREAM_PROBE, ValueStreamHost,
+    run_streams, stream_component, value_stream_component,
 };
 use wasm_junction_wasmtime::WasmtimeEngine;
 
@@ -142,83 +143,75 @@ fn open_guest_stream_is_aborted_when_its_store_ends() {
 }
 
 #[test]
-fn guest_value_stream_import_is_closed_and_refused_without_poisoning_later_calls() {
+fn string_streams_cross_imports_and_exports_in_order() {
     tokio::runtime::Builder::new_current_thread()
         .build()
         .unwrap()
         .block_on(async {
-            let host = StreamHost::default();
+            let host = ValueStreamHost::default();
             let app = App::builder()
                 .engine(WasmtimeEngine::new().unwrap())
                 .provide(host.clone().provided())
                 .build()
                 .unwrap();
             app.load(
-                Component::from_bytes(stream_component())
+                Component::from_bytes(value_stream_component())
                     .unwrap()
-                    .named("streams"),
+                    .named("value-streams"),
             )
             .await
             .unwrap();
 
-            let error = app
-                .call("streams", STREAM_PROBE, "send-values", Vec::new())
+            let output = app
+                .call(
+                    "value-streams",
+                    VALUE_STREAM_PROBE,
+                    "exchange-strings",
+                    Vec::new(),
+                )
                 .await
-                .unwrap_err();
-            assert_eq!(error.kind(), CallErrorKind::Refused);
-            assert_eq!(
-                error.to_string(),
-                "stream item type `record` is not supported on Wasmtime; supported item types are scalar values, strings, resources, and lists or options nested up to two layers"
-            );
-            assert_eq!(host.value_calls(), 0);
-            assert_eq!(
-                app.call("streams", STREAM_PROBE, "motd", Vec::new())
-                    .await
-                    .unwrap(),
-                [Val::from("Have a good day.")]
-            );
-        });
-}
-
-#[test]
-fn guest_value_stream_export_is_closed_and_refused_without_poisoning_later_calls() {
-    tokio::runtime::Builder::new_current_thread()
-        .build()
-        .unwrap()
-        .block_on(async {
-            let host = StreamHost::default();
-            let app = App::builder()
-                .engine(WasmtimeEngine::new().unwrap())
-                .provide(host.provided())
-                .build()
                 .unwrap();
-            app.load(
-                Component::from_bytes(stream_component())
-                    .unwrap()
-                    .named("streams"),
-            )
-            .await
-            .unwrap();
-
-            let error = app
-                .call("streams", STREAM_PROBE, "return-values", Vec::new())
-                .await
-                .unwrap_err();
-            assert_eq!(error.kind(), CallErrorKind::Refused);
             assert_eq!(
-                error.to_string(),
-                "stream item type `record` is not supported on Wasmtime; supported item types are scalar values, strings, resources, and lists or options nested up to two layers"
+                output,
+                [Val::List(vec![
+                    Val::from("host one"),
+                    Val::from("host two")
+                ])]
             );
+            assert_eq!(host.strings(), ["guest one", "guest two"]);
+
+            let input = OutputStream::from_items(["first".to_owned(), "second".to_owned()]);
             assert_eq!(
                 app.call(
-                    "streams",
-                    STREAM_PROBE,
-                    "echo-bytes",
-                    vec![Val::Bytes(b"next".to_vec())],
+                    "value-streams",
+                    VALUE_STREAM_PROBE,
+                    "echo-strings",
+                    vec![input.into()],
                 )
                 .await
                 .unwrap(),
-                [Val::Bytes(b"next".to_vec())]
+                [Val::List(vec![Val::from("first"), Val::from("second")])]
+            );
+
+            let mut returned = app
+                .call(
+                    "value-streams",
+                    VALUE_STREAM_PROBE,
+                    "return-host-strings",
+                    Vec::new(),
+                )
+                .await
+                .unwrap();
+            let Val::Stream(stream) = returned.remove(0) else {
+                panic!("expected string stream")
+            };
+            assert_eq!(
+                InputStream::<String>::from_handle(stream)
+                    .unwrap()
+                    .read_all()
+                    .await
+                    .unwrap(),
+                ["host one", "host two"]
             );
         });
 }

@@ -16,7 +16,6 @@ struct State {
     advanced: bool,
     reader_closed: bool,
     write_error: Option<String>,
-    value_calls: usize,
 }
 
 /// The host used by byte-stream conformance scenarios.
@@ -77,12 +76,6 @@ impl StreamHost {
     #[must_use]
     pub fn write_error(&self) -> Option<String> {
         self.lock().write_error.clone()
-    }
-
-    /// Returns how many unsupported value streams reached the host implementation.
-    #[must_use]
-    pub fn value_calls(&self) -> usize {
-        self.lock().value_calls
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
@@ -293,15 +286,6 @@ impl host::Host for StreamHost {
         _lines: InputStream,
     ) -> impl Future<Output = Result<(), CallError>> {
         std::future::ready(Err(CallError::refused("stream refused")))
-    }
-
-    fn accept_values(
-        &self,
-        _cx: &CallContext,
-        _values: InputStream<host::Note>,
-    ) -> impl Future<Output = Result<(), CallError>> {
-        self.lock().value_calls += 1;
-        std::future::ready(Ok(()))
     }
 }
 
