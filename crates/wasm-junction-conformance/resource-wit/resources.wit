@@ -20,6 +20,7 @@ interface client {
     inspect: func(value: borrow<session>) -> string;
     round-trip-file: func(value: file) -> file;
     round-trip: func(value: session) -> session;
+    return-sessions: func() -> list<session>;
 }
 
 world resource-client {

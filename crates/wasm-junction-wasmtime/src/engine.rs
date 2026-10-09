@@ -549,12 +549,19 @@ pub(crate) fn lift_resource(
         definition.name.clone(),
         resource.rep(),
     );
-    if owned {
-        store
+    if owned
+        && !store
             .as_context_mut()
             .data_mut()
             .owned_resources
-            .remove(&resource);
+            .remove(&resource)
+    {
+        return Err(wasmtime::Error::new(CallError::refused(format!(
+            "resource `{}/{}#{}` is no longer owned by this invocation",
+            resource.interface(),
+            resource.name(),
+            resource.id()
+        ))));
     }
     Ok(resource)
 }

@@ -367,6 +367,86 @@ fn resources_cross_guest_exports_as_borrows_and_owned_values() {
     drop_host_resource(&app, file);
 }
 
+#[test]
+fn guest_created_resources_return_normally() {
+    let host = ResourceHost::default();
+    let app = App::builder()
+        .engine(WasmtimeEngine::new().unwrap())
+        .provide(host.clone().provided())
+        .build()
+        .unwrap();
+    let component = Component::from_bytes(resource_component())
+        .unwrap()
+        .named("resource-client");
+    block_on(app.load(component)).unwrap();
+
+    let output = block_on(app.call(
+        "resource-client",
+        RESOURCE_CLIENT,
+        "return-sessions",
+        Vec::new(),
+    ))
+    .unwrap();
+    let [Val::List(values)] = output.as_slice() else {
+        panic!("guest did not return its sessions");
+    };
+    assert_eq!(values.len(), 2);
+    assert_eq!(host.active_resources(), 2);
+    for value in values {
+        let Val::Resource(resource) = value else {
+            panic!("guest returned a non-resource session");
+        };
+        drop_host_resource(&app, resource.clone());
+    }
+    assert_eq!(host.active_resources(), 0);
+}
+
+struct DuplicateResourceResults;
+
+impl Provider for DuplicateResourceResults {
+    fn call<'a>(
+        &'a self,
+        _context: &'a CallContext,
+        call: Call,
+    ) -> BoxFuture<'a, Result<Vals, CallError>> {
+        Box::pin(async move {
+            match call.function.as_ref() {
+                "[constructor]session" => Ok(vec![Val::Resource(Resource::owned(
+                    RESOURCE_HOST,
+                    "session",
+                    0,
+                ))]),
+                function => Err(CallError::unavailable(format!(
+                    "duplicate resource host has no `{function}` function"
+                ))),
+            }
+        })
+    }
+}
+
+#[test]
+fn duplicate_owned_resource_results_are_refused() {
+    let app = App::builder()
+        .engine(WasmtimeEngine::new().unwrap())
+        .provide(Provided::new(RESOURCE_HOST, DuplicateResourceResults))
+        .build()
+        .unwrap();
+    let component = Component::from_bytes(resource_component())
+        .unwrap()
+        .named("resource-client");
+    block_on(app.load(component)).unwrap();
+
+    let error = block_on(app.call(
+        "resource-client",
+        RESOURCE_CLIENT,
+        "return-sessions",
+        Vec::new(),
+    ))
+    .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert!(error.to_string().contains("is no longer owned"), "{error}");
+}
+
 struct WrongResourceResult;
 
 impl Provider for WrongResourceResult {
