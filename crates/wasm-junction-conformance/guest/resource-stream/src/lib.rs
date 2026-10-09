@@ -14,6 +14,13 @@ use wit_bindgen::StreamReader;
 struct Component;
 
 impl bindings::exports::example::resources::client::Guest for Component {
+    fn run(trap: bool) -> String {
+        let session = Session::new("Ada");
+        let profile = session.profile();
+        assert!(!trap, "resource fixture trap");
+        profile
+    }
+
     async fn use_host_sessions() -> Vec<String> {
         profiles(
             host::sessions(&["Ada".to_owned(), "Grace".to_owned()])
@@ -24,6 +31,16 @@ impl bindings::exports::example::resources::client::Guest for Component {
 
     async fn use_sessions(values: StreamReader<Session>) -> Vec<String> {
         profiles(values.collect().await)
+    }
+
+    async fn send_invalid_sessions() -> String {
+        let (mut writer, reader) = bindings::wit_stream::new();
+        wit_bindgen::spawn_local(async move {
+            let _ = writer
+                .write_all(vec![Session::new("Ada"), Session::new("duplicate")])
+                .await;
+        });
+        host::accept_sessions(reader).await
     }
 
 }

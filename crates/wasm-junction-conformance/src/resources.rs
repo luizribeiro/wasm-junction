@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use wasm_junction::{CallContext, CallError, OutputStream, Provided};
+use wasm_junction::{CallContext, CallError, InputStream, OutputStream, Provided};
 
 wasm_junction::bindgen!({
     path: "resource-stream-wit",
@@ -60,6 +60,16 @@ impl host::Host for ResourceHost {
     ) -> Result<OutputStream<String>, CallError> {
         self.0.active.fetch_add(users.len(), Ordering::Relaxed);
         Ok(OutputStream::from_items(users))
+    }
+
+    async fn accept_sessions(
+        &self,
+        _cx: &CallContext,
+        values: InputStream<String>,
+    ) -> Result<String, CallError> {
+        let values = values.read_all().await?;
+        self.0.active.fetch_sub(values.len(), Ordering::Relaxed);
+        Ok(format!("accepted {} sessions", values.len()))
     }
 
     fn drop_file(&self, _cx: &CallContext, _file: String) -> Result<(), CallError> {

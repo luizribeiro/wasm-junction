@@ -10,13 +10,16 @@ interface host {
         profile: func() -> string;
     }
     sessions: func(users: list<string>) -> stream<session>;
+    accept-sessions: async func(values: stream<session>) -> string;
 }
 
 interface client {
     use host.{session};
 
+    run: func(trap: bool) -> string;
     use-host-sessions: async func() -> list<string>;
     use-sessions: async func(values: stream<session>) -> list<string>;
+    send-invalid-sessions: async func() -> string;
 }
 
 world resource-stream {
