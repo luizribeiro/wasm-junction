@@ -205,6 +205,7 @@ mod tests {
 
     #[test]
     fn transpiles_every_conformance_component_for_browsers() {
+        // The value-stream component is excluded because jco value streams are not supported yet.
         let components = [
             ("notes", wasm_junction_conformance::component()),
             (
@@ -233,8 +234,9 @@ mod tests {
                 wasm_junction_conformance::reload_writer_component(),
             ),
         ];
-        for (_name, bytes) in components {
-            let output = transpile_component(bytes).unwrap();
+        for (name, bytes) in components {
+            let output = transpile_component(bytes)
+                .unwrap_or_else(|error| panic!("could not transpile {name}: {error}"));
             assert!(!output.modules.is_empty());
             assert!(!output.source.lines().any(is_static_import));
             assert!(!output.source.contains("node:"));

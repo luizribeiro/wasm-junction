@@ -8,6 +8,7 @@ fn main() -> std::io::Result<()> {
     println!("cargo::rerun-if-changed=resource-wit");
     println!("cargo::rerun-if-changed=reload-wit");
     println!("cargo::rerun-if-changed=stream-wit");
+    println!("cargo::rerun-if-changed=value-stream-wit");
     println!("cargo::rerun-if-changed=wit");
     build(
         "guest/Cargo.toml",
@@ -30,6 +31,11 @@ fn main() -> std::io::Result<()> {
         )
     })?;
     build("guest/Cargo.toml", "streams_guest.wasm", "streams.wasm")?;
+    build(
+        "guest/Cargo.toml",
+        "value_streams_guest.wasm",
+        "value-streams.wasm",
+    )?;
     for (binary, output) in [
         ("reload_v1_guest.wasm", "reload-v1.wasm"),
         ("reload_v2_guest.wasm", "reload-v2.wasm"),
