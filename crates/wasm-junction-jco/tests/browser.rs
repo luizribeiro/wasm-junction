@@ -20,13 +20,14 @@ use wasm_junction::{
     OutputStream, Provided, Provider, Resource, Val, Vals,
 };
 use wasm_junction_conformance::{
-    CYCLE_A, DECORATION, DISPATCH_PINGER, DISPATCH_RUNNER, Fixture, FixtureHost, PoisonHost,
-    RESOURCE_CLIENT, ReloadGreeter, ReloadHost, ResourceHost, RetainHost, RoutedFixture,
-    RoutedHost, STREAM_PROBE, SUMMARIZER, StreamHost, TRANSLATOR, VALUE_STREAM_PROBE,
-    ValueStreamHost, WRITER, component, cycle_a_component, cycle_b_component, dispatch_component,
-    reload_v1_component, reload_v2_component, resource_component, run_default, run_reload,
-    run_resource_refusal, run_resources, run_routed, run_streams, sample_note, sample_summary,
-    stream_component, translator_component, value_stream_component, writer_component,
+    CYCLE_A, DECORATION, DISPATCH_PINGER, DISPATCH_RUNNER, Fixture, FixtureHost,
+    NAMED_VALUE_STREAM_PROBE, PoisonHost, RESOURCE_CLIENT, ReloadGreeter, ReloadHost, ResourceHost,
+    RetainHost, RoutedFixture, RoutedHost, STREAM_PROBE, SUMMARIZER, StreamHost, TRANSLATOR,
+    VALUE_STREAM_PROBE, ValueStreamHost, WRITER, component, cycle_a_component, cycle_b_component,
+    dispatch_component, named_value_stream_component, reload_v1_component, reload_v2_component,
+    resource_component, run_default, run_reload, run_resource_refusal, run_resources, run_routed,
+    run_streams, sample_note, sample_summary, stream_component, translator_component,
+    value_stream_component, writer_component,
 };
 use wasm_junction_jco::JcoEngine;
 
@@ -398,6 +399,57 @@ async fn value_stream_recovers_after_the_guest_drops_early() {
         )
         .await
         .is_ok()
+    );
+}
+
+#[wasm_bindgen_test]
+async fn nested_and_named_value_streams_round_trip() {
+    let app = App::builder()
+        .engine(JcoEngine::new())
+        .provide(ValueStreamHost::default().provided())
+        .build()
+        .unwrap();
+    app.load(
+        Component::from_bytes(value_stream_component())
+            .unwrap()
+            .named("values"),
+    )
+    .await
+    .unwrap();
+    app.load(
+        Component::from_bytes(named_value_stream_component())
+            .unwrap()
+            .named("named"),
+    )
+    .await
+    .unwrap();
+
+    let item = Val::List(vec![Val::Option(Some(Box::new(Val::from("nested"))))]);
+    let stream = OutputStream::from_items([item.clone()]).__into_handle_with(Ok);
+    assert_eq!(
+        app.call(
+            "values",
+            VALUE_STREAM_PROBE,
+            "echo-nested",
+            vec![Val::Stream(stream)]
+        )
+        .await
+        .unwrap(),
+        [Val::List(vec![item])]
+    );
+
+    let note = Val::Record(vec![("text".to_owned(), Val::from("hello"))]);
+    let stream = OutputStream::from_items([note.clone()]).__into_handle_with(Ok);
+    assert_eq!(
+        app.call(
+            "named",
+            NAMED_VALUE_STREAM_PROBE,
+            "echo",
+            vec![Val::Stream(stream)]
+        )
+        .await
+        .unwrap(),
+        [Val::List(vec![note])]
     );
 }
 
