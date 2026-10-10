@@ -11,15 +11,25 @@ const TCP_SOCKET: &str = "tcp-socket";
 const UDP_SOCKET: &str = "udp-socket";
 
 mod gate;
+mod tcp;
 #[cfg(test)]
-#[allow(dead_code, reason = "socket family tests consume this support")]
 mod test_support;
 mod udp;
 mod values;
 
+impl WitResource for TcpSocket {
+    const INTERFACE: &'static str = INTERFACE;
+    const NAME: &'static str = TCP_SOCKET;
+}
+
 impl WitResource for UdpSocket {
     const INTERFACE: &'static str = INTERFACE;
     const NAME: &'static str = UDP_SOCKET;
+}
+
+fn validate_tcp(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
+    validate_borrowed::<TcpSocket>(values.first().ok_or_else(|| shape(TCP_SOCKET))?, store)?;
+    validate_handle_contexts(values, store)
 }
 
 fn validate_udp(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
@@ -46,6 +56,7 @@ fn require_sockets(store: &StoreData) -> Result<(), CallError> {
 }
 
 pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    tcp::add(linker)?;
     udp::add(linker)?;
     gate::add_lookup(linker)
 }
