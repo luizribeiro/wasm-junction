@@ -17,14 +17,18 @@ struct TransformStreams;
 
 impl Middleware for TransformStreams {
     async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        let transforms = call.interface.as_ref() == support::STREAM_BINDGEN_HOST;
         let function = call.function.clone();
         let mut values = next.run(call).await?;
-        if let Some(Val::Stream(stream)) = values.first_mut() {
+        if transforms && let Some(Val::Stream(stream)) = values.first_mut() {
             *stream = match function.as_ref() {
-                "top" => stream.take().map_chunks(|mut bytes| {
-                    bytes.make_ascii_uppercase();
-                    bytes
-                }),
+                "top" => stream.take().map_chunks_with_flush(
+                    |mut bytes| {
+                        bytes.make_ascii_uppercase();
+                        bytes
+                    },
+                    || b"!".to_vec(),
+                ),
                 "records" => stream.take().filter_items(|item| {
                     !matches!(item, Val::Record(fields) if matches!(
                         fields.first(), Some((_, Val::String(title))) if title == "second"
@@ -100,7 +104,7 @@ fn app_maps_streams_at_top_level_and_inside_option_and_result() {
     let (_app, handle) = app();
     assert_eq!(
         bytes(support::block_on(handle.top(OutputStream::from_bytes(b"top"))).unwrap()),
-        b"TOP"
+        b"TOP!"
     );
     assert_eq!(
         support::block_on(handle.optional(None)).unwrap().map(bytes),

@@ -349,7 +349,7 @@ pub const EXPECTED_STREAM_TRACE: &[&str] = &[
     "return streams → host example:streams/host@0.1.0.motd(stream)",
     "channel open stream#0 host-to-guest",
     "channel close stream#0 host-to-guest",
-    "return host → streams example:streams/probe@0.1.0.motd(\"Have a good day.\")",
+    "return host → streams example:streams/probe@0.1.0.motd(\"Have a good day. Stay curious.\")",
     "invocation end streams",
     "invocation start streams",
     "call host → streams example:streams/probe@0.1.0.audit()",

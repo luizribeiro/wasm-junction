@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use wasm_junction::{
-    App, CallError, CallErrorKind, Component, Engine, ImportDispatcher, InvocationContext,
-    Resource, Val, Vals,
+    App, Call, CallError, CallErrorKind, Component, Engine, ImportDispatcher, InvocationContext,
+    Middleware, Next, Resource, Val, Vals,
 };
 
 use crate::host::summary;
@@ -49,6 +49,22 @@ pub struct StreamFixture {
     trace: Trace,
 }
 
+struct FlushMotd;
+
+impl Middleware for FlushMotd {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        let flushes =
+            call.interface.as_ref() == crate::STREAM_HOST && call.function.as_ref() == "motd";
+        let mut output = next.run(call).await?;
+        if flushes && let Some(Val::Stream(stream)) = output.first_mut() {
+            *stream = stream
+                .take()
+                .map_chunks_with_flush(|chunk| chunk, || b" Stay curious.".to_vec());
+        }
+        Ok(output)
+    }
+}
+
 impl StreamFixture {
     /// Builds and loads the stream guest with its host and tracer.
     ///
@@ -62,6 +78,7 @@ impl StreamFixture {
             .engine(engine)
             .provide(host.clone().provided())
             .middleware(trace.clone())
+            .middleware(FlushMotd)
             .build()
             .map_err(FixtureError::source)?;
         app.load(
@@ -481,7 +498,7 @@ pub async fn run_streams(engine: impl Engine + 'static) -> Result<StreamFixture,
         .call("motd", Vec::new())
         .await
         .map_err(FixtureError::source)?;
-    if output != [Val::from("Have a good day.")] {
+    if output != [Val::from("Have a good day. Stay curious.")] {
         return Err(FixtureError::new(format!("unexpected motd: {output:?}")));
     }
     fixture
