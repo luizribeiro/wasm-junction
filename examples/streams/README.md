@@ -2,9 +2,9 @@
 
 This example shows middleware changing both byte and typed streams in a support-ticket workflow.
 The guest sends a transcript to the host in two chunks, with `ada@example.com` split between
-them. The middleware uses `map_chunks` and keeps partial matches between calls, so the host stores
-the transcript with the address redacted.
-`map_chunks` has no end callback, so an email candidate still partial at EOF is dropped.
+them. The middleware uses `map_chunks_with_flush` and keeps partial matches between calls, so the
+host stores the transcript with the address redacted. Its flush callback emits a partial candidate
+at the end because, without the remaining characters, it cannot be the email being redacted.
 
 The host then returns a `stream<string>` of public and private tickets. The same middleware uses
 `filter_items` to remove private tickets before the guest reads them, and the guest summarises only

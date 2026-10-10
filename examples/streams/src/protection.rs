@@ -1,6 +1,6 @@
 //! Stream transformations used by this example.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use wasm_junction::{Call, CallError, Middleware, Next, Val, Vals};
 
@@ -15,13 +15,22 @@ impl Middleware for ProtectTickets {
         let stores_transcript = call.interface.as_ref() == SUPPORT_INTERFACE
             && call.function.as_ref() == "store-transcript";
         if stores_transcript && let Some(Val::Stream(stream)) = call.args.first_mut() {
-            let redactor = Mutex::new(EmailRedactor::default());
-            *stream = stream.take().map_chunks(move |chunk| {
-                redactor
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .redact(chunk)
-            });
+            let redactor = Arc::new(Mutex::new(EmailRedactor::default()));
+            let flushed = redactor.clone();
+            *stream = stream.take().map_chunks_with_flush(
+                move |chunk| {
+                    redactor
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .redact(chunk)
+                },
+                move || {
+                    flushed
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .finish()
+                },
+            );
         }
 
         let filters_tickets =
@@ -37,7 +46,6 @@ impl Middleware for ProtectTickets {
 }
 
 #[derive(Default)]
-/// A partial candidate is lost at EOF because `map_chunks` has no end callback to flush it.
 struct EmailRedactor {
     pending: Vec<u8>,
 }
@@ -57,6 +65,11 @@ impl EmailRedactor {
             }
         }
         output
+    }
+
+    fn finish(&mut self) -> Vec<u8> {
+        // `redact` consumes complete matches, so only a non-email prefix can remain.
+        std::mem::take(&mut self.pending)
     }
 }
 
@@ -80,10 +93,20 @@ mod tests {
     }
 
     #[test]
-    fn leaves_a_partial_candidate_buffered_at_end_of_stream() {
+    fn flushes_a_partial_candidate_at_end_of_stream() {
         let mut redactor = EmailRedactor::default();
-        let output = redactor.redact(b"Customer email: ada@exa".to_vec());
-        assert_eq!(output, b"Customer email: ");
-        assert_eq!(redactor.pending, b"ada@exa");
+        let mut output = redactor.redact(b"Customer email: ada@exa".to_vec());
+        output.extend(redactor.finish());
+        assert_eq!(output, b"Customer email: ada@exa");
+        assert!(redactor.pending.is_empty());
+    }
+
+    #[test]
+    fn redacts_a_complete_email_at_end_of_stream() {
+        let mut redactor = EmailRedactor::default();
+        let mut output = redactor.redact(b"Customer email: ada@example.com".to_vec());
+        output.extend(redactor.finish());
+        assert_eq!(output, b"Customer email: [redacted email]");
+        assert!(redactor.pending.is_empty());
     }
 }
