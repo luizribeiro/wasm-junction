@@ -261,6 +261,143 @@ fn tcp_accept_stream_echoes_two_complete_requests() {
     );
 }
 
+#[cfg(feature = "wasi-p3")]
+fn accept_stream(values: &mut Vals) -> &mut StreamHandle {
+    let [Val::Result(Ok(Some(value)))] = values.as_mut_slice() else {
+        panic!("listen returned the wrong shape")
+    };
+    let Val::Stream(stream) = value.as_mut() else {
+        panic!("listen returned no stream")
+    };
+    stream
+}
+
+#[cfg(feature = "wasi-p3")]
+struct FilterAccepted {
+    sender: Mutex<Option<std::sync::mpsc::Sender<u16>>>,
+    accepted: Arc<AtomicUsize>,
+    filtered: Arc<Mutex<BTreeSet<u32>>>,
+    dropped: Arc<AtomicUsize>,
+}
+
+#[cfg(feature = "wasi-p3")]
+impl Middleware for FilterAccepted {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        let listen = call.interface.as_ref() == "wasi:sockets/types@0.3.0"
+            && call.function.as_ref() == "[method]tcp-socket.listen";
+        if listen
+            && let Some(port) = call.args.get(1).and_then(socket_port)
+            && let Some(sender) = self.sender.lock().unwrap().take()
+        {
+            sender.send(port).unwrap();
+        }
+        let mut values = next.run(call).await?;
+        if listen {
+            let accepted = self.accepted.clone();
+            let filtered = self.filtered.clone();
+            let stream = accept_stream(&mut values);
+            *stream = stream.take().filter_items(move |item| {
+                let keep = matches!(accepted.fetch_add(1, Ordering::Relaxed), 0 | 4..);
+                if !keep && let Val::Resource(resource) = item {
+                    filtered.lock().unwrap().insert(resource.id());
+                }
+                keep
+            });
+        }
+        Ok(values)
+    }
+
+    fn event(&self, event: &Event) {
+        if matches!(
+            event,
+            Event::ResourceDrop { interface, resource, id, .. }
+                if interface.as_ref() == "wasi:sockets/types@0.3.0"
+                    && resource.as_ref() == "tcp-socket"
+                    && self.filtered.lock().unwrap().contains(id)
+        ) {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+#[cfg(feature = "wasi-p3")]
+fn discarded_request(port: u16, request: &'static [u8]) -> std::thread::JoinHandle<bool> {
+    let mut client = tcp_connect(port);
+    client
+        .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+        .unwrap();
+    client.write_all(request).unwrap();
+    client.shutdown(Shutdown::Write).unwrap();
+    std::thread::spawn(move || {
+        let mut response = Vec::new();
+        match client.read_to_end(&mut response) {
+            Ok(_) => response.is_empty(),
+            Err(error) => error.kind() == std::io::ErrorKind::ConnectionReset,
+        }
+    })
+}
+
+#[cfg(feature = "wasi-p3")]
+fn wait_for_accept(accepted: &AtomicUsize, count: usize) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while accepted.load(Ordering::Relaxed) < count {
+        assert!(std::time::Instant::now() < deadline, "accept timed out");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+#[test]
+#[cfg(feature = "wasi-p3")]
+fn middleware_can_drop_an_accepted_socket() {
+    let (port_sender, port_receiver) = std::sync::mpsc::channel();
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let client_accepted = accepted.clone();
+    let clients = std::thread::spawn(move || {
+        let port = port_receiver.recv().unwrap();
+        let first = tcp_request(port, b"first");
+        let mut discarded = Vec::new();
+        for (index, request) in [
+            b"discarded one".as_slice(),
+            b"discarded two",
+            b"discarded three",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            discarded.push(discarded_request(port, request));
+            wait_for_accept(&client_accepted, index + 2);
+        }
+        let last = tcp_request(port, b"last");
+        let discarded = discarded
+            .into_iter()
+            .map(|client| client.join().unwrap())
+            .collect::<Vec<_>>();
+        (first, discarded, last)
+    });
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let app = sockets_app(FilterAccepted {
+        sender: Mutex::new(Some(port_sender)),
+        accepted: accepted.clone(),
+        filtered: Arc::new(Mutex::new(BTreeSet::new())),
+        dropped: dropped.clone(),
+    });
+
+    let result = block_on(app.call("p3", EXPORT, "tcp-echo", vec![Val::U8(2)])).unwrap();
+    assert_eq!(
+        result,
+        [Val::Result(Ok(Some(Box::new(Val::List(vec![
+            Val::from("first"),
+            Val::from("last"),
+        ])))))]
+    );
+    assert_eq!(
+        clients.join().unwrap(),
+        (b"first".to_vec(), vec![true; 3], b"last".to_vec())
+    );
+    assert_eq!(accepted.load(Ordering::Relaxed), 5);
+    assert_eq!(dropped.load(Ordering::Relaxed), 3);
+}
+
 #[test]
 #[cfg(feature = "wasi-p3")]
 fn tcp_stream_failures_reach_the_guest() {
