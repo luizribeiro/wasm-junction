@@ -272,11 +272,28 @@ async fn bidirectional_streams_match_the_engine_neutral_trace() {
     run_streams(JcoEngine::new()).await.unwrap();
 }
 
+struct FilterValueItems;
+
+impl Middleware for FilterValueItems {
+    async fn call(&self, mut call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.function.as_ref() == "echo-strings"
+            && let Some(Val::Stream(stream)) = call.args.first_mut()
+        {
+            *stream = stream
+                .take()
+                .filter_items(|item| item != &Val::from("hidden"));
+        }
+        next.run(call).await
+    }
+}
+
 #[wasm_bindgen_test]
 async fn host_value_stream_items_reach_the_guest_in_order() {
+    let host = ValueStreamHost::default();
     let app = App::builder()
         .engine(JcoEngine::new())
-        .provide(ValueStreamHost::default().provided())
+        .middleware(FilterValueItems)
+        .provide(host.clone().provided())
         .build()
         .unwrap();
     app.load(
@@ -287,7 +304,8 @@ async fn host_value_stream_items_reach_the_guest_in_order() {
     .await
     .unwrap();
 
-    let input = OutputStream::from_items(["first".to_owned(), "second".to_owned()]);
+    let input =
+        OutputStream::from_items(["first".to_owned(), "hidden".to_owned(), "second".to_owned()]);
     assert_eq!(
         app.call(
             "value-streams",
@@ -298,6 +316,43 @@ async fn host_value_stream_items_reach_the_guest_in_order() {
         .await
         .unwrap(),
         [Val::List(vec![Val::from("first"), Val::from("second")])]
+    );
+
+    assert_eq!(
+        app.call(
+            "value-streams",
+            VALUE_STREAM_PROBE,
+            "exchange-strings",
+            Vec::new(),
+        )
+        .await
+        .unwrap(),
+        [Val::List(vec![
+            Val::from("host one"),
+            Val::from("host two")
+        ])]
+    );
+    assert_eq!(host.strings(), ["guest one", "guest two"]);
+
+    let mut returned = app
+        .call(
+            "value-streams",
+            VALUE_STREAM_PROBE,
+            "return-host-strings",
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let Val::Stream(stream) = returned.remove(0) else {
+        panic!("expected a string stream")
+    };
+    assert_eq!(
+        InputStream::<String>::from_handle(stream)
+            .unwrap()
+            .read_all()
+            .await
+            .unwrap(),
+        ["host one", "host two"]
     );
 }
 

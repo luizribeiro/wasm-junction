@@ -10,13 +10,13 @@ use wasm_bindgen::{JsCast, prelude::*};
 use wasm_bindgen_futures::{future_to_promise, spawn_local};
 use wasm_junction_core::{
     BoxFuture, CallError, CompiledComponent, Engine, EngineError, ImportDispatcher,
-    InvocationContext, OutputStream, OutputStreamWriter, StreamHandle, Vals,
+    InvocationContext, OutputStream, OutputStreamWriter, StreamHandle, Val, Vals,
 };
 
 use crate::types::{Signatures, ValueType};
 use crate::values::{
     JsResult, ResourceTracker, default_result, lift_args_tracked, lift_result_error_tracked,
-    lift_result_tracked, lower_args_tracked, lower_result_tracked,
+    lift_result_tracked, lift_stream_chunk, lower_args_tracked, lower_result_tracked,
 };
 use crate::{TranspiledComponent, transpile_component};
 
@@ -261,9 +261,24 @@ struct Bridge {
 
 #[derive(Clone)]
 struct ActiveGuestStream {
-    writer: OutputStreamWriter,
+    writer: GuestWriter,
     stream: JsValue,
     pump: PumpControl,
+}
+
+#[derive(Clone)]
+enum GuestWriter {
+    Bytes(OutputStreamWriter),
+    Values(OutputStreamWriter<Val>),
+}
+
+impl GuestWriter {
+    fn abort(&self) {
+        match self {
+            Self::Bytes(writer) => writer.abort(),
+            Self::Values(writer) => writer.abort(),
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -336,6 +351,12 @@ impl PumpControl {
     }
 }
 
+fn remember_stream_error(stored: &RefCell<Option<CallError>>, error: CallError) {
+    if stored.borrow().is_none() {
+        *stored.borrow_mut() = Some(error);
+    }
+}
+
 impl Bridge {
     fn remember(&self, error: CallError) {
         let first = {
@@ -384,13 +405,19 @@ impl Bridge {
 
     fn open_guest_stream(
         stream: JsValue,
-        _item: ValueType,
+        item: ValueType,
         resources: ResourceTracker,
         active: Rc<RefCell<HashMap<u64, ActiveGuestStream>>>,
-        _import_error: Rc<RefCell<Option<CallError>>>,
+        import_error: Rc<RefCell<Option<CallError>>>,
     ) -> StreamHandle {
-        let (writer, output) = OutputStream::channel();
-        let handle = StreamHandle::from(output);
+        let byte_stream = item == ValueType::U8;
+        let (writer, handle) = if byte_stream {
+            let (writer, output) = OutputStream::<u8>::channel();
+            (GuestWriter::Bytes(writer), StreamHandle::from(output))
+        } else {
+            let (writer, output) = OutputStream::<Val>::channel();
+            (GuestWriter::Values(writer), StreamHandle::from(output))
+        };
         let id = handle.id();
         let pump = PumpControl::default();
         active.borrow_mut().insert(
@@ -402,12 +429,38 @@ impl Bridge {
             },
         );
         spawn_local(async move {
-            while let Some(Ok(value)) = pump.read(&stream, true).await {
-                if value.is_null() {
-                    break;
-                }
-                let bytes = Uint8Array::new(&value).to_vec();
-                if writer.write(bytes).await.is_err() {
+            while let Some(result) = pump.read(&stream, byte_stream).await {
+                let value = match result {
+                    Ok(value) if value.is_null() => break,
+                    Ok(value) => value,
+                    Err(error) => {
+                        remember_stream_error(
+                            &import_error,
+                            CallError::trap(format!(
+                                "could not read guest stream: {}",
+                                js_error(&error)
+                            )),
+                        );
+                        writer.abort();
+                        break;
+                    }
+                };
+                let written = match &writer {
+                    GuestWriter::Bytes(writer) => {
+                        writer.write(Uint8Array::new(&value).to_vec()).await
+                    }
+                    GuestWriter::Values(writer) => {
+                        match lift_stream_chunk(value, &item, &resources) {
+                            Ok(values) => writer.write(values).await,
+                            Err(error) => {
+                                remember_stream_error(&import_error, error);
+                                writer.abort();
+                                break;
+                            }
+                        }
+                    }
+                };
+                if written.is_err() {
                     let _ = close_guest_stream(&stream).await;
                     break;
                 }
