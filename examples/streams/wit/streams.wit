@@ -1,0 +1,15 @@
+package example:streams@0.1.0;
+
+interface support {
+  store-transcript: async func(transcript: stream<u8>);
+  tickets: func() -> stream<string>;
+}
+
+interface runner {
+  run: async func() -> string;
+}
+
+world plugin {
+  import support;
+  export runner;
+}
