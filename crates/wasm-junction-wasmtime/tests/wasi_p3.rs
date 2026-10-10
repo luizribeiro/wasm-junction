@@ -6,6 +6,8 @@ use std::future::Future;
 #[cfg(feature = "wasi-p3")]
 use std::io::{Read, Write};
 #[cfg(feature = "wasi-p3")]
+use std::net::UdpSocket as StdUdpSocket;
+#[cfg(feature = "wasi-p3")]
 use std::net::{Shutdown, TcpStream};
 #[cfg(feature = "wasi-p3")]
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -529,6 +531,84 @@ fn dropping_accept_stream_stops_its_pump_and_preserves_the_next_call() {
         .count();
     assert!(opens > 0);
     assert_eq!(opens, closes);
+}
+
+#[cfg(feature = "wasi-p3")]
+struct ObserveUdp {
+    sender: Mutex<Option<std::sync::mpsc::Sender<u16>>>,
+    calls: Arc<Mutex<Vec<(String, Vals)>>>,
+}
+
+#[cfg(feature = "wasi-p3")]
+impl Middleware for ObserveUdp {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        let observed = (call.interface.as_ref() == "wasi:sockets/types@0.3.0"
+            && matches!(
+                call.function.as_ref(),
+                "[method]udp-socket.send" | "[method]udp-socket.receive"
+            ))
+            || call.interface.as_ref() == "wasi:sockets/ip-name-lookup@0.3.0";
+        if observed {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((call.function.to_string(), call.args.clone()));
+        }
+        if call.function.as_ref() == "[method]udp-socket.receive"
+            && let Some(port) = call.args.last().and_then(socket_port)
+            && let Some(sender) = self.sender.lock().unwrap().take()
+        {
+            sender.send(port).unwrap();
+        }
+        next.run(call).await
+    }
+}
+
+#[test]
+#[cfg(feature = "wasi-p3")]
+fn udp_and_lookup_cross_middleware_with_socket_context() {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let peer = std::thread::spawn(move || {
+        let socket = StdUdpSocket::bind(("127.0.0.1", 0)).unwrap();
+        let port = receiver.recv().unwrap();
+        socket.send_to(b"datagram", ("127.0.0.1", port)).unwrap();
+        let mut bytes = [0; 32];
+        let (length, _) = socket.recv_from(&mut bytes).unwrap();
+        bytes[..length].to_vec()
+    });
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let app = sockets_app(ObserveUdp {
+        sender: Mutex::new(Some(sender)),
+        calls: calls.clone(),
+    });
+
+    let result = block_on(app.call("p3", EXPORT, "udp-receive", Vec::new())).unwrap();
+    assert_eq!(
+        result,
+        [Val::Result(Ok(Some(Box::new(Val::from("datagram")))))]
+    );
+    assert_eq!(peer.join().unwrap(), b"datagram");
+    let lookup = block_on(app.call("p3", EXPORT, "lookup-localhost", Vec::new())).unwrap();
+    assert!(matches!(
+        lookup.as_slice(),
+        [Val::Result(Ok(Some(value)))] if matches!(value.as_ref(), Val::U32(count) if *count > 0)
+    ));
+
+    let calls = calls.lock().unwrap();
+    for function in ["[method]udp-socket.receive", "[method]udp-socket.send"] {
+        let (_, args) = calls
+            .iter()
+            .find(|(observed, _)| observed == function)
+            .unwrap();
+        assert!(
+            args.last()
+                .and_then(socket_port)
+                .is_some_and(|port| port > 0)
+        );
+    }
+    assert!(calls.iter().any(|(function, args)| {
+        function == "resolve-addresses" && args.first() == Some(&Val::from("localhost"))
+    }));
 }
 
 #[test]
