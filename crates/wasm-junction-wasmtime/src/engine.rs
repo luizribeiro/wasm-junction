@@ -44,7 +44,6 @@ pub(crate) struct StoreData {
     pub(crate) resources: Arc<[ResourceDefinition]>,
     pub(crate) owned_resources: HashSet<Resource>,
     pub(crate) active_streams: crate::streams::ActiveStreams,
-    pub(crate) returnable_streams: crate::streams::ReturnableStreams,
     pub(crate) active_futures: ActiveFutures<FutureAny>,
 }
 
@@ -85,7 +84,6 @@ impl StoreData {
             resources: Arc::from([]),
             owned_resources: HashSet::new(),
             active_streams: Arc::new(Mutex::new(HashMap::new())),
-            returnable_streams: Vec::new(),
             active_futures: ActiveFutures::default(),
         }
     }
@@ -375,7 +373,6 @@ impl Compiled {
                 resources: self.resources.clone(),
                 owned_resources: HashSet::new(),
                 active_streams: Arc::new(std::sync::Mutex::new(HashMap::new())),
-                returnable_streams: Vec::new(),
                 active_futures: ActiveFutures::default(),
             },
         );

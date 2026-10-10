@@ -24,7 +24,6 @@ mod typed;
 #[cfg(feature = "wasi-p3")]
 pub(crate) use typed::{lift_static_stream, lower_static_stream};
 pub(crate) type ActiveStreams = Arc<Mutex<HashMap<u64, (ActiveWriter, ChannelDirection)>>>;
-pub(crate) type ReturnableStreams = Vec<(Type, Arc<Mutex<Option<InputStream<Val>>>>)>;
 
 pub(crate) enum ActiveWriter {
     Bytes(OutputStreamWriter),
@@ -196,30 +195,23 @@ pub(crate) fn lower_typed_stream(
         stream: id,
         direction: ChannelDirection::HostToGuest,
     });
-    let input = Arc::new(Mutex::new(Some(input)));
-    let returnable = input.clone();
     let stream = StreamAny::new(
         store.as_context_mut(),
         stream_type,
         ValProducer {
-            input,
-            item_type: item_type.clone(),
+            input: Some(input),
+            item_type,
             id,
             invocation,
             imports,
             closed: false,
         },
     )?;
-    store
-        .as_context_mut()
-        .data_mut()
-        .returnable_streams
-        .push((item_type, returnable));
     Ok(stream)
 }
 
 pub(crate) fn recover_exported_stream(
-    mut stream: StreamAny,
+    stream: StreamAny,
     mut store: impl AsContextMut<Data = StoreData>,
 ) -> Result<StreamHandle, wasmtime::Error> {
     let item_type = stream
@@ -233,27 +225,21 @@ pub(crate) fn recover_exported_stream(
         );
     }
 
-    let returnable = store
-        .as_context_mut()
-        .data_mut()
-        .returnable_streams
-        .iter()
-        .position(|(candidate, _)| candidate == &item_type)
-        .map(|index| {
-            store
-                .as_context_mut()
-                .data_mut()
-                .returnable_streams
-                .remove(index)
-                .1
-        });
-    let input = returnable.and_then(|input| lock_input(&input).take());
-    stream.close(store.as_context_mut())?;
-    input.map(InputStream::into_handle).ok_or_else(|| {
-        wasmtime::Error::new(wasm_junction_core::CallError::refused(
-            "guest-created streams cannot be returned because the Wasmtime store ends with each call",
-        ))
-    })
+    match stream.try_into::<ValProducer>(store.as_context_mut()) {
+        Ok(mut producer) => producer
+            .input
+            .take()
+            .map(InputStream::into_handle)
+            .ok_or_else(|| wasmtime::Error::msg("returned stream is no longer readable")),
+        Err(mut stream) => {
+            stream.close(store.as_context_mut())?;
+            Err(wasmtime::Error::new(
+                wasm_junction_core::CallError::refused(
+                    "guest-created streams cannot be returned because the Wasmtime store ends with each call",
+                ),
+            ))
+        }
+    }
 }
 
 fn recover_reader<T: 'static>(
@@ -362,7 +348,7 @@ impl StreamProducer<StoreData> for CoreProducer {
 }
 
 struct ValProducer {
-    input: Arc<Mutex<Option<InputStream<Val>>>>,
+    input: Option<InputStream<Val>>,
     item_type: Type,
     id: u64,
     invocation: InvocationId,
@@ -372,7 +358,7 @@ struct ValProducer {
 
 impl ValProducer {
     fn close(&mut self) {
-        if let Some(input) = lock_input(&self.input).take() {
+        if let Some(input) = self.input.take() {
             input.close_reader();
         }
         close_channel(
@@ -412,8 +398,7 @@ impl StreamProducer<StoreData> for ValProducer {
             return Poll::Ready(Ok(StreamResult::Completed));
         }
         let polled = {
-            let mut input = lock_input(&this.input);
-            let Some(input) = input.as_mut() else {
+            let Some(input) = this.input.as_mut() else {
                 return Poll::Ready(Ok(StreamResult::Dropped));
             };
             let future = input.read();
@@ -449,6 +434,14 @@ impl StreamProducer<StoreData> for ValProducer {
             }
             Poll::Pending => Poll::Pending,
         }
+    }
+
+    fn try_into(me: Pin<Box<Self>>, ty: TypeId) -> Result<Box<dyn Any>, Pin<Box<Self>>> {
+        if ty != TypeId::of::<Self>() {
+            return Err(me);
+        }
+        let producer: Box<Self> = Pin::into_inner(me);
+        Ok(producer)
     }
 }
 
@@ -649,15 +642,6 @@ pub(super) fn lock_active(
 ) -> MutexGuard<'_, HashMap<u64, (ActiveWriter, ChannelDirection)>> {
     match active.lock() {
         Ok(streams) => streams,
-        Err(poisoned) => poisoned.into_inner(),
-    }
-}
-
-fn lock_input(
-    input: &Arc<Mutex<Option<InputStream<Val>>>>,
-) -> MutexGuard<'_, Option<InputStream<Val>>> {
-    match input.lock() {
-        Ok(input) => input,
         Err(poisoned) => poisoned.into_inner(),
     }
 }

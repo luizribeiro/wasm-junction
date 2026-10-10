@@ -307,6 +307,65 @@ fn string_streams_cross_imports_and_exports_in_order() {
 }
 
 #[test]
+fn returned_same_type_streams_preserve_swapped_identity() {
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let app = App::builder()
+                .engine(WasmtimeEngine::new().unwrap())
+                .provide(ValueStreamHost::default().provided())
+                .build()
+                .unwrap();
+            app.load(
+                Component::from_bytes(value_stream_component())
+                    .unwrap()
+                    .named("value-streams"),
+            )
+            .await
+            .unwrap();
+
+            let first = OutputStream::from_items(["first".to_owned()]);
+            let second = OutputStream::from_items(["second".to_owned()]);
+            let returned = app
+                .call(
+                    "value-streams",
+                    VALUE_STREAM_PROBE,
+                    "swap-strings",
+                    vec![first.into(), second.into()],
+                )
+                .await
+                .unwrap();
+            let [Val::Tuple(mut streams)] = <[_; 1]>::try_from(returned).unwrap() else {
+                panic!("expected a tuple of streams");
+            };
+            let Val::Stream(second) = streams.remove(0) else {
+                panic!("expected the second stream first");
+            };
+            let Val::Stream(first) = streams.remove(0) else {
+                panic!("expected the first stream second");
+            };
+
+            assert_eq!(
+                InputStream::<String>::from_handle(second)
+                    .unwrap()
+                    .read_all()
+                    .await
+                    .unwrap(),
+                ["second"]
+            );
+            assert_eq!(
+                InputStream::<String>::from_handle(first)
+                    .unwrap()
+                    .read_all()
+                    .await
+                    .unwrap(),
+                ["first"]
+            );
+        });
+}
+
+#[test]
 fn nested_value_streams_round_trip_and_middleware_filters_items() {
     tokio::runtime::Builder::new_current_thread()
         .build()

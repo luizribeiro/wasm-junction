@@ -11,6 +11,7 @@ interface probe {
   send-lists: async func();
   echo-strings: async func(values: stream<string>) -> list<string>;
   return-host-strings: func() -> stream<string>;
+  swap-strings: func(first: stream<string>, second: stream<string>) -> tuple<stream<string>, stream<string>>;
   echo-lists: async func(values: stream<list<u32>>) -> list<list<u32>>;
   echo-nested: async func(values: stream<list<option<string>>>) -> list<list<option<string>>>;
   drop-strings: async func(values: stream<string>);

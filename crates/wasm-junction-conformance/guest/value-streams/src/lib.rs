@@ -41,6 +41,13 @@ impl bindings::exports::example::value_streams::probe::Guest for Component {
         host::strings()
     }
 
+    fn swap_strings(
+        first: StreamReader<String>,
+        second: StreamReader<String>,
+    ) -> (StreamReader<String>, StreamReader<String>) {
+        (second, first)
+    }
+
     async fn echo_lists(values: StreamReader<Vec<u32>>) -> Vec<Vec<u32>> {
         values.collect().await
     }
