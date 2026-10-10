@@ -13,7 +13,7 @@ use wasm_junction_core::{
     InvocationContext, OutputStream, OutputStreamWriter, StreamHandle, Vals,
 };
 
-use crate::types::Signatures;
+use crate::types::{Signatures, ValueType};
 use crate::values::{
     JsResult, ResourceTracker, default_result, lift_args_tracked, lift_result_error_tracked,
     lift_result_tracked, lower_args_tracked, lower_result_tracked,
@@ -40,13 +40,12 @@ extern "C" {
         drop_resource: &js_sys::Function,
         read_stream: &js_sys::Function,
         close_stream: &js_sys::Function,
-        open_guest_stream: &js_sys::Function,
     ) -> Result<JsValue, JsValue>;
 
     fn poison(value: JsValue) -> JsValue;
 
     #[wasm_bindgen(catch, js_name = readGuestStream)]
-    async fn read_guest_stream(stream: &JsValue) -> Result<JsValue, JsValue>;
+    async fn read_guest_stream(stream: &JsValue, byte_stream: bool) -> Result<JsValue, JsValue>;
 
     #[wasm_bindgen(catch, js_name = closeGuestStream)]
     async fn close_guest_stream(stream: &JsValue) -> Result<(), JsValue>;
@@ -133,6 +132,18 @@ impl CompiledComponent for BrowserCompiled {
         Box::pin(async move {
             let args = args?;
             let import_error = Rc::new(RefCell::new(None));
+            let guest_streams: Rc<RefCell<HashMap<u64, ActiveGuestStream>>> = Rc::default();
+            let opener_streams = guest_streams.clone();
+            let opener_error = import_error.clone();
+            resources.set_guest_stream_opener(move |stream, item, resources| {
+                Ok(Bridge::open_guest_stream(
+                    stream,
+                    item.clone(),
+                    resources,
+                    opener_streams.clone(),
+                    opener_error.clone(),
+                ))
+            });
             let bridge = Bridge {
                 imports,
                 context,
@@ -140,12 +151,11 @@ impl CompiledComponent for BrowserCompiled {
                 signatures: self.signatures.clone(),
                 import_error: import_error.clone(),
                 resources: resources.clone(),
-                guest_streams: Rc::default(),
+                guest_streams,
             };
             let drop_bridge = bridge.clone();
             let read_bridge = bridge.clone();
             let close_bridge = bridge.clone();
-            let open_bridge = bridge.clone();
             let cleanup_bridge = bridge.clone();
             let callback = Closure::wrap(Box::new(
                 move |interface: String, function: String, args: Array| {
@@ -192,11 +202,6 @@ impl CompiledComponent for BrowserCompiled {
                 })
             })
                 as Box<dyn Fn(u64) -> js_sys::Promise>);
-            let open_callback =
-                Closure::wrap(
-                    Box::new(move |stream: JsValue| open_bridge.open_guest_stream(stream))
-                        as Box<dyn Fn(JsValue) -> JsValue>,
-                );
             self.instantiations
                 .set(self.instantiations.get().saturating_add(1));
             let result = invoke(
@@ -208,7 +213,6 @@ impl CompiledComponent for BrowserCompiled {
                 drop_callback.as_ref().unchecked_ref(),
                 read_callback.as_ref().unchecked_ref(),
                 close_callback.as_ref().unchecked_ref(),
-                open_callback.as_ref().unchecked_ref(),
             )
             .await;
             let result = match result {
@@ -275,8 +279,8 @@ struct PumpState {
 }
 
 impl PumpControl {
-    async fn read(&self, stream: &JsValue) -> Option<Result<JsValue, JsValue>> {
-        let mut read = std::pin::pin!(read_guest_stream(stream));
+    async fn read(&self, stream: &JsValue, byte_stream: bool) -> Option<Result<JsValue, JsValue>> {
+        let mut read = std::pin::pin!(read_guest_stream(stream, byte_stream));
         poll_fn(|context| {
             let mut state = self.0.borrow_mut();
             if state.cancelled {
@@ -378,13 +382,18 @@ impl Bridge {
         }
     }
 
-    fn open_guest_stream(&self, stream: JsValue) -> JsValue {
+    fn open_guest_stream(
+        stream: JsValue,
+        _item: ValueType,
+        resources: ResourceTracker,
+        active: Rc<RefCell<HashMap<u64, ActiveGuestStream>>>,
+        _import_error: Rc<RefCell<Option<CallError>>>,
+    ) -> StreamHandle {
         let (writer, output) = OutputStream::channel();
         let handle = StreamHandle::from(output);
         let id = handle.id();
-        let marker = self.resources.register_guest(handle);
         let pump = PumpControl::default();
-        self.guest_streams.borrow_mut().insert(
+        active.borrow_mut().insert(
             id,
             ActiveGuestStream {
                 writer: writer.clone(),
@@ -392,10 +401,8 @@ impl Bridge {
                 pump: pump.clone(),
             },
         );
-        let active = self.guest_streams.clone();
-        let resources = self.resources.clone();
         spawn_local(async move {
-            while let Some(Ok(value)) = pump.read(&stream).await {
+            while let Some(Ok(value)) = pump.read(&stream, true).await {
                 if value.is_null() {
                     break;
                 }
@@ -410,7 +417,7 @@ impl Bridge {
             }
             pump.finish();
         });
-        marker
+        handle
     }
 
     fn abort_streams(&self) {
@@ -699,7 +706,14 @@ mod tests {
         }) as Box<dyn FnMut() -> Promise>);
         Reflect::set(&stream, &"return".into(), close.as_ref()).unwrap();
 
-        bridge.open_guest_stream(stream.into());
+        let handle = Bridge::open_guest_stream(
+            stream.into(),
+            ValueType::U8,
+            bridge.resources.clone(),
+            bridge.guest_streams.clone(),
+            bridge.import_error.clone(),
+        );
+        bridge.resources.register_guest(handle);
         let pump = bridge
             .guest_streams
             .borrow()
