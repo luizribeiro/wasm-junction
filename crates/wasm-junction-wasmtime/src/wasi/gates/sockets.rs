@@ -13,7 +13,7 @@ use crate::engine::StoreData;
 pub(super) mod gate;
 mod tcp_gates;
 mod udp_gates;
-mod values;
+pub(super) mod values;
 
 use super::copy_handle_context as copy_context;
 use gate::gate_socket;

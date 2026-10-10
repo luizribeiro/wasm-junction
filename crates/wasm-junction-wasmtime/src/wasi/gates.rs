@@ -1325,6 +1325,8 @@ mod http_p2;
 #[cfg(feature = "wasi-http")]
 mod http_values;
 mod sockets;
+#[cfg(feature = "wasi-p3")]
+mod sockets_p3;
 
 pub(super) const STATIC_STREAM_INTERFACES: &[&str] = &[
     #[cfg(feature = "wasi-p3")]

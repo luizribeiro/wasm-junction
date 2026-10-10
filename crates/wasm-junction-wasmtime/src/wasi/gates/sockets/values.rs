@@ -7,6 +7,35 @@ use wasmtime_wasi::p2::bindings::sockets::udp::{IncomingDatagram, OutgoingDatagr
 use super::super::{FromVal, ToVal, shape};
 use wasm_junction_core::{CallError, Val};
 
+#[cfg(feature = "wasi-p3")]
+pub(crate) fn encode_ip_address(address: std::net::IpAddr) -> Val {
+    IpAddress::from(address).to_val()
+}
+
+#[expect(
+    clippy::many_single_char_names,
+    reason = "the names are positions in a fixed-size IPv6 address tuple"
+)]
+#[cfg(feature = "wasi-p3")]
+pub(crate) fn decode_ip_address(value: Val) -> Result<std::net::IpAddr, CallError> {
+    Ok(match IpAddress::from_val(value)? {
+        IpAddress::Ipv4((a, b, c, d)) => std::net::Ipv4Addr::new(a, b, c, d).into(),
+        IpAddress::Ipv6((a, b, c, d, e, f, g, h)) => {
+            std::net::Ipv6Addr::new(a, b, c, d, e, f, g, h).into()
+        }
+    })
+}
+
+#[cfg(feature = "wasi-p3")]
+pub(crate) fn encode_socket_address(address: std::net::SocketAddr) -> Val {
+    IpSocketAddress::from(address).to_val()
+}
+
+#[cfg(feature = "wasi-p3")]
+pub(crate) fn decode_socket_address(value: Val) -> Result<std::net::SocketAddr, CallError> {
+    IpSocketAddress::from_val(value).map(Into::into)
+}
+
 macro_rules! enum_value {
     ($ty:ty { $($variant:ident => $name:literal),+ $(,)? }) => {
         impl ToVal for $ty {
