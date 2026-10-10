@@ -221,6 +221,93 @@ fn middleware_filters_directory_entries_before_the_guest_reads_them() {
     );
 }
 
+#[cfg(feature = "wasi-p3")]
+struct RefuseDirectoryOnce(AtomicBool);
+
+#[cfg(feature = "wasi-p3")]
+impl Middleware for RefuseDirectoryOnce {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.function.as_ref() == "[method]descriptor.read-directory"
+            && !self.0.swap(true, Ordering::Relaxed)
+        {
+            Err(CallError::refused("directory listing denied"))
+        } else {
+            next.run(call).await
+        }
+    }
+}
+
+#[test]
+#[cfg(feature = "wasi-p3")]
+fn refused_directory_read_returns_access_and_the_next_call_works() {
+    let directory = TestDirectory::new("refusal");
+    std::fs::write(directory.0.join("visible.txt"), b"visible").unwrap();
+    let app = filesystem_app(RefuseDirectoryOnce(AtomicBool::new(false)), &directory);
+
+    let refused = block_on(app.call("p3", EXPORT, "list-directory", Vec::new())).unwrap();
+    assert_eq!(
+        refused,
+        [Val::Result(Err(Some(Box::new(Val::from(
+            "ErrorCode::Access"
+        )))))]
+    );
+    let allowed = block_on(app.call("p3", EXPORT, "list-directory", Vec::new())).unwrap();
+    assert_eq!(
+        allowed,
+        [Val::Result(Ok(Some(Box::new(Val::List(vec![Val::from(
+            "visible.txt"
+        )])))))]
+    );
+}
+
+#[test]
+#[cfg(all(feature = "wasi-p3", unix))]
+fn directory_stream_failure_reaches_the_guest() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let directory = TestDirectory::new("failure");
+    let invalid = std::ffi::OsString::from_vec(vec![0xff]);
+    std::fs::write(directory.0.join(invalid), b"invalid name").unwrap();
+    let app = filesystem_app(Pass, &directory);
+
+    let result = block_on(app.call("p3", EXPORT, "list-directory", Vec::new())).unwrap();
+    assert_eq!(
+        result,
+        [Val::Result(Err(Some(Box::new(Val::from(
+            "ErrorCode::IllegalByteSequence"
+        )))))]
+    );
+}
+
+#[cfg(feature = "wasi-p3")]
+struct DirectoryEvents(ChannelEvents);
+
+#[cfg(feature = "wasi-p3")]
+impl Middleware for DirectoryEvents {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        next.run(call).await
+    }
+
+    fn event(&self, event: &Event) {
+        record_channel_event(&self.0, event);
+    }
+}
+
+#[test]
+#[cfg(feature = "wasi-p3")]
+fn dropping_directory_listing_stops_its_pump_and_preserves_the_next_call() {
+    let directory = TestDirectory::new("drop");
+    std::fs::write(directory.0.join("visible.txt"), b"visible").unwrap();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let app = filesystem_app(DirectoryEvents(events.clone()), &directory);
+
+    let result = block_on(app.call("p3", EXPORT, "drop-directory-listing", Vec::new())).unwrap();
+    assert_eq!(result, [Val::List(vec![Val::from("visible.txt")])]);
+    let events = events.lock().unwrap();
+    assert_eq!(events.iter().filter(|event| event.0).count(), 4);
+    assert_eq!(events.iter().filter(|event| !event.0).count(), 4);
+}
+
 #[test]
 #[cfg(feature = "wasi-p3")]
 fn preview_3_environment_and_arguments_match_preview_2() {

@@ -137,6 +137,56 @@ async fn filesystem_probe() -> String {
     format!("{}|{}", String::from_utf8(bytes).unwrap(), names.join(","))
 }
 
+async fn cover_filesystem() {
+    use wasi::filesystem::types::{Advice, DescriptorFlags, NewTimestamp, OpenFlags, PathFlags};
+
+    let _ = filesystem_probe().await;
+    let root = filesystem_root();
+    let _ = root.advise(0, 0, Advice::Normal).await;
+    let _ = root.sync_data().await;
+    let _ = root.get_flags().await;
+    let _ = root.get_type().await;
+    let _ = root.set_size(0).await;
+    let _ = root
+        .set_times(NewTimestamp::NoChange, NewTimestamp::NoChange)
+        .await;
+    let _ = root.sync().await;
+    let _ = root.create_directory_at("remove-me".to_owned()).await;
+    let _ = root.stat().await;
+    let _ = root.stat_at(PathFlags::empty(), "note.txt".to_owned()).await;
+    let _ = root
+        .set_times_at(
+            PathFlags::empty(),
+            "note.txt".to_owned(),
+            NewTimestamp::NoChange,
+            NewTimestamp::NoChange,
+        )
+        .await;
+    let _ = root
+        .link_at(PathFlags::empty(), "missing".to_owned(), &root, "link".to_owned())
+        .await;
+    let _ = root
+        .open_at(
+            PathFlags::empty(),
+            "note.txt".to_owned(),
+            OpenFlags::empty(),
+            DescriptorFlags::READ,
+        )
+        .await;
+    let _ = root.readlink_at("missing".to_owned()).await;
+    let _ = root.remove_directory_at("remove-me".to_owned()).await;
+    let _ = root
+        .rename_at("missing".to_owned(), &root, "renamed".to_owned())
+        .await;
+    let _ = root.symlink_at("missing".to_owned(), "symlink".to_owned()).await;
+    let _ = root.unlink_file_at("symlink".to_owned()).await;
+    let _ = root.is_same_object(&root).await;
+    let _ = root.metadata_hash().await;
+    let _ = root
+        .metadata_hash_at(PathFlags::empty(), "note.txt".to_owned())
+        .await;
+}
+
 impl exports::test::wasi_p3::probe::Guest for Component {
     async fn coverage() -> String {
         let _ = cli_probe().await;
@@ -189,6 +239,10 @@ impl exports::test::wasi_p3::probe::Guest for Component {
         drop(entries);
         drop(completion);
         directory_names().await.unwrap()
+    }
+
+    async fn filesystem_coverage() {
+        cover_filesystem().await;
     }
 
     async fn exit_success() {
