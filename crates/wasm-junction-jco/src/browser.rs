@@ -15,8 +15,8 @@ use wasm_junction_core::{
 
 use crate::types::Signatures;
 use crate::values::{
-    JsResult, ResourceTracker, default_result, lift_args_tracked, lift_result_error_tracked,
-    lift_result_tracked, lower_args_tracked, lower_result_tracked,
+    HostStream, JsResult, ResourceTracker, default_result, lift_args_tracked,
+    lift_result_error_tracked, lift_result_tracked, lower_args_tracked, lower_result_tracked,
 };
 use crate::{TranspiledComponent, transpile_component};
 
@@ -352,12 +352,13 @@ impl Bridge {
         if self.import_error.borrow().is_some() {
             return Err(CallError::trap("stream read after import failure"));
         }
-        let Some(mut input) = self.resources.checkout_host(id) else {
+        let Some(input) = self.resources.checkout_host(id) else {
             return Err(CallError::trap(format!("unknown host stream `{id}`")));
         };
+        let HostStream::Bytes(mut input) = input;
         match input.read().await {
             Ok(Some(bytes)) => {
-                self.resources.restore_host(id, input);
+                self.resources.restore_host(id, HostStream::Bytes(input));
                 Ok(Uint8Array::from(bytes.as_slice()).into())
             }
             Ok(None) => {

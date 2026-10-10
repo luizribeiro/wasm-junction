@@ -18,11 +18,23 @@ const STREAM_MARKER: &str = "$wasm-junction-stream";
 #[derive(Clone, Default)]
 pub(crate) struct ResourceTracker {
     resources: Rc<RefCell<HashSet<Resource>>>,
-    host_streams: Rc<RefCell<HashMap<u64, InputStream>>>,
+    host_streams: Rc<RefCell<HashMap<u64, HostStream>>>,
     guest_streams: Rc<RefCell<HashMap<u64, StreamHandle>>>,
     refuse_guest_streams: Rc<Cell<bool>>,
     imports: Option<Arc<dyn ImportDispatcher>>,
     invocation: Option<InvocationId>,
+}
+
+pub(crate) enum HostStream {
+    Bytes(InputStream),
+}
+
+impl HostStream {
+    pub(crate) fn close_reader(self) {
+        match self {
+            Self::Bytes(input) => input.close_reader(),
+        }
+    }
 }
 
 impl ResourceTracker {
@@ -61,7 +73,7 @@ impl ResourceTracker {
         stream_marker("guest", id)
     }
 
-    pub(crate) fn take_host(&self, id: u64) -> Option<InputStream> {
+    pub(crate) fn take_host(&self, id: u64) -> Option<HostStream> {
         let input = self.host_streams.borrow_mut().remove(&id);
         if input.is_some() {
             self.channel_close(id, ChannelDirection::HostToGuest);
@@ -69,11 +81,11 @@ impl ResourceTracker {
         input
     }
 
-    pub(crate) fn checkout_host(&self, id: u64) -> Option<InputStream> {
+    pub(crate) fn checkout_host(&self, id: u64) -> Option<HostStream> {
         self.host_streams.borrow_mut().remove(&id)
     }
 
-    pub(crate) fn restore_host(&self, id: u64, input: InputStream) {
+    pub(crate) fn restore_host(&self, id: u64, input: HostStream) {
         self.host_streams.borrow_mut().insert(id, input);
     }
 
@@ -426,7 +438,10 @@ fn lower(
             let id = handle.id();
             let input = InputStream::try_from(handle)
                 .map_err(|error| CallError::trap(error.to_string()))?;
-            resources.host_streams.borrow_mut().insert(id, input);
+            resources
+                .host_streams
+                .borrow_mut()
+                .insert(id, HostStream::Bytes(input));
             resources.channel_open(id, ChannelDirection::HostToGuest);
             stream_marker("host", id)
         }
@@ -529,7 +544,9 @@ fn lift_stream(
 ) -> Result<Val, CallError> {
     let (kind, id) = stream_identity(&value, expected)?;
     let handle = match kind.as_str() {
-        "host" => resources.take_host(id).map(InputStream::into_handle),
+        "host" => resources.take_host(id).map(|stream| match stream {
+            HostStream::Bytes(input) => input.into_handle(),
+        }),
         "guest" if resources.refuse_guest_streams.get() => {
             let handle = resources.take_guest(id).ok_or_else(|| {
                 CallError::trap(format!("stream `guest#{id}` is no longer available"))
