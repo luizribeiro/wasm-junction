@@ -917,11 +917,15 @@ fn every_function_in_each_gated_p3_interface_has_a_gate() {
     block_on(app.call("p3", EXPORT, "coverage", Vec::new())).unwrap();
     block_on(app.call("p3", EXPORT, "exit-success", Vec::new())).unwrap_err();
     block_on(app.call("p3", EXPORT, "exit-code", Vec::new())).unwrap_err();
+    let directory = TestDirectory::new("coverage");
+    let filesystem = filesystem_app(RecordGates(seen.clone()), &directory);
+    block_on(filesystem.call("p3", EXPORT, "filesystem-coverage", Vec::new())).unwrap();
 
-    let expected = p3_wit_functions()
-        .into_iter()
-        .filter(|(interface, _)| !interface.starts_with("wasi:filesystem/"))
-        .collect();
+    let mut expected = p3_wit_functions();
+    expected.insert((
+        "wasi:filesystem/types@0.3.0".to_owned(),
+        "[drop]descriptor".to_owned(),
+    ));
     assert_eq!(*seen.lock().unwrap(), expected);
 }
 
