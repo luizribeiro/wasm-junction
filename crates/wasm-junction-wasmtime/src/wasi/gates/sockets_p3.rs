@@ -11,6 +11,9 @@ const TCP_SOCKET: &str = "tcp-socket";
 const UDP_SOCKET: &str = "udp-socket";
 
 mod gate;
+#[cfg(test)]
+#[allow(dead_code, reason = "socket family tests consume this support")]
+mod test_support;
 mod udp;
 mod values;
 
