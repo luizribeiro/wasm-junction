@@ -13,6 +13,7 @@ on native targets. The project is early in development and its API is not yet st
   component providers.
 - [`examples/audit`](examples/audit) combines host resources, byte streams, and per-call data.
 - [`examples/reload`](examples/reload) replaces a component while an earlier call is still running.
+- [`examples/streams`](examples/streams) redacts and filters streams in middleware.
 
 Run all checks with:
 
