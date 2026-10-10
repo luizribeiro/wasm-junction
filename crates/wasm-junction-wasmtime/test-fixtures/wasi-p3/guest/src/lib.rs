@@ -82,6 +82,61 @@ async fn cli_probe() -> String {
     )
 }
 
+fn filesystem_root() -> wasi::filesystem::types::Descriptor {
+    wasi::filesystem::preopens::get_directories()
+        .into_iter()
+        .find(|(_, path)| path == "/data")
+        .unwrap()
+        .0
+}
+
+async fn directory_names() -> Result<Vec<String>, String> {
+    let (entries, completion) = filesystem_root().read_directory();
+    let entries = entries.collect().await;
+    completion.await.map_err(|error| format!("{error:?}"))?;
+    Ok(entries.into_iter().map(|entry| entry.name).collect())
+}
+
+async fn send_bytes(
+    descriptor: &wasi::filesystem::types::Descriptor,
+    bytes: &[u8],
+    append: bool,
+) {
+    let (mut writer, reader) = wit_stream::new();
+    let write = async move {
+        assert!(writer.write_all(bytes.to_vec()).await.is_empty());
+    };
+    let completion = if append {
+        descriptor.append_via_stream(reader)
+    } else {
+        descriptor.write_via_stream(reader, 0)
+    };
+    let (_, result) = join(write, completion.into_future()).await;
+    result.unwrap();
+}
+
+async fn filesystem_probe() -> String {
+    use wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
+
+    let root = filesystem_root();
+    let file = root
+        .open_at(
+            PathFlags::empty(),
+            "note.txt".to_owned(),
+            OpenFlags::CREATE | OpenFlags::TRUNCATE,
+            DescriptorFlags::READ | DescriptorFlags::WRITE,
+        )
+        .await
+        .unwrap();
+    send_bytes(&file, b"hello", false).await;
+    send_bytes(&file, b" world", true).await;
+    let (bytes, completion) = file.read_via_stream(0);
+    let bytes = bytes.collect().await;
+    completion.await.unwrap();
+    let names = directory_names().await.unwrap();
+    format!("{}|{}", String::from_utf8(bytes).unwrap(), names.join(","))
+}
+
 impl exports::test::wasi_p3::probe::Guest for Component {
     async fn coverage() -> String {
         let _ = cli_probe().await;
@@ -119,6 +174,21 @@ impl exports::test::wasi_p3::probe::Guest for Component {
         let arguments = wasi::cli::environment::get_arguments();
         wasi::clocks::monotonic_clock::wait_for(1).await;
         arguments
+    }
+
+    async fn filesystem() -> String {
+        filesystem_probe().await
+    }
+
+    async fn list_directory() -> Result<Vec<String>, String> {
+        directory_names().await
+    }
+
+    async fn drop_directory_listing() -> Vec<String> {
+        let (entries, completion) = filesystem_root().read_directory();
+        drop(entries);
+        drop(completion);
+        directory_names().await.unwrap()
     }
 
     async fn exit_success() {
