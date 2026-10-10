@@ -23,7 +23,7 @@ use wasm_junction::{Access, App, Component};
 #[cfg(feature = "wasi-p3")]
 use wasm_junction::{
     Call, CallError, CallErrorKind, ChannelDirection, Event, InputStream, Middleware, Next,
-    OutputStream, OutputStreamWriter, StreamHandle, Val, Vals,
+    OutputStream, OutputStreamWriter, Resource, StreamHandle, Val, Vals,
 };
 #[cfg(feature = "wasi-p3")]
 use wasm_junction_wasmtime::WASI_INTERFACES;
@@ -404,6 +404,8 @@ fn middleware_can_drop_an_accepted_socket() {
 struct ForeignAccepted {
     sender: std::sync::mpsc::Sender<u16>,
     saved: Arc<Mutex<Option<wasm_junction::Resource>>>,
+    accepted: Arc<Mutex<BTreeSet<u32>>>,
+    dropped: Arc<AtomicUsize>,
 }
 
 #[cfg(feature = "wasi-p3")]
@@ -416,22 +418,46 @@ impl Middleware for ForeignAccepted {
         }
         let mut values = next.run(call).await?;
         if listen {
-            let saved = self.saved.clone();
             let stream = accept_stream(&mut values);
-            *stream = stream.take().map_items(move |item| {
-                let Val::Resource(current) = &item else {
-                    return item;
-                };
-                let mut saved = saved.lock().unwrap();
-                if let Some(foreign) = saved.as_ref() {
-                    Val::Resource(foreign.clone())
-                } else {
-                    *saved = Some(current.clone());
+            let foreign = self.saved.lock().unwrap().clone();
+            if let Some(foreign) = foreign {
+                let mut input = InputStream::<Resource>::from_handle(stream.take())?;
+                let (writer, output) = OutputStream::<Resource>::channel();
+                let accepted = self.accepted.clone();
+                tokio::spawn(async move {
+                    let mut items = Vec::new();
+                    while items.len() < 2 {
+                        items.extend(input.read().await.unwrap().unwrap());
+                    }
+                    accepted
+                        .lock()
+                        .unwrap()
+                        .extend(items.iter().map(Resource::id));
+                    items.push(foreign);
+                    writer.write(items).await.unwrap();
+                });
+                *stream = output.into();
+            } else {
+                let saved = self.saved.clone();
+                *stream = stream.take().map_items(move |item| {
+                    if let Val::Resource(current) = &item {
+                        *saved.lock().unwrap() = Some(current.clone());
+                    }
                     item
-                }
-            });
+                });
+            }
         }
         Ok(values)
+    }
+
+    fn event(&self, event: &Event) {
+        if matches!(
+            event,
+            Event::ResourceDrop { id, .. }
+                if self.accepted.lock().unwrap().contains(id)
+        ) {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
     }
 }
 
@@ -443,17 +469,22 @@ fn foreign_socket_in_an_accept_stream_is_refused() {
         let first_port = receiver.recv().unwrap();
         let first = tcp_request(first_port, b"first");
         let second_port = receiver.recv().unwrap();
-        let mut second = tcp_connect(second_port);
-        second.write_all(b"second").unwrap();
-        second.shutdown(Shutdown::Write).unwrap();
-        let mut response = Vec::new();
-        let _ = second.read_to_end(&mut response);
-        (first, response)
+        let discarded = [
+            discarded_request(second_port, b"discarded one"),
+            discarded_request(second_port, b"discarded two"),
+        ]
+        .into_iter()
+        .map(|client| client.join().unwrap())
+        .collect::<Vec<_>>();
+        (first, discarded)
     });
     let saved = Arc::new(Mutex::new(None));
+    let dropped = Arc::new(AtomicUsize::new(0));
     let app = sockets_app(ForeignAccepted {
         sender,
         saved: saved.clone(),
+        accepted: Arc::new(Mutex::new(BTreeSet::new())),
+        dropped: dropped.clone(),
     });
 
     let first = block_on(app.call("p3", EXPORT, "tcp-echo", vec![Val::U8(1)])).unwrap();
@@ -463,15 +494,21 @@ fn foreign_socket_in_an_accept_stream_is_refused() {
             "first"
         )])))))]
     );
-    let error = block_on(app.call("p3", EXPORT, "tcp-echo", vec![Val::U8(1)])).unwrap_err();
+    let error = block_on(app.call("p3", EXPORT, "tcp-accept-batch", vec![Val::U8(3)])).unwrap_err();
     assert_eq!(error.kind(), CallErrorKind::Refused);
     assert!(
         error
             .to_string()
             .contains("does not belong to this invocation")
     );
-    assert_eq!(clients.join().unwrap(), (b"first".to_vec(), Vec::new()));
+    assert_eq!(clients.join().unwrap(), (b"first".to_vec(), vec![true; 2]));
+    assert_eq!(dropped.load(Ordering::Relaxed), 2);
     assert!(saved.lock().unwrap().is_some());
+    let next = block_on(app.call("p3", EXPORT, "lookup-localhost", Vec::new())).unwrap();
+    let [Val::Result(Ok(Some(addresses)))] = next.as_slice() else {
+        panic!("lookup returned the wrong shape")
+    };
+    assert!(matches!(addresses.as_ref(), Val::U32(count) if *count > 0));
 }
 
 #[test]

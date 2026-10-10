@@ -233,6 +233,18 @@ async fn tcp_echo(count: u8) -> Result<Vec<String>, String> {
     Ok(messages)
 }
 
+async fn tcp_accept_batch(count: u8) -> u8 {
+    use wasi::sockets::types::{IpAddressFamily, TcpSocket};
+
+    let listener = TcpSocket::create(IpAddressFamily::Ipv4).unwrap();
+    listener.bind(loopback(0)).unwrap();
+    let mut accepted = listener.listen().unwrap();
+    let (_, sockets) = accepted
+        .read(Vec::with_capacity(usize::from(count)))
+        .await;
+    u8::try_from(sockets.len()).unwrap()
+}
+
 async fn drop_accept_stream() -> Result<(), String> {
     use wasi::sockets::types::{IpAddressFamily, TcpSocket};
 
@@ -395,6 +407,10 @@ impl exports::test::wasi_p3::probe::Guest for Component {
 
     async fn tcp_echo(count: u8) -> Result<Vec<String>, String> {
         tcp_echo(count).await
+    }
+
+    async fn tcp_accept_batch(count: u8) -> u8 {
+        tcp_accept_batch(count).await
     }
 
     async fn tcp_stream_failures() -> Vec<String> {

@@ -1,4 +1,4 @@
-use wasm_junction_core::{ChannelDirection, StreamHandle};
+use wasm_junction_core::{ChannelDirection, ResourceOwnership, StreamHandle, Val};
 use wasmtime::component::{StreamAny, StreamReader, Type};
 use wasmtime::{AsContextMut, StoreContextMut};
 
@@ -10,6 +10,19 @@ use super::{lift_stream_with_direction, lower_stream};
 
 mod consumer;
 mod producer;
+
+fn restore_owned_resources(values: &[Val], store: &mut StoreData) {
+    for value in values {
+        match value {
+            Val::Resource(resource) if resource.ownership() == ResourceOwnership::Own => {
+                store.owned_resources.insert(resource.clone());
+            }
+            Val::List(items) => restore_owned_resources(items, store),
+            Val::Option(Some(item)) => restore_owned_resources(std::slice::from_ref(item), store),
+            _ => {}
+        }
+    }
+}
 
 pub(crate) fn lift_stream(
     stream: StreamAny,

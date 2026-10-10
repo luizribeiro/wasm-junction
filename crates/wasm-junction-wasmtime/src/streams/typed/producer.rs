@@ -12,6 +12,7 @@ use wasmtime::component::{
 use wasmtime::{AsContextMut, StoreContextMut};
 
 use super::super::{close_channel, invocation_id};
+use super::restore_owned_resources;
 use crate::engine::StoreData;
 use crate::stream_values::StreamValue;
 
@@ -114,18 +115,22 @@ impl<T: StreamValue> StreamProducer<StoreData> for Producer<T> {
         };
         match polled {
             Poll::Ready(Ok(Some(values))) => {
-                let values = values
-                    .into_iter()
-                    .map(|value| T::from_val(Some(value), this.item_type.as_ref(), &mut store))
-                    .collect::<Result<Vec<_>, _>>();
-                let values = match values {
-                    Ok(values) => values,
-                    Err(error) => {
-                        this.close();
-                        return Poll::Ready(Err(error));
+                let mut converted = Vec::with_capacity(values.len());
+                let mut lowered = Vec::with_capacity(values.len());
+                for value in values {
+                    match T::from_val(Some(value.clone()), this.item_type.as_ref(), &mut store) {
+                        Ok(item) => {
+                            converted.push(item);
+                            lowered.push(value);
+                        }
+                        Err(error) => {
+                            restore_owned_resources(&lowered, store.data_mut());
+                            this.close();
+                            return Poll::Ready(Err(error));
+                        }
                     }
-                };
-                destination.set_buffer(values.into());
+                }
+                destination.set_buffer(converted.into());
                 Poll::Ready(Ok(StreamResult::Completed))
             }
             Poll::Ready(Ok(None)) => {

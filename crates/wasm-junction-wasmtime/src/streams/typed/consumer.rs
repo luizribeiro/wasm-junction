@@ -4,12 +4,13 @@ use std::task::{Context, Poll};
 
 use wasm_junction_core::{
     ChannelDirection, EngineEvent, ImportDispatcher, InvocationId, OutputStream,
-    OutputStreamWriter, ResourceOwnership, StreamHandle, Val,
+    OutputStreamWriter, StreamHandle, Val,
 };
 use wasmtime::component::{Source, StreamAny, StreamConsumer, StreamResult, Type};
 use wasmtime::{AsContextMut, StoreContextMut};
 
 use super::super::{ActiveStreams, ActiveWriter, close_channel, invocation_id, lock_active};
+use super::restore_owned_resources;
 use crate::engine::StoreData;
 use crate::stream_values::StreamValue;
 
@@ -145,19 +146,6 @@ impl<T: StreamValue> StreamConsumer<StoreData> for Consumer<T> {
             Poll::Ready(Ok(StreamResult::Dropped))
         } else {
             Poll::Ready(Ok(StreamResult::Completed))
-        }
-    }
-}
-
-fn restore_owned_resources(values: &[Val], store: &mut StoreData) {
-    for value in values {
-        match value {
-            Val::Resource(resource) if resource.ownership() == ResourceOwnership::Own => {
-                store.owned_resources.insert(resource.clone());
-            }
-            Val::List(items) => restore_owned_resources(items, store),
-            Val::Option(Some(item)) => restore_owned_resources(std::slice::from_ref(item), store),
-            _ => {}
         }
     }
 }
