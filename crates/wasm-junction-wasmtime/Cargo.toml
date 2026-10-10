@@ -21,9 +21,9 @@ wasi-http = ["wasi", "dep:wasmtime-wasi-http", "wasm-junction/wasi-http"]
 [dependencies]
 wasm-junction-core = { path = "../wasm-junction-core", version = "=0.0.0" }
 tokio = { version = "1", features = ["macros", "sync"], optional = true }
-wasmtime = { version = "=49.0.2", default-features = false, features = ["component-model-async", "cranelift", "runtime", "std"] }
-wasmtime-wasi = { version = "=49.0.2", default-features = false, features = ["p2"], optional = true }
-wasmtime-wasi-http = { version = "=49.0.2", default-features = false, features = ["component-model-async", "default-send-request", "p2"], optional = true }
+wasmtime = { version = "=51.0.0-dev", git = "https://github.com/luizribeiro/wasmtime", rev = "5372cae262", default-features = false, features = ["component-model-async", "cranelift", "runtime", "std"] }
+wasmtime-wasi = { version = "=51.0.0-dev", git = "https://github.com/luizribeiro/wasmtime", rev = "5372cae262", default-features = false, features = ["p2"], optional = true }
+wasmtime-wasi-http = { version = "=51.0.0-dev", git = "https://github.com/luizribeiro/wasmtime", rev = "5372cae262", default-features = false, features = ["component-model-async", "default-send-request", "p2"], optional = true }
 
 [dev-dependencies]
 serde_json = "1"
