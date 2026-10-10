@@ -1,8 +1,9 @@
 use wasmtime_wasi::p3::bindings::filesystem::types::{
-    DescriptorStat, DescriptorType, MetadataHashValue, NewTimestamp,
+    DescriptorStat, DescriptorType, DirectoryEntry, MetadataHashValue, NewTimestamp,
 };
 
 use super::{CallError, FromVal, ToVal, Val, shape};
+use crate::engine::StoreData;
 
 impl ToVal for NewTimestamp {
     fn to_val(self) -> Val {
@@ -104,6 +105,50 @@ impl FromVal for MetadataHashValue {
     }
 }
 
+impl ToVal for DirectoryEntry {
+    fn to_val(self) -> Val {
+        Val::Record(vec![
+            ("type".to_owned(), self.type_.to_val()),
+            ("name".to_owned(), self.name.to_val()),
+        ])
+    }
+}
+
+impl FromVal for DirectoryEntry {
+    fn from_val(value: Val) -> Result<Self, CallError> {
+        let Val::Record(fields) = value else {
+            return Err(shape("directory-entry"));
+        };
+        let [(_, type_), (_, name)] =
+            <[_; 2]>::try_from(fields).map_err(|_| shape("directory-entry fields"))?;
+        Ok(Self {
+            type_: DescriptorType::from_val(type_)?,
+            name: String::from_val(name)?,
+        })
+    }
+}
+
+impl crate::stream_values::StreamValue for DirectoryEntry {
+    fn into_val(
+        self,
+        _ty: Option<&wasmtime::component::Type>,
+        _store: &mut wasmtime::StoreContextMut<'_, StoreData>,
+    ) -> Result<Option<Val>, wasmtime::Error> {
+        Ok(Some(self.to_val()))
+    }
+
+    fn from_val(
+        value: Option<Val>,
+        _ty: Option<&wasmtime::component::Type>,
+        _store: &mut wasmtime::StoreContextMut<'_, StoreData>,
+    ) -> Result<Self, wasmtime::Error> {
+        <Self as FromVal>::from_val(
+            value.ok_or_else(|| wasmtime::Error::msg("directory entry cannot be unit"))?,
+        )
+        .map_err(wasmtime::Error::new)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,5 +171,13 @@ mod tests {
         let hash = MetadataHashValue { lower: 3, upper: 5 };
         let decoded = MetadataHashValue::from_val(hash.to_val()).unwrap();
         assert_eq!((decoded.lower, decoded.upper), (3, 5));
+
+        let entry = DirectoryEntry {
+            type_: DescriptorType::RegularFile,
+            name: "note.txt".to_owned(),
+        };
+        let decoded = <DirectoryEntry as FromVal>::from_val(entry.to_val()).unwrap();
+        assert!(matches!(decoded.type_, DescriptorType::RegularFile));
+        assert_eq!(decoded.name, "note.txt");
     }
 }
