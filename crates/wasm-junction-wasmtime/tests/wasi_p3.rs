@@ -398,6 +398,80 @@ fn middleware_can_drop_an_accepted_socket() {
     assert_eq!(dropped.load(Ordering::Relaxed), 3);
 }
 
+#[cfg(feature = "wasi-p3")]
+struct ForeignAccepted {
+    sender: std::sync::mpsc::Sender<u16>,
+    saved: Arc<Mutex<Option<wasm_junction::Resource>>>,
+}
+
+#[cfg(feature = "wasi-p3")]
+impl Middleware for ForeignAccepted {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        let listen = call.interface.as_ref() == "wasi:sockets/types@0.3.0"
+            && call.function.as_ref() == "[method]tcp-socket.listen";
+        if listen && let Some(port) = call.args.get(1).and_then(socket_port) {
+            self.sender.send(port).unwrap();
+        }
+        let mut values = next.run(call).await?;
+        if listen {
+            let saved = self.saved.clone();
+            let stream = accept_stream(&mut values);
+            *stream = stream.take().map_items(move |item| {
+                let Val::Resource(current) = &item else {
+                    return item;
+                };
+                let mut saved = saved.lock().unwrap();
+                if let Some(foreign) = saved.as_ref() {
+                    Val::Resource(foreign.clone())
+                } else {
+                    *saved = Some(current.clone());
+                    item
+                }
+            });
+        }
+        Ok(values)
+    }
+}
+
+#[test]
+#[cfg(feature = "wasi-p3")]
+fn foreign_socket_in_an_accept_stream_is_refused() {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let clients = std::thread::spawn(move || {
+        let first_port = receiver.recv().unwrap();
+        let first = tcp_request(first_port, b"first");
+        let second_port = receiver.recv().unwrap();
+        let mut second = tcp_connect(second_port);
+        second.write_all(b"second").unwrap();
+        second.shutdown(Shutdown::Write).unwrap();
+        let mut response = Vec::new();
+        let _ = second.read_to_end(&mut response);
+        (first, response)
+    });
+    let saved = Arc::new(Mutex::new(None));
+    let app = sockets_app(ForeignAccepted {
+        sender,
+        saved: saved.clone(),
+    });
+
+    let first = block_on(app.call("p3", EXPORT, "tcp-echo", vec![Val::U8(1)])).unwrap();
+    assert_eq!(
+        first,
+        [Val::Result(Ok(Some(Box::new(Val::List(vec![Val::from(
+            "first"
+        )])))))]
+    );
+    let error = block_on(app.call("p3", EXPORT, "tcp-echo", vec![Val::U8(1)])).unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert!(
+        error
+            .to_string()
+            .contains("does not belong to this invocation")
+    );
+    assert_eq!(clients.join().unwrap(), (b"first".to_vec(), Vec::new()));
+    assert!(saved.lock().unwrap().is_some());
+}
+
 #[test]
 #[cfg(feature = "wasi-p3")]
 fn tcp_stream_failures_reach_the_guest() {
