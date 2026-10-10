@@ -73,6 +73,9 @@ macro_rules! depth {
 depth!(D1, D0);
 depth!(D2, D1);
 
+// TODO: Wasmtime 49 reads guest streams only as a statically typed `StreamReader<T>`; carry
+// every item type once it can read and write stream items as `Val`
+// (https://github.com/bytecodealliance/wasmtime/issues/11161).
 fn unsupported(ty: &Type) -> wasmtime::Error {
     wasmtime::Error::new(wasm_junction_core::CallError::refused(format!(
         "stream item type `{}` is not supported on Wasmtime; supported item types are scalar values, strings, resources, and lists or options nested up to two layers",
