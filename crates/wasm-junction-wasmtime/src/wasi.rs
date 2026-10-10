@@ -11,6 +11,8 @@ use crate::engine::StoreData;
 mod gates;
 mod trampoline;
 
+pub(crate) const STATIC_STREAM_INTERFACES: &[&str] = gates::STATIC_STREAM_INTERFACES;
+
 pub(crate) struct WasiState {
     pub(crate) context: WasiCtx,
     pub(crate) table: ResourceTable,

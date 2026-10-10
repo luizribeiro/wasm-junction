@@ -5,7 +5,7 @@
 use super::*;
 use wasmtime_wasi::filesystem::Descriptor;
 
-const INTERFACE: &str = "wasi:filesystem/types@0.3.0";
+pub(super) const INTERFACE: &str = "wasi:filesystem/types@0.3.0";
 #[allow(
     dead_code,
     reason = "the Preview 3 filesystem remains deliberately unlinked"

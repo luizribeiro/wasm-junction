@@ -1326,6 +1326,11 @@ mod http_p2;
 mod http_values;
 mod sockets;
 
+pub(super) const STATIC_STREAM_INTERFACES: &[&str] = &[
+    #[cfg(feature = "wasi-p3")]
+    filesystem_p3::INTERFACE,
+];
+
 #[cfg(feature = "wasi-http")]
 pub(super) fn add_http(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     http_p2::add(linker)?;

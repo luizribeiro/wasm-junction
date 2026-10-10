@@ -330,7 +330,7 @@ fn compile_component(
 ) -> CompileResult {
     let component =
         Component::new(engine, bytes).map_err(|error| EngineError::new(error.to_string()))?;
-    validate_component_streams(&component, engine)
+    validate_component_streams(&component, engine, crate::STATIC_STREAM_INTERFACES)
         .map_err(|error| EngineError::new(error.to_string()))?;
     let resources = define_imports(&mut linker, &component)
         .map_err(|error| EngineError::new(error.to_string()))?;

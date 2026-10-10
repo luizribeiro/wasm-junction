@@ -22,6 +22,11 @@ mod values;
 #[cfg(feature = "wasi")]
 mod wasi;
 
+#[cfg(feature = "wasi")]
+const STATIC_STREAM_INTERFACES: &[&str] = wasi::STATIC_STREAM_INTERFACES;
+#[cfg(not(feature = "wasi"))]
+const STATIC_STREAM_INTERFACES: &[&str] = &[];
+
 pub use engine::WasmtimeEngine;
 
 #[cfg(feature = "wasi")]
