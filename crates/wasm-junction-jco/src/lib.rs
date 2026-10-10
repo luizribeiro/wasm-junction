@@ -11,8 +11,12 @@ const STREAM_SYMBOLS: &str = "const symbolAsyncIterator = Symbol.asyncIterator;"
 const STREAM_CONSTRUCTOR: &str = "this[symbolRscRep] = args.globalRep;";
 const STREAM_READ_RETURN: &str =
     "return readFn;\n    }\n    \n    function _lowerFlatStream(meta) {";
+const VALUE_STREAM_READ_RETURN: &str =
+    "return readFn;\n  }\n  \n  function _lowerFlatStream(meta) {";
 const STREAM_INJECT: &str = "const { readFn, hostWriteEnd, readEnd } = genArgs;\n      if (!readEnd) { throw new TypeError('missing read end'); }";
+const VALUE_STREAM_INJECT: &str = "const { readFn, hostWriteEnd, readEnd } = genArgs;\n    if (!readEnd) { throw new TypeError('missing read end'); }";
 const STREAM_LIFT: &str = "const rep = STREAMS.insert(stream);\n      stream.setRep(rep);";
+const VALUE_STREAM_LIFT: &str = "const rep = STREAMS.insert(stream);\n    stream.setRep(rep);";
 
 #[cfg(any(test, target_family = "wasm"))]
 mod types;
@@ -86,9 +90,6 @@ fn preserve_stream_identity(source: &str) -> Result<String, EngineError> {
     let required = [
         (STREAM_SYMBOLS, "async iterator symbols"),
         (STREAM_CONSTRUCTOR, "stream constructor"),
-        (STREAM_READ_RETURN, "stream read lowering"),
-        (STREAM_INJECT, "stream injection"),
-        (STREAM_LIFT, "stream lifting"),
     ];
     if let Some((_, name)) = required
         .into_iter()
@@ -97,6 +98,21 @@ fn preserve_stream_identity(source: &str) -> Result<String, EngineError> {
         return Err(EngineError::new(format!(
             "jco generated an unrecognized stream implementation: missing {name}"
         )));
+    }
+    if !source.contains(STREAM_READ_RETURN) && !source.contains(VALUE_STREAM_READ_RETURN) {
+        return Err(EngineError::new(
+            "jco generated an unrecognized stream implementation: missing stream read lowering",
+        ));
+    }
+    if !source.contains(STREAM_INJECT) && !source.contains(VALUE_STREAM_INJECT) {
+        return Err(EngineError::new(
+            "jco generated an unrecognized stream implementation: missing stream injection",
+        ));
+    }
+    if !source.contains(STREAM_LIFT) && !source.contains(VALUE_STREAM_LIFT) {
+        return Err(EngineError::new(
+            "jco generated an unrecognized stream implementation: missing stream lifting",
+        ));
     }
     let source = source.replacen(
         STREAM_SYMBOLS,
@@ -111,18 +127,33 @@ fn preserve_stream_identity(source: &str) -> Result<String, EngineError> {
             "{STREAM_CONSTRUCTOR}\n      const wasmJunctionOrigin = wasmJunctionStreamOrigins.get(args.globalRep);\n      if (wasmJunctionOrigin !== undefined) this[wasmJunctionStreamId] = wasmJunctionOrigin;"
         ),
     );
-    let source = source.replace(
-        STREAM_READ_RETURN,
-        "readFn.wasmJunctionOrigin = stream[wasmJunctionStreamId];\n      return readFn;\n    }\n    \n    function _lowerFlatStream(meta) {",
-    );
-    let source = source.replace(
-        STREAM_INJECT,
-        "const { readFn, hostWriteEnd, readEnd } = genArgs;\n      if (!readEnd) { throw new TypeError('missing read end'); }\n      if (readFn.wasmJunctionOrigin !== undefined) {\n        wasmJunctionStreamOrigins.set(readEnd.globalStreamMapRep(), readFn.wasmJunctionOrigin);\n      }",
-    );
-    Ok(source.replace(
-        STREAM_LIFT,
-        "const rep = STREAMS.insert(stream);\n      const wasmJunctionLiftedEnd = getStreamEnd({ tableIdx: streamTableIdx, streamEndWaitableIdx });\n      const wasmJunctionOrigin = wasmJunctionStreamOrigins.get(wasmJunctionLiftedEnd?.globalStreamMapRep());\n      if (wasmJunctionOrigin !== undefined) wasmJunctionStreamOrigins.set(rep, wasmJunctionOrigin);\n      stream.setRep(rep);",
-    ))
+    let source = source
+        .replace(
+            STREAM_READ_RETURN,
+            "readFn.wasmJunctionOrigin = stream[wasmJunctionStreamId];\n      return readFn;\n    }\n    \n    function _lowerFlatStream(meta) {",
+        )
+        .replace(
+            VALUE_STREAM_READ_RETURN,
+            "readFn.wasmJunctionOrigin = stream[wasmJunctionStreamId];\n    return readFn;\n  }\n  \n  function _lowerFlatStream(meta) {",
+        );
+    let source = source
+        .replace(
+            STREAM_INJECT,
+            "const { readFn, hostWriteEnd, readEnd } = genArgs;\n      if (!readEnd) { throw new TypeError('missing read end'); }\n      if (readFn.wasmJunctionOrigin !== undefined) {\n        wasmJunctionStreamOrigins.set(readEnd.globalStreamMapRep(), readFn.wasmJunctionOrigin);\n      }",
+        )
+        .replace(
+            VALUE_STREAM_INJECT,
+            "const { readFn, hostWriteEnd, readEnd } = genArgs;\n    if (!readEnd) { throw new TypeError('missing read end'); }\n    if (readFn.wasmJunctionOrigin !== undefined) {\n      wasmJunctionStreamOrigins.set(readEnd.globalStreamMapRep(), readFn.wasmJunctionOrigin);\n    }",
+        );
+    Ok(source
+        .replace(
+            STREAM_LIFT,
+            "const rep = STREAMS.insert(stream);\n      const wasmJunctionLiftedEnd = getStreamEnd({ tableIdx: streamTableIdx, streamEndWaitableIdx });\n      const wasmJunctionOrigin = wasmJunctionStreamOrigins.get(wasmJunctionLiftedEnd?.globalStreamMapRep());\n      if (wasmJunctionOrigin !== undefined) wasmJunctionStreamOrigins.set(rep, wasmJunctionOrigin);\n      stream.setRep(rep);",
+        )
+        .replace(
+            VALUE_STREAM_LIFT,
+            "const rep = STREAMS.insert(stream);\n    const wasmJunctionLiftedEnd = getStreamEnd({ tableIdx: streamTableIdx, streamEndWaitableIdx });\n    const wasmJunctionOrigin = wasmJunctionStreamOrigins.get(wasmJunctionLiftedEnd?.globalStreamMapRep());\n    if (wasmJunctionOrigin !== undefined) wasmJunctionStreamOrigins.set(rep, wasmJunctionOrigin);\n    stream.setRep(rep);",
+        ))
 }
 
 fn guard_failed_imports(source: &str) -> Result<String, EngineError> {
@@ -205,8 +236,15 @@ mod tests {
 
     #[test]
     fn transpiles_every_conformance_component_for_browsers() {
-        // The value-stream component is excluded because jco value streams are not supported yet.
         let components = [
+            (
+                "value-streams",
+                wasm_junction_conformance::value_stream_component(),
+            ),
+            (
+                "resource-stream",
+                wasm_junction_conformance::resource_stream_component(),
+            ),
             ("notes", wasm_junction_conformance::component()),
             (
                 "translator",
@@ -258,6 +296,14 @@ mod tests {
         assert!(streams.contains("wasm-junction:stream-id"));
         assert!(streams.matches("readFn.wasmJunctionOrigin").count() > 2);
         assert!(streams.contains("wasmJunctionLiftedEnd"));
+        let value_streams =
+            transpile_component(wasm_junction_conformance::value_stream_component())
+                .unwrap()
+                .source;
+        assert!(value_streams.contains("wasmJunctionStreamOrigins"));
+        assert!(value_streams.contains("wasm-junction:stream-id"));
+        assert!(value_streams.matches("readFn.wasmJunctionOrigin").count() > 2);
+        assert!(value_streams.contains("wasmJunctionLiftedEnd"));
         let output = transpile_component(wasm_junction_conformance::component()).unwrap();
         let signature = output
             .signatures
