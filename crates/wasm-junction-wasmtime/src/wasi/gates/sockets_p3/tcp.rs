@@ -56,7 +56,10 @@ fn decode_socket(value: Val) -> Result<Resource<TcpSocket>, CallError> {
     resource_from_val(value, INTERFACE, TCP_SOCKET)
 }
 
-fn drop_socket(store: &mut StoreData, socket: Resource<TcpSocket>) -> wasmtime::Result<()> {
+pub(super) fn drop_socket(
+    store: &mut StoreData,
+    socket: Resource<TcpSocket>,
+) -> wasmtime::Result<()> {
     HostTcpSocket::drop(&mut views::sockets(store), socket)
 }
 

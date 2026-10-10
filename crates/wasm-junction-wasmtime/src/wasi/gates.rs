@@ -1335,6 +1335,14 @@ pub(super) const STATIC_STREAM_INTERFACES: &[&str] = &[
     sockets_p3::INTERFACE,
 ];
 
+#[cfg(feature = "wasi-p3")]
+pub(super) fn drop_owned_resource(
+    store: &mut StoreData,
+    resource: &JunctionResource,
+) -> wasmtime::Result<bool> {
+    sockets_p3::drop_owned_resource(store, resource)
+}
+
 #[cfg(feature = "wasi-http")]
 pub(super) fn add_http(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     http_p2::add(linker)?;

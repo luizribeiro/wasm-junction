@@ -57,3 +57,22 @@ pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     udp::add(linker)?;
     gate::add_lookup(linker)
 }
+
+pub(super) fn drop_owned_resource(
+    store: &mut StoreData,
+    resource: &JunctionResource,
+) -> wasmtime::Result<bool> {
+    if resource.interface() != INTERFACE || resource.name() != TCP_SOCKET {
+        return Ok(false);
+    }
+    let invocation = store
+        .context
+        .invocation_id()
+        .ok_or_else(|| wasmtime::Error::msg("WASI resource cleanup has no invocation id"))?;
+    store.imports.emit(EngineEvent::ResourceDrop {
+        invocation,
+        resource: resource.clone(),
+    });
+    tcp::drop_socket(store, Resource::new_own(resource.id()))?;
+    Ok(true)
+}

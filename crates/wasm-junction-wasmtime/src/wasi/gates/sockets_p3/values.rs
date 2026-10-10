@@ -97,11 +97,11 @@ impl crate::stream_values::StreamValue for Resource<TcpSocket> {
         store
             .data_mut()
             .set_wasi_handle_context(id, address.to_val());
-        Ok(Some(Val::Resource(
-            wasm_junction_core::Resource::__owned_for_invocation(
-                INTERFACE, TCP_SOCKET, id, invocation,
-            ),
-        )))
+        let resource = wasm_junction_core::Resource::__owned_for_invocation(
+            INTERFACE, TCP_SOCKET, id, invocation,
+        );
+        store.data_mut().owned_resources.insert(resource.clone());
+        Ok(Some(Val::Resource(resource)))
     }
 
     fn from_val(
@@ -121,6 +121,14 @@ impl crate::stream_values::StreamValue for Resource<TcpSocket> {
             store.data_mut(),
         )
         .map_err(wasmtime::Error::new)?;
+        if !store.data_mut().owned_resources.remove(&resource) {
+            return Err(wasmtime::Error::new(CallError::refused(format!(
+                "resource `{}/{}` id {} is no longer owned by this invocation",
+                resource.interface(),
+                resource.name(),
+                resource.id()
+            ))));
+        }
         Ok(Resource::new_own(resource.id()))
     }
 }

@@ -628,6 +628,15 @@ async fn cleanup_resources(store: &mut Store<StoreData>) -> Result<(), wasmtime:
     });
     let mut failures = Vec::new();
     for resource in resources {
+        #[cfg(feature = "wasi-p3")]
+        match crate::wasi::drop_owned_resource(store.data_mut(), &resource) {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(error) => {
+                failures.push(error.to_string());
+                continue;
+            }
+        }
         if let Err(error) = imports
             .drop_resource(context.clone(), caller.clone(), resource)
             .await
