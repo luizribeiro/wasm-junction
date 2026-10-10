@@ -2,7 +2,7 @@
 resolver = "3"
 members = [
   "cycle-a", "cycle-b", "dispatch", "notes-summary", "reload-breaking", "reload-v1", "reload-v2",
-  "reload-writer", "resource-client", "resource-stream", "streams", "translator",
+  "named-value-streams", "reload-writer", "resource-client", "resource-stream", "streams", "translator",
   "value-streams", "writer",
 ]
 

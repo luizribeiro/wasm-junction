@@ -10,6 +10,7 @@ fn main() -> std::io::Result<()> {
     println!("cargo::rerun-if-changed=reload-wit");
     println!("cargo::rerun-if-changed=stream-wit");
     println!("cargo::rerun-if-changed=value-stream-wit");
+    println!("cargo::rerun-if-changed=named-value-stream-wit");
     println!("cargo::rerun-if-changed=wit");
     build(
         "guest/Cargo.toml",
@@ -36,6 +37,11 @@ fn main() -> std::io::Result<()> {
         "guest/Cargo.toml",
         "value_streams_guest.wasm",
         "value-streams.wasm",
+    )?;
+    build(
+        "guest/Cargo.toml",
+        "named_value_streams_guest.wasm",
+        "named-value-streams.wasm",
     )?;
     build(
         "guest/Cargo.toml",

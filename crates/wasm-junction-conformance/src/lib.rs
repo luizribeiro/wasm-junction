@@ -66,6 +66,8 @@ pub const STREAM_PROBE: &str = "example:streams/probe@0.1.0";
 pub const VALUE_STREAM_HOST: &str = "example:value-streams/host@0.1.0";
 /// The value-stream fixture's exported interface.
 pub const VALUE_STREAM_PROBE: &str = "example:value-streams/probe@0.1.0";
+/// The named-value stream fixture's exported interface.
+pub const NAMED_VALUE_STREAM_PROBE: &str = "example:named-value-streams/probe@0.1.0";
 /// The reload fixture's host gate interface.
 pub const RELOAD_GATE: &str = "example:reload/gate@0.1.0";
 /// The interface replaced by a breaking reload.
@@ -140,6 +142,12 @@ pub fn stream_component() -> &'static [u8] {
 #[must_use]
 pub fn value_stream_component() -> &'static [u8] {
     include_bytes!(concat!(env!("OUT_DIR"), "/value-streams.wasm"))
+}
+
+/// Returns the component that echoes streams of records.
+#[must_use]
+pub fn named_value_stream_component() -> &'static [u8] {
+    include_bytes!(concat!(env!("OUT_DIR"), "/named-value-streams.wasm"))
 }
 
 /// Returns the first reload fixture generation.
@@ -233,5 +241,12 @@ mod tests {
         let component = Component::from_bytes(value_stream_component()).unwrap();
         assert_eq!(component.imports(), [VALUE_STREAM_HOST]);
         assert_eq!(component.exports(), [VALUE_STREAM_PROBE]);
+    }
+
+    #[test]
+    fn named_value_stream_component_exports_its_probe() {
+        let component = Component::from_bytes(named_value_stream_component()).unwrap();
+        assert!(component.imports().is_empty());
+        assert_eq!(component.exports(), [NAMED_VALUE_STREAM_PROBE]);
     }
 }

@@ -242,6 +242,10 @@ mod tests {
                 wasm_junction_conformance::value_stream_component(),
             ),
             (
+                "named-value-streams",
+                wasm_junction_conformance::named_value_stream_component(),
+            ),
+            (
                 "resource-stream",
                 wasm_junction_conformance::resource_stream_component(),
             ),

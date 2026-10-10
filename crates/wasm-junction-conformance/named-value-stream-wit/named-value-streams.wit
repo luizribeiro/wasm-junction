@@ -1,0 +1,13 @@
+package example:named-value-streams@0.1.0;
+
+interface probe {
+  record note {
+    text: string,
+  }
+
+  echo: async func(values: stream<note>) -> list<note>;
+}
+
+world named-value-streams {
+  export probe;
+}
