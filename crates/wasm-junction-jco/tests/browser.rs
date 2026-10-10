@@ -22,11 +22,11 @@ use wasm_junction::{
 use wasm_junction_conformance::{
     CYCLE_A, DECORATION, DISPATCH_PINGER, DISPATCH_RUNNER, Fixture, FixtureHost, PoisonHost,
     RESOURCE_CLIENT, ReloadGreeter, ReloadHost, ResourceHost, RetainHost, RoutedFixture,
-    RoutedHost, STREAM_PROBE, SUMMARIZER, StreamHost, TRANSLATOR, WRITER, component,
-    cycle_a_component, cycle_b_component, dispatch_component, reload_v1_component,
-    reload_v2_component, resource_component, run_default, run_reload, run_resource_refusal,
-    run_resources, run_routed, run_streams, sample_note, sample_summary, stream_component,
-    translator_component, writer_component,
+    RoutedHost, STREAM_PROBE, SUMMARIZER, StreamHost, TRANSLATOR, VALUE_STREAM_PROBE,
+    ValueStreamHost, WRITER, component, cycle_a_component, cycle_b_component, dispatch_component,
+    reload_v1_component, reload_v2_component, resource_component, run_default, run_reload,
+    run_resource_refusal, run_resources, run_routed, run_streams, sample_note, sample_summary,
+    stream_component, translator_component, value_stream_component, writer_component,
 };
 use wasm_junction_jco::JcoEngine;
 
@@ -270,6 +270,35 @@ async fn refused_resource_call_defers_the_drop_to_cleanup() {
 #[wasm_bindgen_test]
 async fn bidirectional_streams_match_the_engine_neutral_trace() {
     run_streams(JcoEngine::new()).await.unwrap();
+}
+
+#[wasm_bindgen_test]
+async fn host_value_stream_items_reach_the_guest_in_order() {
+    let app = App::builder()
+        .engine(JcoEngine::new())
+        .provide(ValueStreamHost::default().provided())
+        .build()
+        .unwrap();
+    app.load(
+        Component::from_bytes(value_stream_component())
+            .unwrap()
+            .named("value-streams"),
+    )
+    .await
+    .unwrap();
+
+    let input = OutputStream::from_items(["first".to_owned(), "second".to_owned()]);
+    assert_eq!(
+        app.call(
+            "value-streams",
+            VALUE_STREAM_PROBE,
+            "echo-strings",
+            vec![input.into()],
+        )
+        .await
+        .unwrap(),
+        [Val::List(vec![Val::from("first"), Val::from("second")])]
+    );
 }
 
 #[wasm_bindgen_test]

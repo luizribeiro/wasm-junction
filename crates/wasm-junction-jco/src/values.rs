@@ -27,12 +27,43 @@ pub(crate) struct ResourceTracker {
 
 pub(crate) enum HostStream {
     Bytes(InputStream),
+    Values {
+        input: InputStream<Val>,
+        item: ValueType,
+    },
 }
 
 impl HostStream {
+    pub(crate) async fn read(
+        &mut self,
+        resources: &ResourceTracker,
+    ) -> Result<Option<JsValue>, CallError> {
+        match self {
+            Self::Bytes(input) => input
+                .read()
+                .await
+                .map(|chunk| chunk.map(|bytes| Uint8Array::from(bytes.as_slice()).into()))
+                .map_err(|error| CallError::trap(error.to_string())),
+            Self::Values { input, item } => input
+                .read()
+                .await
+                .map_err(|error| CallError::trap(error.to_string()))?
+                .map(|values| lower_sequence(values, item, ResourceRetention::Track(resources)))
+                .transpose(),
+        }
+    }
+
+    pub(crate) fn into_handle(self) -> StreamHandle {
+        match self {
+            Self::Bytes(input) => input.into_handle(),
+            Self::Values { input, .. } => input.into_handle(),
+        }
+    }
+
     pub(crate) fn close_reader(self) {
         match self {
             Self::Bytes(input) => input.close_reader(),
+            Self::Values { input, .. } => input.close_reader(),
         }
     }
 }
@@ -427,21 +458,26 @@ fn lower(
             lower_resource(resource, expected, resources)?
         }
         (Val::Stream(handle), ValueType::Stream(item)) => {
-            if **item != ValueType::U8 || !handle.is_byte_stream() {
-                return Err(CallError::refused(
-                    "jco does not yet support WIT value streams",
-                ));
+            if handle.is_byte_stream() != (**item == ValueType::U8) {
+                return Err(wrong_val_type(expected, &Val::Stream(handle)));
             }
             let ResourceRetention::Track(resources) = resources else {
-                return Err(CallError::trap("cannot synthesize a byte stream"));
+                return Err(CallError::trap("cannot synthesize a stream"));
             };
             let id = handle.id();
-            let input = InputStream::try_from(handle)
-                .map_err(|error| CallError::trap(error.to_string()))?;
-            resources
-                .host_streams
-                .borrow_mut()
-                .insert(id, HostStream::Bytes(input));
+            let stream = if **item == ValueType::U8 {
+                HostStream::Bytes(
+                    InputStream::try_from(handle)
+                        .map_err(|error| CallError::trap(error.to_string()))?,
+                )
+            } else {
+                HostStream::Values {
+                    input: InputStream::__from_handle_with(handle, Ok)
+                        .map_err(|error| CallError::trap(error.to_string()))?,
+                    item: (**item).clone(),
+                }
+            };
+            resources.host_streams.borrow_mut().insert(id, stream);
             resources.channel_open(id, ChannelDirection::HostToGuest);
             stream_marker("host", id)
         }
@@ -544,9 +580,7 @@ fn lift_stream(
 ) -> Result<Val, CallError> {
     let (kind, id) = stream_identity(&value, expected)?;
     let handle = match kind.as_str() {
-        "host" => resources.take_host(id).map(|stream| match stream {
-            HostStream::Bytes(input) => input.into_handle(),
-        }),
+        "host" => resources.take_host(id).map(HostStream::into_handle),
         "guest" if resources.refuse_guest_streams.get() => {
             let handle = resources.take_guest(id).ok_or_else(|| {
                 CallError::trap(format!("stream `guest#{id}` is no longer available"))
@@ -1208,20 +1242,23 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
-    async fn refuses_value_streams_without_panicking() {
-        let error = lower_args_tracked(
+    async fn lowers_value_stream_chunks_and_refuses_guest_stream_results() {
+        let tracker = ResourceTracker::default();
+        let signature = FunctionType {
+            params: vec![ValueType::Stream(Box::new(ValueType::U32))],
+            result: None,
+        };
+        let lowered = lower_args_tracked(
             vec![wasm_junction_core::OutputStream::from_items([7_u32]).into()],
-            &FunctionType {
-                params: vec![ValueType::Stream(Box::new(ValueType::U32))],
-                result: None,
-            },
-            &ResourceTracker::default(),
+            &signature,
+            &tracker,
         )
-        .unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            "jco does not yet support WIT value streams"
-        );
+        .unwrap();
+        let (_, id) = stream_identity(&lowered.get(0), &signature.params[0]).unwrap();
+        let mut stream = tracker.checkout_host(id).unwrap();
+        let chunk = Array::from(&stream.read(&tracker).await.unwrap().unwrap());
+        assert_eq!(chunk.length(), 1);
+        assert_eq!(chunk.get(0).as_f64(), Some(7.0));
 
         let dispatcher = Arc::new(EventDispatcher::default());
         let tracker = ResourceTracker::with_imports(
@@ -1242,7 +1279,7 @@ mod tests {
         assert_eq!(error.kind(), CallErrorKind::Refused);
         assert_eq!(
             error.to_string(),
-            "jco does not yet support WIT value streams"
+            "guest-created streams cannot be returned because the component store ends with each call"
         );
         assert_eq!(
             writer.write([8]).await.unwrap_err().to_string(),

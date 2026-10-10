@@ -15,8 +15,8 @@ use wasm_junction_core::{
 
 use crate::types::Signatures;
 use crate::values::{
-    HostStream, JsResult, ResourceTracker, default_result, lift_args_tracked,
-    lift_result_error_tracked, lift_result_tracked, lower_args_tracked, lower_result_tracked,
+    JsResult, ResourceTracker, default_result, lift_args_tracked, lift_result_error_tracked,
+    lift_result_tracked, lower_args_tracked, lower_result_tracked,
 };
 use crate::{TranspiledComponent, transpile_component};
 
@@ -355,11 +355,11 @@ impl Bridge {
         let Some(input) = self.resources.checkout_host(id) else {
             return Err(CallError::trap(format!("unknown host stream `{id}`")));
         };
-        let HostStream::Bytes(mut input) = input;
-        match input.read().await {
-            Ok(Some(bytes)) => {
-                self.resources.restore_host(id, HostStream::Bytes(input));
-                Ok(Uint8Array::from(bytes.as_slice()).into())
+        let mut input = input;
+        match input.read(&self.resources).await {
+            Ok(Some(values)) => {
+                self.resources.restore_host(id, input);
+                Ok(values)
             }
             Ok(None) => {
                 self.resources.finish_host(id);
@@ -367,7 +367,7 @@ impl Bridge {
             }
             Err(error) => {
                 self.resources.finish_host(id);
-                Err(CallError::trap(error.to_string()))
+                Err(error)
             }
         }
     }

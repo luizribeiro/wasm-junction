@@ -18,7 +18,7 @@
  *   args: unknown[],
  * ) => Promise<unknown>} Dispatch
  * @typedef {(interfaceName: string, resourceName: string, id: number) => Promise<void>} DropResource
- * @typedef {(id: bigint) => Promise<Uint8Array | null>} ReadStream
+ * @typedef {(id: bigint) => Promise<Uint8Array | unknown[] | null>} ReadStream
  * @typedef {(id: bigint) => Promise<void>} CloseStream
  * @typedef {(stream: object) => object} OpenGuestStream
  * @typedef {{ read: ReadStream, close: CloseStream, open: OpenGuestStream }} StreamFunctions
@@ -288,7 +288,7 @@ function materialize(value, classes, state, readStream, closeStream) {
   if (STREAM_MARKER in object) {
     const [kind, id] = object[STREAM_MARKER];
     if (kind !== "host") throw new TypeError(`unexpected ${kind} stream from Rust`);
-    return hostStream(id, state, readStream, closeStream);
+    return hostStream(id, classes, state, readStream, closeStream);
   }
   if (RESOURCE_MARKER in object) {
     const [interfaceName, resourceName, id] = object[RESOURCE_MARKER];
@@ -306,13 +306,14 @@ function materialize(value, classes, state, readStream, closeStream) {
 
 /**
  * @param {bigint} id
+ * @param {Map<string, Map<string, Function>>} classes
  * @param {ImportState} state
  * @param {ReadStream} readStream
  * @param {CloseStream} closeStream
  * @returns {any}
  */
-function hostStream(id, state, readStream, closeStream) {
-  /** @type {number[]} */
+function hostStream(id, classes, state, readStream, closeStream) {
+  /** @type {any[]} */
   let pending = [];
   let ended = false;
   const iterator = {
@@ -324,7 +325,10 @@ function hostStream(id, state, readStream, closeStream) {
         ended = true;
         return { done: true, value: undefined };
       }
-      pending = [...chunk];
+      pending =
+        chunk instanceof Uint8Array
+          ? [...chunk]
+          : chunk.map(item => materialize(item, classes, state, readStream, closeStream));
       return { done: false, value: pending.shift() };
     },
     async return() {
