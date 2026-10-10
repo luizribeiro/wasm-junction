@@ -357,6 +357,51 @@ async fn host_value_stream_items_reach_the_guest_in_order() {
 }
 
 #[wasm_bindgen_test]
+async fn value_stream_recovers_after_the_guest_drops_early() {
+    let app = App::builder()
+        .engine(JcoEngine::new())
+        .provide(ValueStreamHost::default().provided())
+        .build()
+        .unwrap();
+    app.load(
+        Component::from_bytes(value_stream_component())
+            .unwrap()
+            .named("value-streams"),
+    )
+    .await
+    .unwrap();
+
+    let (writer, output) = OutputStream::<String>::channel();
+    writer.write(["first".to_owned()]).await.unwrap();
+    app.call(
+        "value-streams",
+        VALUE_STREAM_PROBE,
+        "drop-strings",
+        vec![output.into()],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        writer
+            .write(["late".to_owned()])
+            .await
+            .unwrap_err()
+            .to_string(),
+        "stream reader is closed"
+    );
+    assert!(
+        app.call(
+            "value-streams",
+            VALUE_STREAM_PROBE,
+            "echo-strings",
+            vec![OutputStream::from_items(["recovered".to_owned()]).into()],
+        )
+        .await
+        .is_ok()
+    );
+}
+
+#[wasm_bindgen_test]
 async fn reload_scenario_matches_the_engine_neutral_trace() {
     run_reload(JcoEngine::new()).await.unwrap();
 }
