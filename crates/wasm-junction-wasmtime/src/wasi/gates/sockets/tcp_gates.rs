@@ -9,6 +9,7 @@ use wasmtime_wasi::p2::{DynInputStream, DynOutputStream, DynPollable, SocketErro
 use super::super::{
     FromVal, Real, ToVal, finish, open_channel, scope_values, shape, trampoline, views,
 };
+use super::gate::socket_options;
 use super::{StoreData, copy_context, gate_socket, validate_tcp};
 
 async fn start_bind(
@@ -89,20 +90,6 @@ fn subscribe(
     Ok(pollable)
 }
 
-macro_rules! tcp_options {
-    ($linker:ident, $(
-        $get_name:literal, $get:path, $get_ty:ty,
-        $set_name:literal, $set:path, $set_ty:ty;
-    )+) => {$(
-        gate_socket!($linker, super::TCP_INTERFACE,
-            $get_name, $get, view_sync, super::validate_tcp,
-            (socket: Resource<tcp::TcpSocket>) -> $get_ty);
-        gate_socket!($linker, super::TCP_INTERFACE,
-            $set_name, $set, view_sync, super::validate_tcp,
-            (socket: Resource<tcp::TcpSocket>, value: $set_ty) -> ());
-    )+};
-}
-
 pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     gate_socket!(linker, super::TCP_INTERFACE, "[method]tcp-socket.start-bind",
         start_bind, store_async, super::validate_tcp_network,
@@ -140,7 +127,8 @@ pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     gate_socket!(linker, super::TCP_INTERFACE, "[method]tcp-socket.set-listen-backlog-size",
         HostTcpSocket::set_listen_backlog_size, view_sync, super::validate_tcp,
         (socket: Resource<tcp::TcpSocket>, value: u64) -> ());
-    tcp_options!(linker,
+    socket_options!(gate_socket, linker, super::TCP_INTERFACE, tcp::TcpSocket,
+        super::validate_tcp,
         "[method]tcp-socket.keep-alive-enabled", HostTcpSocket::keep_alive_enabled, bool,
         "[method]tcp-socket.set-keep-alive-enabled", HostTcpSocket::set_keep_alive_enabled, bool;
         "[method]tcp-socket.keep-alive-idle-time", HostTcpSocket::keep_alive_idle_time, u64,

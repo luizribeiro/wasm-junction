@@ -10,7 +10,7 @@ use super::{
 };
 use crate::engine::StoreData;
 
-mod gate;
+pub(super) mod gate;
 mod tcp_gates;
 mod udp_gates;
 mod values;
@@ -71,7 +71,7 @@ fn validate_at<T: WitResource>(
     )
 }
 
-fn validate_none(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
+pub(super) fn validate_none(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
     validate_handle_contexts(values, store)
 }
 

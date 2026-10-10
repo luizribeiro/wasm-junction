@@ -26,6 +26,33 @@ pub(super) fn finish_result<T: FromVal>(
     }
 }
 
+macro_rules! call_socket {
+    (view_async, $method:path, $store:expr $(, $arg:ident)*) => {
+        $method(&mut $crate::wasi::gates::views::sockets($store) $(, $arg)*).await
+    };
+    (view_sync, $method:path, $store:expr $(, $arg:ident)*) => {
+        $method(&mut $crate::wasi::gates::views::sockets($store) $(, $arg)*)
+    };
+    (store_async, $method:path, $store:expr $(, $arg:ident)*) => {
+        $method($store $(, $arg)*).await
+    };
+    (store_sync, $method:path, $store:expr $(, $arg:ident)*) => {
+        $method($store $(, $arg)*)
+    };
+}
+
+macro_rules! socket_options {
+    ($gate:ident, $linker:ident, $interface:expr, $socket:ty, $validate:path, $(
+        $get_name:literal, $get:path, $get_ty:ty,
+        $set_name:literal, $set:path, $set_ty:ty;
+    )+) => {$(
+        $gate!($linker, $interface, $get_name, $get, view_sync, $validate,
+            (socket: wasmtime::component::Resource<$socket>) -> $get_ty);
+        $gate!($linker, $interface, $set_name, $set, view_sync, $validate,
+            (socket: wasmtime::component::Resource<$socket>, value: $set_ty) -> ());
+    )+};
+}
+
 macro_rules! gate_socket {
     ($linker:ident, $iface:expr, $name:literal, $method:path, $mode:ident, $validate:expr,
      ($($arg:ident: $ty:ty),*) -> $ok:ty) => {
@@ -45,7 +72,7 @@ macro_rules! gate_socket {
                     $(let $arg = <$ty as $crate::wasi::gates::FromVal>::from_val(
                         args.next().ok_or_else(|| super::shape("another argument"))?
                     )?;)*
-                    let result = gate_socket!(@call $mode, $method,
+                    let result = $crate::wasi::gates::sockets::gate::call_socket!($mode, $method,
                         store.data_mut() $(, $arg)*);
                     let result = $crate::wasi::gates::sockets::gate::convert(
                         store.data_mut(), result,
@@ -65,18 +92,8 @@ macro_rules! gate_socket {
             }),
         )?;
     };
-    (@call view_async, $method:path, $store:expr $(, $arg:ident)*) => {
-        $method(&mut $crate::wasi::gates::views::sockets($store) $(, $arg)*).await
-    };
-    (@call view_sync, $method:path, $store:expr $(, $arg:ident)*) => {
-        $method(&mut $crate::wasi::gates::views::sockets($store) $(, $arg)*)
-    };
-    (@call store_async, $method:path, $store:expr $(, $arg:ident)*) => {
-        $method($store $(, $arg)*).await
-    };
-    (@call store_sync, $method:path, $store:expr $(, $arg:ident)*) => {
-        $method($store $(, $arg)*)
-    };
 }
 
+pub(in crate::wasi::gates) use call_socket;
 pub(super) use gate_socket;
+pub(in crate::wasi::gates) use socket_options;

@@ -8,6 +8,7 @@ use wasmtime_wasi::p2::{DynPollable, SocketError, SocketResult};
 use super::super::{
     FromVal, Real, ToVal, finish, open_channel, scope_values, shape, trampoline, views,
 };
+use super::gate::socket_options;
 use super::{
     StoreData, copy_context, gate_socket, validate_incoming, validate_outgoing, validate_udp,
 };
@@ -85,19 +86,6 @@ fn subscribe_outgoing(
     Ok(pollable)
 }
 
-macro_rules! udp_options {
-    ($linker:ident, $(
-        $get_name:literal, $get:path, $get_ty:ty,
-        $set_name:literal, $set:path, $set_ty:ty;
-    )+) => {$(
-        gate_socket!($linker, super::UDP_INTERFACE, $get_name, $get, view_sync,
-            super::validate_udp, (socket: Resource<udp::UdpSocket>) -> $get_ty);
-        gate_socket!($linker, super::UDP_INTERFACE, $set_name, $set, view_sync,
-            super::validate_udp,
-            (socket: Resource<udp::UdpSocket>, value: $set_ty) -> ());
-    )+};
-}
-
 pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     gate_socket!(linker, super::UDP_INTERFACE, "[method]udp-socket.start-bind", start_bind,
         store_async, super::validate_udp_network,
@@ -118,7 +106,8 @@ pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     gate!(linker, "wasi:sockets/udp@0.2.12", "[method]udp-socket.address-family", sockets,
         HostUdpSocket::address_family, plain_with[validate_udp],
         (socket: Resource<udp::UdpSocket>) -> udp::IpAddressFamily);
-    udp_options!(linker,
+    socket_options!(gate_socket, linker, super::UDP_INTERFACE, udp::UdpSocket,
+        super::validate_udp,
         "[method]udp-socket.unicast-hop-limit", HostUdpSocket::unicast_hop_limit, u8,
         "[method]udp-socket.set-unicast-hop-limit", HostUdpSocket::set_unicast_hop_limit, u8;
         "[method]udp-socket.receive-buffer-size", HostUdpSocket::receive_buffer_size, u64,
