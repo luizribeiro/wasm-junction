@@ -214,6 +214,77 @@ fn add_send(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     Ok(())
 }
 
+fn receive_real(
+    mut store: wasmtime::StoreContextMut<'_, StoreData>,
+    args: Vals,
+) -> wasm_junction_core::BoxFuture<'_, Result<Vals, CallError>> {
+    Box::pin(async move {
+        require_sockets(store.data())?;
+        validate_tcp(&args, store.data_mut())?;
+        let socket = decode_socket(args.into_iter().next().ok_or_else(|| shape(TCP_SOCKET))?)?;
+        let access =
+            Access::<StoreData, WasiSockets>::new(store.as_context_mut(), WasiSocketsView::sockets);
+        let (stream, future) = HostTcpSocketWithStore::receive(access, socket)
+            .map_err(|error| CallError::trap(error.to_string()))?;
+        Ok(vec![Val::Tuple(vec![
+            lift_stream_with_direction_plain(&mut store, stream, ChannelDirection::HostToGuest)
+                .map_err(|error| CallError::trap(error.to_string()))?,
+            lift_future_plain(&mut store, future)
+                .map_err(|error| CallError::trap(error.to_string()))?,
+        ])])
+    })
+}
+
+fn add_receive(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    linker.instance(INTERFACE)?.func_wrap_async(
+        "[method]tcp-socket.receive",
+        |mut store, (socket,): (Resource<TcpSocket>,)| {
+            Box::new(async move {
+                let invocation = store
+                    .data()
+                    .context
+                    .invocation_id()
+                    .ok_or_else(|| wasmtime::Error::msg("WASI call has no invocation id"))?;
+                let mut args = scope_values(
+                    vec![resource_to_val(&socket, INTERFACE, TCP_SOCKET)],
+                    invocation,
+                );
+                add_handle_contexts(&mut args, store.data());
+                let outcome = trampoline::gate(
+                    &mut store,
+                    INTERFACE,
+                    "[method]tcp-socket.receive",
+                    args,
+                    receive_real,
+                )
+                .await;
+                let (stream, future) = match outcome {
+                    Ok(values) => {
+                        let [Val::Tuple(pair)] =
+                            <[Val; 1]>::try_from(values).map_err(|_| shape("stream and future"))?
+                        else {
+                            return Err(wasmtime::Error::new(shape("stream and future")));
+                        };
+                        let [stream, future] =
+                            <[Val; 2]>::try_from(pair).map_err(|_| shape("stream and future"))?;
+                        (
+                            lower_stream_handoff_plain(&mut store, stream)?,
+                            lower_future_plain::<Result<(), ErrorCode>>(&mut store, future)?,
+                        )
+                    }
+                    Err(error) if error.kind() == CallErrorKind::Refused => (
+                        StreamReader::new(store.as_context_mut(), std::iter::empty())?,
+                        denied_future(&mut store)?,
+                    ),
+                    Err(error) => return Err(wasmtime::Error::new(error)),
+                };
+                Ok(((stream, future),))
+            })
+        },
+    )?;
+    Ok(())
+}
+
 macro_rules! tcp_options {
     ($linker:ident, $($get:literal, $get_method:path, $get_ty:ty,
         $set:literal, $set_method:path, $set_ty:ty;)+) => {$(
@@ -243,6 +314,7 @@ pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         super::validate_tcp, (socket: Resource<TcpSocket>, address: IpSocketAddress) -> ());
     add_listen(linker)?;
     add_send(linker)?;
+    add_receive(linker)?;
     gate_socket!(linker, "[method]tcp-socket.get-local-address",
         HostTcpSocket::get_local_address, view_sync, super::validate_tcp,
         (socket: Resource<TcpSocket>) -> IpSocketAddress);
