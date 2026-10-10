@@ -175,6 +175,52 @@ fn filesystem_streams_write_append_read_and_list() {
     );
 }
 
+#[cfg(feature = "wasi-p3")]
+struct HideEntry;
+
+#[cfg(feature = "wasi-p3")]
+impl Middleware for HideEntry {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        let hide = call.interface.as_ref() == "wasi:filesystem/types@0.3.0"
+            && call.function.as_ref() == "[method]descriptor.read-directory";
+        let mut values = next.run(call).await?;
+        if hide {
+            let [Val::Tuple(pair)] = values.as_mut_slice() else {
+                return Err(CallError::trap("directory read returned the wrong shape"));
+            };
+            let Some(Val::Stream(stream)) = pair.first_mut() else {
+                return Err(CallError::trap("directory read returned no stream"));
+            };
+            *stream = stream.take().filter_items(|item| {
+                let Val::Record(fields) = item else {
+                    return true;
+                };
+                !fields.iter().any(|(name, value)| {
+                    name == "name" && value == &Val::String("hidden.txt".to_owned())
+                })
+            });
+        }
+        Ok(values)
+    }
+}
+
+#[test]
+#[cfg(feature = "wasi-p3")]
+fn middleware_filters_directory_entries_before_the_guest_reads_them() {
+    let directory = TestDirectory::new("filter");
+    std::fs::write(directory.0.join("visible.txt"), b"visible").unwrap();
+    std::fs::write(directory.0.join("hidden.txt"), b"hidden").unwrap();
+    let app = filesystem_app(HideEntry, &directory);
+
+    let result = block_on(app.call("p3", EXPORT, "list-directory", Vec::new())).unwrap();
+    assert_eq!(
+        result,
+        [Val::Result(Ok(Some(Box::new(Val::List(vec![Val::from(
+            "visible.txt"
+        )])))))]
+    );
+}
+
 #[test]
 #[cfg(feature = "wasi-p3")]
 fn preview_3_environment_and_arguments_match_preview_2() {
