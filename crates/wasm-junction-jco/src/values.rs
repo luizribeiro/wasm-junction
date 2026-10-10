@@ -14,12 +14,15 @@ use crate::types::{FunctionType, ResourceType, ValueType};
 
 const RESOURCE_MARKER: &str = "$wasm-junction-resource";
 const STREAM_MARKER: &str = "$wasm-junction-stream";
+type GuestStreamOpener =
+    Rc<dyn Fn(JsValue, &ValueType, ResourceTracker) -> Result<StreamHandle, CallError>>;
 
 #[derive(Clone, Default)]
 pub(crate) struct ResourceTracker {
     resources: Rc<RefCell<HashSet<Resource>>>,
     host_streams: Rc<RefCell<HashMap<u64, HostStream>>>,
     guest_streams: Rc<RefCell<HashMap<u64, StreamHandle>>>,
+    guest_stream_opener: Rc<RefCell<Option<GuestStreamOpener>>>,
     refuse_guest_streams: Rc<Cell<bool>>,
     imports: Option<Arc<dyn ImportDispatcher>>,
     invocation: Option<InvocationId>,
@@ -102,6 +105,20 @@ impl ResourceTracker {
         self.guest_streams.borrow_mut().insert(id, handle);
         self.channel_open(id, ChannelDirection::GuestToHost);
         stream_marker("guest", id)
+    }
+
+    pub(crate) fn set_guest_stream_opener(
+        &self,
+        opener: impl Fn(JsValue, &ValueType, Self) -> Result<StreamHandle, CallError> + 'static,
+    ) {
+        *self.guest_stream_opener.borrow_mut() = Some(Rc::new(opener));
+    }
+
+    fn open_guest_stream(&self, stream: JsValue, item: &ValueType) -> Result<JsValue, CallError> {
+        let opener = self.guest_stream_opener.borrow().clone().ok_or_else(|| {
+            CallError::trap("guest streams are unavailable outside a component call")
+        })?;
+        opener(stream, item, self.clone()).map(|handle| self.register_guest(handle))
     }
 
     pub(crate) fn take_host(&self, id: u64) -> Option<HostStream> {
@@ -557,10 +574,7 @@ fn lift(
             lift_nested_result(value, ok.as_deref(), err.as_deref(), expected, resources)
         }
         ValueType::Resource(expected) => lift_resource(value, expected, resources),
-        ValueType::Stream(item) if **item == ValueType::U8 => {
-            lift_stream(value, expected, resources)
-        }
-        ValueType::Stream(_) => refuse_value_stream(value, expected, resources),
+        ValueType::Stream(item) => lift_stream(value, item, expected, resources),
         ValueType::Future => Err(unsupported(expected.name())),
         ValueType::Unsupported(name) => Err(unsupported(name)),
     }
@@ -574,10 +588,16 @@ fn stream_marker(kind: &str, id: u64) -> JsValue {
 }
 
 fn lift_stream(
-    value: JsValue,
+    mut value: JsValue,
+    item: &ValueType,
     expected: &ValueType,
     resources: &ResourceTracker,
 ) -> Result<Val, CallError> {
+    let has_marker = Reflect::has(&value, &STREAM_MARKER.into())
+        .map_err(|error| mismatch(expected, &error, "could not inspect stream marker"))?;
+    if !has_marker {
+        value = resources.open_guest_stream(value, item)?;
+    }
     let (kind, id) = stream_identity(&value, expected)?;
     let handle = match kind.as_str() {
         "host" => resources.take_host(id).map(HostStream::into_handle),
@@ -599,33 +619,17 @@ fn lift_stream(
         .ok_or_else(|| CallError::trap(format!("stream `{kind}#{id}` is no longer available")))
 }
 
-fn refuse_value_stream(
+pub(crate) fn lift_stream_chunk(
     value: JsValue,
-    expected: &ValueType,
+    item: &ValueType,
     resources: &ResourceTracker,
-) -> Result<Val, CallError> {
-    let (kind, id) = stream_identity(&value, expected)?;
-    match kind.as_str() {
-        "host" => resources
-            .take_host(id)
-            .ok_or_else(|| CallError::trap(format!("stream `host#{id}` is no longer available")))?
-            .close_reader(),
-        "guest" => {
-            let handle = resources.take_guest(id).ok_or_else(|| {
-                CallError::trap(format!("stream `guest#{id}` is no longer available"))
-            })?;
-            handle.__close_reader();
-            resources.close_guest(id);
-        }
-        _ => {
-            return Err(CallError::trap(format!(
-                "stream `{kind}#{id}` is no longer available"
-            )));
-        }
+) -> Result<Vec<Val>, CallError> {
+    let checkpoint = resources.resources.borrow().clone();
+    let result = lift_sequence(value, item, resources);
+    if result.is_err() {
+        *resources.resources.borrow_mut() = checkpoint;
     }
-    Err(CallError::refused(
-        "jco does not yet support WIT value streams",
-    ))
+    result
 }
 
 fn stream_identity(value: &JsValue, expected: &ValueType) -> Result<(String, u64), CallError> {
@@ -1226,6 +1230,25 @@ mod tests {
         let mut values = lift_args_tracked(&lowered, &signature, &tracker).unwrap();
         let input = InputStream::try_from(values.remove(0)).unwrap();
         assert_eq!(input.read_all().await.unwrap(), b"host");
+
+        tracker.set_guest_stream_opener(|_stream, item, _resources| {
+            assert_eq!(item, &ValueType::String);
+            Ok(
+                wasm_junction_core::OutputStream::from_items([Val::from("guest")])
+                    .__into_handle_with(Ok),
+            )
+        });
+        let raw = Array::of1(&Object::new());
+        let signature = FunctionType {
+            params: vec![ValueType::Stream(Box::new(ValueType::String))],
+            result: None,
+        };
+        let mut values = lift_args_tracked(&raw, &signature, &tracker).unwrap();
+        let Val::Stream(handle) = values.remove(0) else {
+            panic!("expected a guest stream")
+        };
+        let input = InputStream::<String>::from_handle(handle).unwrap();
+        assert_eq!(input.read_all().await.unwrap(), ["guest"]);
 
         let (_, output) = wasm_junction_core::OutputStream::<u8>::channel();
         let marker = tracker.register_guest(StreamHandle::from(output));

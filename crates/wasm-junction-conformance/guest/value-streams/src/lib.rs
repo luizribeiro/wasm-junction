@@ -48,6 +48,10 @@ impl bindings::exports::example::value_streams::probe::Guest for Component {
     async fn echo_nested(values: StreamReader<Vec<Option<String>>>) -> Vec<Vec<Option<String>>> {
         values.collect().await
     }
+
+    async fn drop_strings(mut values: StreamReader<String>) {
+        let _ = values.next().await;
+    }
 }
 
 bindings::export!(Component with_types_in bindings);

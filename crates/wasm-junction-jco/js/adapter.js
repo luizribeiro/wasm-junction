@@ -20,8 +20,7 @@
  * @typedef {(interfaceName: string, resourceName: string, id: number) => Promise<void>} DropResource
  * @typedef {(id: bigint) => Promise<Uint8Array | unknown[] | null>} ReadStream
  * @typedef {(id: bigint) => Promise<void>} CloseStream
- * @typedef {(stream: object) => object} OpenGuestStream
- * @typedef {{ read: ReadStream, close: CloseStream, open: OpenGuestStream }} StreamFunctions
+ * @typedef {{ read: ReadStream, close: CloseStream }} StreamFunctions
  * @typedef {[string, string]} ResourceFunction
  * @typedef {[string, string, string, string | undefined, ResourceFunction[], ResourceFunction[]]} ResourceDefinition
  * @typedef {{ poisoned: boolean }} ImportState
@@ -69,7 +68,6 @@ export async function compileComponent(source, names, modules, resources = []) {
  * @param {DropResource} [dropResource]
  * @param {ReadStream} [readStream]
  * @param {CloseStream} [closeStream]
- * @param {OpenGuestStream} [openGuestStream]
  * @returns {Promise<unknown>}
  */
 export async function invoke(
@@ -81,14 +79,11 @@ export async function invoke(
   dropResource = () => Promise.reject(new Error("resource drops are unavailable")),
   readStream = () => Promise.reject(new Error("stream reads are unavailable")),
   closeStream = () => Promise.reject(new Error("stream closes are unavailable")),
-  openGuestStream = () => {
-    throw new Error("guest streams are unavailable");
-  },
 ) {
   /** @type {Promise<void>[]} */
   const drops = [];
   const state = { poisoned: false };
-  const streams = { read: readStream, close: closeStream, open: openGuestStream };
+  const streams = { read: readStream, close: closeStream };
   const classes = makeResourceClasses(
     runtime.resources,
     dispatch,
@@ -119,7 +114,6 @@ export async function invoke(
       await exports[jsName](
         ...args.map(value => materialize(value, classes, state, readStream, closeStream)),
       ),
-      openGuestStream,
     );
   } finally {
     await Promise.all(drops);
@@ -249,7 +243,7 @@ function callImport(state, dispatch, classes, interfaceName, functionName, args,
   return dispatch(
     interfaceName,
     functionName,
-    args.map(value => dematerialize(value, streams.open)),
+    args.map(value => dematerialize(value)),
   ).then(
     value => {
       if (value && typeof value === "object" && IMPORT_FAILURE in value) {
@@ -351,25 +345,26 @@ function hostStream(id, classes, state, readStream, closeStream) {
   };
 }
 
-/** @param {any} value @param {OpenGuestStream} openGuestStream @returns {any} */
-function dematerialize(value, openGuestStream) {
+/** @param {any} value @returns {any} */
+function dematerialize(value) {
   if (!value || typeof value !== "object" || value instanceof Uint8Array) return value;
   if (Symbol.asyncIterator in value) {
     const id = value[STREAM_ID];
-    return id === undefined ? openGuestStream(value) : { [STREAM_MARKER]: ["host", id] };
+    return id === undefined ? value : { [STREAM_MARKER]: ["host", id] };
   }
-  if (Array.isArray(value)) return value.map(item => dematerialize(item, openGuestStream));
-  for (const key of Object.keys(value)) value[key] = dematerialize(value[key], openGuestStream);
+  if (Array.isArray(value)) return value.map(item => dematerialize(item));
+  for (const key of Object.keys(value)) value[key] = dematerialize(value[key]);
   return value;
 }
 
-/** @param {any} stream @returns {Promise<Uint8Array | null>} */
-export async function readGuestStream(stream) {
-  const item =
-    typeof stream.read === "function"
-      ? await stream.read({ count: 65536 })
-      : await stream[Symbol.asyncIterator]().next();
+/** @param {any} stream @param {boolean} byteStream @returns {Promise<any[] | Uint8Array | null>} */
+export async function readGuestStream(stream, byteStream) {
+  const bulk = typeof stream.read === "function";
+  const item = bulk
+    ? await stream.read({ count: 65536 })
+    : await stream[Symbol.asyncIterator]().next();
   if (item.done) return null;
+  if (!byteStream) return bulk ? item.value : [item.value];
   if (item.value instanceof Uint8Array) return item.value;
   if (typeof item.value === "number") return Uint8Array.of(item.value);
   return Uint8Array.from(item.value);
