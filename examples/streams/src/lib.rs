@@ -4,11 +4,13 @@
 #![warn(missing_docs)]
 
 mod bindings;
+mod protection;
 
 use std::error::Error;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use bindings::{runner, support};
+use protection::ProtectTickets;
 use wasm_junction::{App, CallContext, CallError, Component, InputStream, OutputStream};
 
 const COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/streams.wasm"));
@@ -55,6 +57,7 @@ pub async fn run(write: impl Fn(String) + Send + Sync + 'static) -> Result<(), B
     let support = Arc::new(Support::default());
     let app = App::builder()
         .provide(support::provider(support.clone()))
+        .middleware(ProtectTickets)
         .build()?;
     app.load(Component::from_bytes(COMPONENT)?.named("support-plugin"))
         .await?;
