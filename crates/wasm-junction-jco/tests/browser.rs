@@ -5,7 +5,8 @@
 use std::cell::{Cell, RefCell};
 use std::future::poll_fn;
 use std::rc::Rc;
-use std::sync::{Arc, Weak};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 use std::task::Poll;
 
 use js_sys::Uint8Array;
@@ -21,13 +22,14 @@ use wasm_junction::{
 };
 use wasm_junction_conformance::{
     CYCLE_A, DECORATION, DISPATCH_PINGER, DISPATCH_RUNNER, Fixture, FixtureHost,
-    NAMED_VALUE_STREAM_PROBE, PoisonHost, RESOURCE_CLIENT, ReloadGreeter, ReloadHost, ResourceHost,
-    RetainHost, RoutedFixture, RoutedHost, STREAM_PROBE, SUMMARIZER, StreamHost, TRANSLATOR,
-    VALUE_STREAM_PROBE, ValueStreamHost, WRITER, component, cycle_a_component, cycle_b_component,
-    dispatch_component, named_value_stream_component, reload_v1_component, reload_v2_component,
-    resource_component, run_default, run_reload, run_resource_refusal, run_resources, run_routed,
-    run_streams, sample_note, sample_summary, stream_component, translator_component,
-    value_stream_component, writer_component,
+    NAMED_VALUE_STREAM_PROBE, PoisonHost, RESOURCE_CLIENT, RESOURCE_HOST, ReloadGreeter,
+    ReloadHost, ResourceHost, RetainHost, RoutedFixture, RoutedHost, STREAM_PROBE, SUMMARIZER,
+    StreamHost, TRANSLATOR, VALUE_STREAM_PROBE, ValueStreamHost, WRITER, component,
+    cycle_a_component, cycle_b_component, dispatch_component, named_value_stream_component,
+    reload_v1_component, reload_v2_component, resource_component, resource_stream_component,
+    run_default, run_reload, run_resource_refusal, run_resources, run_routed, run_streams,
+    sample_note, sample_summary, stream_component, translator_component, value_stream_component,
+    writer_component,
 };
 use wasm_junction_jco::JcoEngine;
 
@@ -451,6 +453,127 @@ async fn nested_and_named_value_streams_round_trip() {
         .unwrap(),
         [Val::List(vec![note])]
     );
+}
+
+#[derive(Default)]
+struct InvalidResourceStreamState {
+    active: AtomicUsize,
+    constructor_calls: AtomicUsize,
+    read: Mutex<Option<String>>,
+}
+
+#[derive(Clone, Default)]
+struct InvalidResourceStreamHost(Arc<InvalidResourceStreamState>);
+
+impl Provider for InvalidResourceStreamHost {
+    fn call<'a>(
+        &'a self,
+        _cx: &'a CallContext,
+        call: Call,
+    ) -> BoxFuture<'a, Result<Vals, CallError>> {
+        Box::pin(async move {
+            match call.function.as_ref() {
+                "[constructor]session" => {
+                    let call = self.0.constructor_calls.fetch_add(1, Ordering::Relaxed);
+                    let id = u32::from(call >= 2);
+                    if call != 1 {
+                        self.0.active.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Ok(vec![Resource::owned(RESOURCE_HOST, "session", id).into()])
+                }
+                "[method]session.profile" => Ok(vec![Val::from("profile:recovered")]),
+                "accept-sessions" => {
+                    let [Val::Stream(stream)] = <[_; 1]>::try_from(call.args)
+                        .map_err(|_| CallError::trap("accept-sessions expects one stream"))?
+                    else {
+                        return Err(CallError::trap("accept-sessions expects a stream"));
+                    };
+                    let result = InputStream::<Resource>::from_handle(stream)?
+                        .read_all()
+                        .await
+                        .map_or_else(|error| error.to_string(), |_| "stream completed".to_owned());
+                    *self.0.read.lock().unwrap() = Some(result);
+                    Ok(vec![Val::from("reading")])
+                }
+                _ => Err(CallError::trap("unexpected resource call")),
+            }
+        })
+    }
+
+    fn drop_resource(&self, _cx: &CallContext, resource: Resource) -> Result<(), CallError> {
+        assert_eq!(
+            (resource.interface(), resource.name()),
+            (RESOURCE_HOST, "session")
+        );
+        self.0.active.fetch_sub(1, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+#[wasm_bindgen_test]
+async fn resource_streams_reject_foreign_handles_and_recover() {
+    let host = InvalidResourceStreamHost::default();
+    let app = App::builder()
+        .engine(JcoEngine::new())
+        .provide(Provided::new(RESOURCE_HOST, host.clone()))
+        .build()
+        .unwrap();
+    app.load(
+        Component::from_bytes(resource_stream_component())
+            .unwrap()
+            .named("resources"),
+    )
+    .await
+    .unwrap();
+
+    let error = app
+        .call(
+            "resources",
+            RESOURCE_CLIENT,
+            "send-invalid-sessions",
+            Vec::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert!(error.to_string().contains("is no longer owned"));
+    assert_eq!(
+        host.0.read.lock().unwrap().take().unwrap(),
+        "stream was aborted when its invocation ended"
+    );
+    assert_eq!(host.0.active.load(Ordering::Relaxed), 0);
+    assert_eq!(
+        app.call("resources", RESOURCE_CLIENT, "run", vec![Val::Bool(false)])
+            .await
+            .unwrap(),
+        [Val::from("profile:recovered")]
+    );
+    assert_eq!(host.0.active.load(Ordering::Relaxed), 0);
+
+    let foreign =
+        OutputStream::from_items([Resource::owned("example:foreign/host@1.0.0", "session", 7)]);
+    let error = app
+        .call(
+            "resources",
+            RESOURCE_CLIENT,
+            "use-sessions",
+            vec![foreign.into()],
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert!(
+        error
+            .to_string()
+            .contains("does not match the resource type")
+    );
+    assert_eq!(
+        app.call("resources", RESOURCE_CLIENT, "run", vec![Val::Bool(false)])
+            .await
+            .unwrap(),
+        [Val::from("profile:recovered")]
+    );
+    assert_eq!(host.0.active.load(Ordering::Relaxed), 0);
 }
 
 #[wasm_bindgen_test]
