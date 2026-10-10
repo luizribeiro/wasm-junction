@@ -1,0 +1,128 @@
+use wasm_junction_core::{CallError, CallErrorKind, Vals};
+use wasmtime_wasi::p3::bindings::sockets::types;
+use wasmtime_wasi::sockets::{WasiSockets, WasiSocketsView};
+
+use super::{FromVal, ToVal};
+
+pub(super) fn finish_result<T: FromVal>(
+    outcome: Result<Vals, CallError>,
+) -> wasmtime::Result<Result<T, types::ErrorCode>> {
+    match outcome {
+        Err(error) if error.kind() == CallErrorKind::Refused => {
+            Ok(Err(types::ErrorCode::AccessDenied))
+        }
+        Err(error) => Err(wasmtime::Error::new(error)),
+        Ok(values) => super::decode_p3_result(values).map_err(wasmtime::Error::new),
+    }
+}
+
+macro_rules! gate_socket {
+    ($linker:ident, $name:literal, $method:path, $mode:ident, $validate:expr,
+     ($($arg:ident: $ty:ty),*) -> $ok:ty) => {
+        $linker.instance(super::INTERFACE)?.func_wrap_async(
+            $name,
+            |mut store, ($($arg,)*): ($($ty,)*)| Box::new(async move {
+                let invocation = store.data().context.invocation_id()
+                    .ok_or_else(|| wasmtime::Error::msg("WASI call has no invocation id"))?;
+                let mut args = super::scope_values(vec![$($arg.to_val()),*], invocation);
+                super::add_handle_contexts(&mut args, store.data());
+                let real: super::Real = |mut store, args| Box::pin(async move {
+                    super::require_sockets(store.data())?;
+                    $validate(&args, store.data_mut())?;
+                    let mut args = args.into_iter();
+                    $(let $arg = <$ty>::from_val(
+                        args.next().ok_or_else(|| super::shape("another argument"))?
+                    )?;)*
+                    let result = gate_socket!(@call $mode, $method, store.data_mut() $(, $arg)*);
+                    let result = super::convert_trappable(result)?;
+                    let invocation = store.data().context.invocation_id()
+                        .ok_or_else(|| CallError::trap("WASI call has no invocation id"))?;
+                    Ok(super::scope_values(vec![super::p3_result_value(result)], invocation))
+                });
+                let outcome = super::trampoline::gate(
+                    &mut store, super::INTERFACE, $name, args, real,
+                ).await;
+                Ok(($crate::wasi::gates::sockets_p3::gate::finish_result::<$ok>(outcome)?,))
+            }),
+        )?;
+    };
+    (@call view_sync, $method:path, $store:expr $(, $arg:ident)*) => {
+        $method(&mut super::views::sockets($store) $(, $arg)*)
+    };
+    (@call view_async, $method:path, $store:expr $(, $arg:ident)*) => {
+        $method(&mut super::views::sockets($store) $(, $arg)*).await
+    };
+    (@call store_sync, $method:path, $store:expr $(, $arg:ident)*) => {
+        $method($store $(, $arg)*)
+    };
+    (@call store_async, $method:path, $store:expr $(, $arg:ident)*) => {
+        $method($store $(, $arg)*).await
+    };
+}
+
+macro_rules! gate_socket_concurrent {
+    ($linker:ident, $name:literal, $method:path, $validate:expr,
+     ($($arg:ident: $ty:ty),*) -> $ok:ty) => {
+        $linker.instance(super::INTERFACE)?.func_wrap_concurrent(
+            $name,
+            |accessor, ($($arg,)*): ($($ty,)*)| Box::pin(async move {
+                let invocation = accessor.with(|mut access| access.get().context.invocation_id())
+                    .ok_or_else(|| wasmtime::Error::msg("WASI call has no invocation id"))?;
+                let mut args = super::scope_values(vec![$($arg.to_val()),*], invocation);
+                accessor.with(|mut access| super::add_handle_contexts(&mut args, access.get()));
+                let real: super::RealConcurrent = |accessor, args| Box::pin(async move {
+                    accessor.with(|mut access| super::require_sockets(access.get()))?;
+                    accessor.with(|mut access| $validate(&args, access.get()))?;
+                    let mut args = args.into_iter();
+                    $(let $arg = <$ty>::from_val(
+                        args.next().ok_or_else(|| super::shape("another argument"))?
+                    )?;)*
+                    let view = accessor.with_getter::<WasiSockets>(WasiSocketsView::sockets);
+                    let result = $method(&view $(, $arg)*).await;
+                    let result = super::convert_trappable(result)?;
+                    let invocation = accessor.with(|mut access| access.get().context.invocation_id())
+                        .ok_or_else(|| CallError::trap("WASI call has no invocation id"))?;
+                    Ok(super::scope_values(vec![super::p3_result_value(result)], invocation))
+                });
+                let outcome = super::trampoline::gate_concurrent(
+                    accessor, super::INTERFACE, $name, args, real,
+                ).await;
+                Ok(($crate::wasi::gates::sockets_p3::gate::finish_result::<$ok>(outcome)?,))
+            }),
+        )?;
+    };
+}
+
+macro_rules! gate_socket_value {
+    ($linker:ident, $name:literal, $method:path, $validate:expr,
+     ($($arg:ident: $ty:ty),*) -> $ok:ty) => {
+        $linker.instance(super::INTERFACE)?.func_wrap_async(
+            $name,
+            |mut store, ($($arg,)*): ($($ty,)*)| Box::new(async move {
+                let invocation = store.data().context.invocation_id()
+                    .ok_or_else(|| wasmtime::Error::msg("WASI call has no invocation id"))?;
+                let mut args = super::scope_values(vec![$($arg.to_val()),*], invocation);
+                super::add_handle_contexts(&mut args, store.data());
+                let real: super::Real = |mut store, args| Box::pin(async move {
+                    super::require_sockets(store.data())?;
+                    $validate(&args, store.data_mut())?;
+                    let mut args = args.into_iter();
+                    $(let $arg = <$ty>::from_val(
+                        args.next().ok_or_else(|| super::shape("another argument"))?
+                    )?;)*
+                    let value = $method(&mut super::views::sockets(store.data_mut()) $(, $arg)*)
+                        .map_err(|error| CallError::trap(error.to_string()))?;
+                    Ok(vec![value.to_val()])
+                });
+                let outcome = super::trampoline::gate(
+                    &mut store, super::INTERFACE, $name, args, real,
+                ).await;
+                Ok((super::finish::<$ok>(outcome)?,))
+            }),
+        )?;
+    };
+}
+
+pub(super) use gate_socket;
+pub(super) use gate_socket_concurrent;
+pub(super) use gate_socket_value;
