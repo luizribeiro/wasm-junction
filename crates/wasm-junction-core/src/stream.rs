@@ -4,7 +4,7 @@ use std::error::Error;
 use std::fmt::{self, Debug, Display};
 use std::future::poll_fn;
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Poll, Waker};
 
@@ -51,12 +51,30 @@ type ItemFilter = Arc<dyn Fn(&Val) -> bool>;
 type ChunkMap = Arc<dyn Fn(Vec<u8>) -> Vec<u8> + Send + Sync>;
 #[cfg(target_arch = "wasm32")]
 type ChunkMap = Arc<dyn Fn(Vec<u8>) -> Vec<u8>>;
+#[cfg(not(target_arch = "wasm32"))]
+type ChunkFlushFn = Arc<dyn Fn() -> Vec<u8> + Send + Sync>;
+#[cfg(target_arch = "wasm32")]
+type ChunkFlushFn = Arc<dyn Fn() -> Vec<u8>>;
+
+struct ChunkFlush {
+    callback: ChunkFlushFn,
+    called: AtomicBool,
+}
+
+impl ChunkFlush {
+    fn call_once(&self) -> Option<Vec<u8>> {
+        (!self.called.swap(true, Ordering::AcqRel)).then(|| (self.callback)())
+    }
+}
 
 #[derive(Clone)]
 enum Transform {
     MapItems(ItemMap),
     FilterItems(ItemFilter),
-    MapChunks(ChunkMap),
+    MapChunks {
+        map: ChunkMap,
+        flush: Option<Arc<ChunkFlush>>,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -160,8 +178,56 @@ impl StreamHandle {
 
     /// Maps each byte chunk when the stream is read.
     #[must_use]
-    pub fn map_chunks(mut self, map: impl Fn(Vec<u8>) -> Vec<u8> + HostBound + 'static) -> Self {
-        self.transforms.push(Transform::MapChunks(Arc::new(map)));
+    pub fn map_chunks(self, map: impl Fn(Vec<u8>) -> Vec<u8> + HostBound + 'static) -> Self {
+        self.with_chunk_transform(Arc::new(map), None)
+    }
+
+    /// Maps each byte chunk and emits buffered bytes when the stream ends cleanly.
+    ///
+    /// `flush` runs exactly once after the source closes, and does not run when the stream is
+    /// aborted or its reader is closed or abandoned. Empty flush output is omitted.
+    /// Middleware that observes the same stream at more than one call boundary adds one flush per
+    /// hop, so match only the import or export boundary that should transform it.
+    ///
+    /// ```
+    /// # use std::future::Future;
+    /// # use std::task::{Context, Poll, Waker};
+    /// use wasm_junction_core::{InputStream, OutputStream, StreamError, StreamHandle};
+    ///
+    /// # fn block_on<F: Future>(future: F) -> F::Output {
+    /// #     let mut future = std::pin::pin!(future);
+    /// #     match future.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+    /// #         Poll::Ready(output) => output,
+    /// #         Poll::Pending => panic!("future unexpectedly suspended"),
+    /// #     }
+    /// # }
+    /// # fn main() -> Result<(), StreamError> {
+    /// let handle = StreamHandle::from(OutputStream::from_bytes(b"prefix "))
+    ///     .map_chunks_with_flush(|chunk| chunk, || b"suffix".to_vec());
+    /// let bytes = block_on(InputStream::try_from(handle)?.read_all())?;
+    /// assert_eq!(bytes, b"prefix suffix");
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn map_chunks_with_flush(
+        self,
+        map: impl Fn(Vec<u8>) -> Vec<u8> + HostBound + 'static,
+        flush: impl Fn() -> Vec<u8> + HostBound + 'static,
+    ) -> Self {
+        self.with_chunk_transform(Arc::new(map), Some(Arc::new(flush)))
+    }
+
+    fn with_chunk_transform(mut self, map: ChunkMap, flush: Option<ChunkFlushFn>) -> Self {
+        self.transforms.push(Transform::MapChunks {
+            map,
+            flush: flush.map(|callback| {
+                Arc::new(ChunkFlush {
+                    callback,
+                    called: AtomicBool::new(false),
+                })
+            }),
+        });
         self
     }
 
@@ -293,9 +359,20 @@ impl<T: 'static> InputStream<T> {
                         state.reader_waker = Some(context.waker().clone());
                         Poll::Pending
                     }
-                    StreamEnd::Closed | StreamEnd::ReaderClosed | StreamEnd::Abandoned => {
-                        Poll::Ready(Ok(None))
+                    StreamEnd::Closed => {
+                        drop(state);
+                        match flush_transforms(
+                            self.handle.item_encoder.as_ref(),
+                            &self.handle.transforms,
+                        ) {
+                            Ok(Some(chunk)) => {
+                                Poll::Ready(decode_chunk(chunk, &self.decoder).map(Some))
+                            }
+                            Ok(None) => Poll::Ready(Ok(None)),
+                            Err(error) => Poll::Ready(Err(error)),
+                        }
                     }
+                    StreamEnd::ReaderClosed | StreamEnd::Abandoned => Poll::Ready(Ok(None)),
                     StreamEnd::Aborted => Poll::Ready(Err(StreamError::aborted())),
                 };
             }
@@ -551,10 +628,10 @@ fn apply_transforms(
     };
     for transform in transforms {
         chunk = match (transform, chunk) {
-            (Transform::MapChunks(map), StreamChunk::Bytes(bytes)) => {
+            (Transform::MapChunks { map, .. }, StreamChunk::Bytes(bytes)) => {
                 StreamChunk::Bytes(map(bytes))
             }
-            (Transform::MapChunks(_), StreamChunk::Values(_) | StreamChunk::Items(_)) => {
+            (Transform::MapChunks { .. }, StreamChunk::Values(_) | StreamChunk::Items(_)) => {
                 return Err(StreamError::shape("expected byte stream"));
             }
             (Transform::MapItems(map), chunk) => StreamChunk::Values(
@@ -574,6 +651,31 @@ fn apply_transforms(
         };
     }
     Ok((!chunk.is_empty()).then_some(chunk))
+}
+
+fn flush_transforms(
+    item_encoder: Option<&ItemEncoder>,
+    transforms: &[Transform],
+) -> Result<Option<StreamChunk>, StreamError> {
+    for (index, transform) in transforms.iter().enumerate() {
+        let Transform::MapChunks {
+            flush: Some(flush), ..
+        } = transform
+        else {
+            continue;
+        };
+        let Some(bytes) = flush.call_once().filter(|bytes| !bytes.is_empty()) else {
+            continue;
+        };
+        if let Some(chunk) = apply_transforms(
+            StreamChunk::Bytes(bytes),
+            item_encoder,
+            &transforms[index + 1..],
+        )? {
+            return Ok(Some(chunk));
+        }
+    }
+    Ok(None)
 }
 
 impl StreamChunk {
@@ -811,6 +913,82 @@ mod tests {
                 .unwrap();
         writer.abort();
         assert_eq!(ready(input.read()), Err(StreamError::aborted()));
+    }
+
+    #[test]
+    fn flushing_transform_emits_held_bytes_once_only_at_a_clean_end() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        let handle = StreamHandle::from(OutputStream::from_bytes(b"ada@exa"))
+            .map_chunks_with_flush(
+                |_| Vec::new(),
+                move || {
+                    observed.fetch_add(1, Ordering::Relaxed);
+                    b"ada@exa".to_vec()
+                },
+            );
+        let mut input = InputStream::try_from(handle).unwrap();
+        assert_eq!(ready(input.read()).unwrap(), Some(b"ada@exa".to_vec()));
+        assert_eq!(ready(input.read()).unwrap(), None);
+        assert_eq!(ready(input.read()).unwrap(), None);
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        let (writer, output) = OutputStream::channel();
+        let handle = StreamHandle::from(output).map_chunks_with_flush(
+            |_| Vec::new(),
+            move || {
+                observed.fetch_add(1, Ordering::Relaxed);
+                b"lost".to_vec()
+            },
+        );
+        let mut input = InputStream::try_from(handle).unwrap();
+        ready(writer.write(b"held")).unwrap();
+        writer.abort();
+        assert_eq!(ready(input.read()), Err(StreamError::aborted()));
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn flushing_transforms_compose_in_order() {
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let first = order.clone();
+        let second = order.clone();
+        let handle = StreamHandle::from(OutputStream::from_bytes(b"body "))
+            .map_chunks_with_flush(
+                |chunk| chunk,
+                move || {
+                    first.lock().unwrap().push("first");
+                    b"first ".to_vec()
+                },
+            )
+            .map_chunks(|mut chunk| {
+                chunk.make_ascii_uppercase();
+                chunk
+            })
+            .map_chunks_with_flush(
+                |mut chunk| {
+                    chunk.push(b'!');
+                    chunk
+                },
+                move || {
+                    second.lock().unwrap().push("second");
+                    b"second".to_vec()
+                },
+            );
+        let input = InputStream::try_from(handle).unwrap();
+        assert_eq!(ready(input.read_all()).unwrap(), b"BODY !FIRST !second");
+        assert_eq!(*order.lock().unwrap(), ["first", "second"]);
+    }
+
+    #[test]
+    fn empty_flush_does_not_add_a_chunk() {
+        let handle = StreamHandle::from(OutputStream::from_bytes(b"body"))
+            .map_chunks_with_flush(|chunk| chunk, Vec::new);
+        let mut input = InputStream::try_from(handle).unwrap();
+        assert_eq!(ready(input.read()).unwrap(), Some(b"body".to_vec()));
+        assert_eq!(ready(input.read()).unwrap(), None);
     }
 
     #[test]
