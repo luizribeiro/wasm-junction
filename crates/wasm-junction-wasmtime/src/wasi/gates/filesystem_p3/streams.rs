@@ -9,6 +9,7 @@ use super::{
     lift_stream_with_direction_plain, lower_future_plain, lower_stream_handoff_plain,
     resource_from_val, resource_to_val, scope_values, shape, trampoline,
 };
+use crate::streams::lift_static_stream;
 use crate::wasi::gates::filesystem::gate::{add_context_for, validate_context_for};
 
 fn add_context(args: &mut Vals, store: &mut StoreData) -> Result<(), CallError> {
@@ -100,6 +101,31 @@ fn read_body(store: &mut StoreContextMut<'_, StoreData>, args: Vals) -> Result<V
     ])])
 }
 
+fn read_directory_body(
+    store: &mut StoreContextMut<'_, StoreData>,
+    args: Vals,
+) -> Result<Vals, CallError> {
+    validate_context(&args, store.data_mut())?;
+    let descriptor = decode_descriptor(args.into_iter().next().ok_or_else(|| shape(DESCRIPTOR))?)?;
+    let filesystem = Access::<StoreData, WasiFilesystem>::new(
+        store.as_context_mut(),
+        WasiFilesystemView::filesystem,
+    );
+    let (stream, future) = HostDescriptorWithStore::read_directory(filesystem, descriptor)
+        .map_err(|error| CallError::trap(error.to_string()))?;
+    Ok(vec![Val::Tuple(vec![
+        Val::Stream(
+            lift_static_stream(
+                stream,
+                store.as_context_mut(),
+                ChannelDirection::HostToGuest,
+            )
+            .map_err(|error| CallError::trap(error.to_string()))?,
+        ),
+        lift_future_plain(store, future).map_err(|error| CallError::trap(error.to_string()))?,
+    ])])
+}
+
 #[cfg(test)]
 fn read_real(
     accessor: &wasmtime::component::Accessor<StoreData>,
@@ -108,6 +134,16 @@ fn read_real(
     Box::pin(
         async move { accessor.with(|mut access| read_body(&mut access.as_context_mut(), args)) },
     )
+}
+
+#[cfg(test)]
+fn read_directory_real(
+    accessor: &wasmtime::component::Accessor<StoreData>,
+    args: Vals,
+) -> wasm_junction_core::BoxFuture<'_, Result<Vals, CallError>> {
+    Box::pin(async move {
+        accessor.with(|mut access| read_directory_body(&mut access.as_context_mut(), args))
+    })
 }
 
 fn read_plain_real(
@@ -376,6 +412,56 @@ mod tests {
                     .await
                     .unwrap();
                 assert_eq!(bytes, b"a useful note");
+                assert!(completion(accessor, future).await.is_ok());
+                wasmtime::Result::Ok(())
+            })
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn directory_stream_delivers_named_records_and_completes() {
+        let directory = TestDirectory::new("p3-directory");
+        std::fs::write(directory.path().join("first.txt"), b"first").unwrap();
+        std::fs::create_dir(directory.path().join("notes")).unwrap();
+        let mut store = store(
+            &[(directory.path(), "/data", FsPerms::ReadWrite)],
+            TestDispatcher::passing(),
+        );
+
+        store
+            .run_concurrent(async |accessor| -> wasmtime::Result<()> {
+                let root = preopens(accessor)[0].0;
+                let read = args(accessor, root, Vec::new());
+                let [Val::Tuple(pair)] =
+                    <[Val; 1]>::try_from(read_directory_real(accessor, read).await.unwrap())
+                        .unwrap()
+                else {
+                    panic!("directory read returned the wrong shape")
+                };
+                let [Val::Stream(stream), future] = <[Val; 2]>::try_from(pair).unwrap() else {
+                    panic!("directory read returned the wrong pair")
+                };
+                let entries = InputStream::<Val>::__from_handle_with(stream, Ok)
+                    .unwrap()
+                    .read_all()
+                    .await
+                    .unwrap();
+                let names = entries
+                    .into_iter()
+                    .map(|entry| {
+                        let Val::Record(fields) = entry else {
+                            panic!("directory entry was not a record")
+                        };
+                        let [(_, _), (_, Val::String(name))] = <[_; 2]>::try_from(fields).unwrap()
+                        else {
+                            panic!("directory entry had the wrong fields")
+                        };
+                        name
+                    })
+                    .collect::<std::collections::BTreeSet<_>>();
+                assert_eq!(names, ["first.txt".to_owned(), "notes".to_owned()].into());
                 assert!(completion(accessor, future).await.is_ok());
                 wasmtime::Result::Ok(())
             })

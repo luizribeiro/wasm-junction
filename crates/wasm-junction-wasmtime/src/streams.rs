@@ -18,6 +18,8 @@ use crate::engine::StoreData;
 
 mod typed;
 
+#[cfg(feature = "wasi-p3")]
+pub(crate) use typed::lift_static_stream;
 pub(crate) use typed::{lift_stream, lower_typed_stream, recover_exported_stream};
 pub(crate) type ActiveStreams = Arc<Mutex<HashMap<u64, (ActiveWriter, ChannelDirection)>>>;
 

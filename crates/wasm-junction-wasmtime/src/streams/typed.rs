@@ -54,6 +54,15 @@ pub(crate) fn lower_typed_stream(
     }
 }
 
+#[cfg(feature = "wasi-p3")]
+pub(crate) fn lift_static_stream<T: StreamValue>(
+    stream: StreamReader<T>,
+    mut store: impl AsContextMut<Data = StoreData>,
+    direction: ChannelDirection,
+) -> Result<StreamHandle, wasmtime::Error> {
+    consumer::lift_reader(stream, None, store.as_context_mut(), direction)
+}
+
 pub(crate) fn recover_exported_stream(
     stream: StreamAny,
     item_type: Option<Type>,
