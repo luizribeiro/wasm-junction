@@ -1331,6 +1331,8 @@ mod sockets_p3;
 pub(super) const STATIC_STREAM_INTERFACES: &[&str] = &[
     #[cfg(feature = "wasi-p3")]
     filesystem_p3::INTERFACE,
+    #[cfg(feature = "wasi-p3")]
+    sockets_p3::INTERFACE,
 ];
 
 #[cfg(feature = "wasi-http")]
@@ -1346,10 +1348,7 @@ pub(super) fn add_filesystem(linker: &mut Linker<StoreData>) -> wasmtime::Result
 }
 
 pub(super) fn add_sockets(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
-    sockets::add(linker)?;
-    #[cfg(feature = "wasi-p3")]
-    sockets_p3::add(linker)?;
-    Ok(())
+    sockets::add(linker)
 }
 
 pub(super) fn add_environment(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
@@ -1471,6 +1470,7 @@ pub(super) fn add_p3(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 
     cli::add(linker)?;
     filesystem_p3::add(linker)?;
+    sockets_p3::add(linker)?;
     linker.instance("wasi:clocks/types@0.3.0")?;
     gate!(linker, "wasi:clocks/monotonic-clock@0.3.0", "now", clocks,
         monotonic_clock::Host::now, plain, () -> u64);

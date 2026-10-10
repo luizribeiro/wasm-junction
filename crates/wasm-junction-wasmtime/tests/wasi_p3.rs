@@ -37,6 +37,7 @@ const P2_EXPORT: &str = "test:wasi/environment@0.1.0";
 
 fn block_on<F: Future>(future: F) -> F::Output {
     tokio::runtime::Builder::new_current_thread()
+        .enable_io()
         .enable_time()
         .build()
         .unwrap()
@@ -147,6 +148,20 @@ fn filesystem_app(middleware: impl Middleware + 'static, directory: &TestDirecto
         wasm_junction::WasiSettings::new().preopen(&directory.0, "/data", Access::ReadWrite),
     )
     .unwrap();
+    block_on(app.load(Component::from_bytes(COMPONENT).unwrap().named("p3"))).unwrap();
+    app
+}
+
+#[cfg(feature = "wasi-p3")]
+fn sockets_app(middleware: impl Middleware + 'static) -> App {
+    let app = App::builder()
+        .engine(WasmtimeEngine::new().unwrap())
+        .provide(wasm_junction::wasi::provider())
+        .middleware(middleware)
+        .build()
+        .unwrap();
+    app.configure("p3", wasm_junction::WasiSettings::new().sockets(true))
+        .unwrap();
     block_on(app.load(Component::from_bytes(COMPONENT).unwrap().named("p3"))).unwrap();
     app
 }
@@ -920,11 +935,21 @@ fn every_function_in_each_gated_p3_interface_has_a_gate() {
     let directory = TestDirectory::new("coverage");
     let filesystem = filesystem_app(RecordGates(seen.clone()), &directory);
     block_on(filesystem.call("p3", EXPORT, "filesystem-coverage", Vec::new())).unwrap();
+    let sockets = sockets_app(RecordGates(seen.clone()));
+    block_on(sockets.call("p3", EXPORT, "sockets-coverage", Vec::new())).unwrap();
 
     let mut expected = p3_wit_functions();
     expected.insert((
         "wasi:filesystem/types@0.3.0".to_owned(),
         "[drop]descriptor".to_owned(),
+    ));
+    expected.insert((
+        "wasi:sockets/types@0.3.0".to_owned(),
+        "[drop]tcp-socket".to_owned(),
+    ));
+    expected.insert((
+        "wasi:sockets/types@0.3.0".to_owned(),
+        "[drop]udp-socket".to_owned(),
     ));
     assert_eq!(*seen.lock().unwrap(), expected);
 }
@@ -979,16 +1004,14 @@ fn ungated_p3_interfaces_remain_missing() {
         .build()
         .unwrap();
 
-    for (package, interface) in [("sockets", "tcp"), ("http", "types")] {
-        let name = format!("wasi:{package}/{interface}@0.3.0");
-        let component = Component::from_bytes(component_importing(package, interface))
-            .unwrap()
-            .named(package);
-        let LoadError::MissingImports(missing) = block_on(app.load(component)).unwrap_err() else {
-            panic!("expected {name} to remain missing");
-        };
-        assert_eq!(missing.interfaces(), [name]);
-    }
+    let name = "wasi:http/types@0.3.0";
+    let component = Component::from_bytes(component_importing("http", "types"))
+        .unwrap()
+        .named("http");
+    let LoadError::MissingImports(missing) = block_on(app.load(component)).unwrap_err() else {
+        panic!("expected {name} to remain missing");
+    };
+    assert_eq!(missing.interfaces(), [name]);
 }
 
 #[cfg(feature = "wasi-p3")]

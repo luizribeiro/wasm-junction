@@ -5,7 +5,7 @@
 use super::*;
 use wasmtime_wasi::p3::bindings::sockets::types::{TcpSocket, UdpSocket};
 
-const INTERFACE: &str = "wasi:sockets/types@0.3.0";
+pub(super) const INTERFACE: &str = "wasi:sockets/types@0.3.0";
 const LOOKUP_INTERFACE: &str = "wasi:sockets/ip-name-lookup@0.3.0";
 const TCP_SOCKET: &str = "tcp-socket";
 const UDP_SOCKET: &str = "udp-socket";

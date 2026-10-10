@@ -61,7 +61,7 @@ const P2_WASI_INTERFACES: &[&str] = &[
 ];
 
 #[cfg(feature = "wasi-p3")]
-const P3_WASI_INTERFACES: [&str; 19] = [
+const P3_WASI_INTERFACES: [&str; 21] = [
     "wasi:cli/environment@0.3.0",
     "wasi:cli/exit@0.3.0",
     "wasi:cli/types@0.3.0",
@@ -81,6 +81,8 @@ const P3_WASI_INTERFACES: [&str; 19] = [
     "wasi:random/insecure-seed@0.3.0",
     "wasi:random/insecure@0.3.0",
     "wasi:random/random@0.3.0",
+    "wasi:sockets/ip-name-lookup@0.3.0",
+    "wasi:sockets/types@0.3.0",
 ];
 
 /// WASI interfaces supplied by [`WasmtimeEngine`].

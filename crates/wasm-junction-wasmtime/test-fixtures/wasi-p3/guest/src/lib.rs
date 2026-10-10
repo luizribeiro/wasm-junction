@@ -187,6 +187,69 @@ async fn cover_filesystem() {
         .await;
 }
 
+fn loopback(port: u16) -> wasi::sockets::types::IpSocketAddress {
+    wasi::sockets::types::IpSocketAddress::Ipv4(
+        wasi::sockets::types::Ipv4SocketAddress {
+            port,
+            address: (127, 0, 0, 1),
+        },
+    )
+}
+
+async fn cover_sockets() {
+    use wasi::sockets::types::{IpAddressFamily, TcpSocket, UdpSocket};
+
+    let tcp = TcpSocket::create(IpAddressFamily::Ipv4).unwrap();
+    tcp.bind(loopback(0)).unwrap();
+    let _ = tcp.get_local_address();
+    let _ = tcp.get_remote_address();
+    let _ = tcp.get_is_listening();
+    let _ = tcp.get_address_family();
+    let _ = tcp.set_listen_backlog_size(1);
+    let _ = tcp.get_keep_alive_enabled();
+    let _ = tcp.set_keep_alive_enabled(true);
+    let _ = tcp.get_keep_alive_idle_time();
+    let _ = tcp.set_keep_alive_idle_time(1);
+    let _ = tcp.get_keep_alive_interval();
+    let _ = tcp.set_keep_alive_interval(1);
+    let _ = tcp.get_keep_alive_count();
+    let _ = tcp.set_keep_alive_count(1);
+    let _ = tcp.get_hop_limit();
+    let _ = tcp.set_hop_limit(1);
+    let _ = tcp.get_receive_buffer_size();
+    let _ = tcp.set_receive_buffer_size(4096);
+    let _ = tcp.get_send_buffer_size();
+    let _ = tcp.set_send_buffer_size(4096);
+    drop(tcp.listen());
+
+    let streams = TcpSocket::create(IpAddressFamily::Ipv4).unwrap();
+    let (writer, reader) = wit_stream::new();
+    drop(writer);
+    let _ = streams.send(reader).into_future().await;
+    let (bytes, received) = streams.receive();
+    drop(bytes);
+    let _ = received.await;
+    let connector = TcpSocket::create(IpAddressFamily::Ipv4).unwrap();
+    let _ = connector.connect(loopback(0)).await;
+
+    let udp = UdpSocket::create(IpAddressFamily::Ipv4).unwrap();
+    udp.bind(loopback(0)).unwrap();
+    let local = udp.get_local_address().unwrap();
+    let _ = udp.get_remote_address();
+    let _ = udp.get_address_family();
+    let _ = udp.get_unicast_hop_limit();
+    let _ = udp.set_unicast_hop_limit(1);
+    let _ = udp.get_receive_buffer_size();
+    let _ = udp.set_receive_buffer_size(4096);
+    let _ = udp.get_send_buffer_size();
+    let _ = udp.set_send_buffer_size(4096);
+    udp.send(b"coverage".to_vec(), Some(local)).await.unwrap();
+    let _ = udp.receive().await;
+    let _ = udp.connect(loopback(9));
+    let _ = udp.disconnect();
+    let _ = wasi::sockets::ip_name_lookup::resolve_addresses("localhost".to_owned()).await;
+}
+
 impl exports::test::wasi_p3::probe::Guest for Component {
     async fn coverage() -> String {
         let _ = cli_probe().await;
@@ -243,6 +306,10 @@ impl exports::test::wasi_p3::probe::Guest for Component {
 
     async fn filesystem_coverage() {
         cover_filesystem().await;
+    }
+
+    async fn sockets_coverage() {
+        cover_sockets().await;
     }
 
     async fn exit_success() {

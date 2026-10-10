@@ -8,6 +8,7 @@ interface probe {
   list-directory: async func() -> result<list<string>, string>;
   drop-directory-listing: async func() -> list<string>;
   filesystem-coverage: async func();
+  sockets-coverage: async func();
   exit-success: async func();
   exit-code: async func();
 }
@@ -32,5 +33,7 @@ world fixture {
   import wasi:random/random@0.3.0;
   import wasi:random/insecure@0.3.0;
   import wasi:random/insecure-seed@0.3.0;
+  import wasi:sockets/types@0.3.0;
+  import wasi:sockets/ip-name-lookup@0.3.0;
   export probe;
 }

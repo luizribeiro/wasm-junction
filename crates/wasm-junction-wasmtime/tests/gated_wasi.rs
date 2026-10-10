@@ -597,6 +597,8 @@ fn gated_wasi_set_changes_only_deliberately() {
             "wasi:random/insecure-seed@0.3.0",
             "wasi:random/insecure@0.3.0",
             "wasi:random/random@0.3.0",
+            "wasi:sockets/ip-name-lookup@0.3.0",
+            "wasi:sockets/types@0.3.0",
         ]
     );
 }
