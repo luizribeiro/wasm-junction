@@ -1346,7 +1346,10 @@ pub(super) fn add_filesystem(linker: &mut Linker<StoreData>) -> wasmtime::Result
 }
 
 pub(super) fn add_sockets(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
-    sockets::add(linker)
+    sockets::add(linker)?;
+    #[cfg(feature = "wasi-p3")]
+    sockets_p3::add(linker)?;
+    Ok(())
 }
 
 pub(super) fn add_environment(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {

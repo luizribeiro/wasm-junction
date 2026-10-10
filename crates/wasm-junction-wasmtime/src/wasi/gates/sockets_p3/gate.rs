@@ -1,8 +1,12 @@
 use wasm_junction_core::{CallError, CallErrorKind, Vals};
-use wasmtime_wasi::p3::bindings::sockets::types;
+use wasmtime::component::Linker;
+use wasmtime_wasi::p3::bindings::sockets::{ip_name_lookup, types};
 use wasmtime_wasi::sockets::{WasiSockets, WasiSocketsView};
 
-use super::{FromVal, ToVal};
+use super::{
+    FromVal, LOOKUP_INTERFACE, RealConcurrent, StoreData, ToVal, p3_result_value, require_sockets,
+    scope_values, shape, trampoline,
+};
 
 pub(super) fn finish_result<T: FromVal>(
     outcome: Result<Vals, CallError>,
@@ -126,3 +130,50 @@ macro_rules! gate_socket_value {
 pub(super) use gate_socket;
 pub(super) use gate_socket_concurrent;
 pub(super) use gate_socket_value;
+
+fn decode_lookup(
+    outcome: Result<Vals, CallError>,
+) -> wasmtime::Result<Result<Vec<types::IpAddress>, ip_name_lookup::ErrorCode>> {
+    match outcome {
+        Err(error) if error.kind() == CallErrorKind::Refused => {
+            Ok(Err(ip_name_lookup::ErrorCode::AccessDenied))
+        }
+        Err(error) => Err(wasmtime::Error::new(error)),
+        Ok(values) => super::decode_p3_result(values).map_err(wasmtime::Error::new),
+    }
+}
+
+pub(super) fn add_lookup(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    linker.instance(LOOKUP_INTERFACE)?.func_wrap_concurrent(
+        "resolve-addresses",
+        |accessor, (name,): (String,)| {
+            Box::pin(async move {
+                let invocation = accessor
+                    .with(|mut access| access.get().context.invocation_id())
+                    .ok_or_else(|| wasmtime::Error::msg("WASI call has no invocation id"))?;
+                let args = scope_values(vec![name.to_val()], invocation);
+                let real: RealConcurrent = |accessor, mut args| {
+                    Box::pin(async move {
+                        accessor.with(|mut access| require_sockets(access.get()))?;
+                        let name = String::from_val(args.pop().ok_or_else(|| shape("name"))?)?;
+                        let view = accessor.with_getter::<WasiSockets>(WasiSocketsView::sockets);
+                        let result = ip_name_lookup::HostWithStore::resolve_addresses(&view, name)
+                            .await
+                            .map_err(|error| CallError::trap(error.to_string()))?;
+                        Ok(vec![p3_result_value(result)])
+                    })
+                };
+                let outcome = trampoline::gate_concurrent(
+                    accessor,
+                    LOOKUP_INTERFACE,
+                    "resolve-addresses",
+                    args,
+                    real,
+                )
+                .await;
+                Ok((decode_lookup(outcome)?,))
+            })
+        },
+    )?;
+    Ok(())
+}
