@@ -52,6 +52,16 @@ fn drop_socket(store: &mut StoreData, socket: Resource<TcpSocket>) -> wasmtime::
     HostTcpSocket::drop(&mut views::sockets(store), socket)
 }
 
+macro_rules! tcp_options {
+    ($linker:ident, $($get:literal, $get_method:path, $get_ty:ty,
+        $set:literal, $set_method:path, $set_ty:ty;)+) => {$(
+        gate_socket!($linker, $get, $get_method, view_sync, super::validate_tcp,
+            (socket: Resource<TcpSocket>) -> $get_ty);
+        gate_socket!($linker, $set, $set_method, view_sync, super::validate_tcp,
+            (socket: Resource<TcpSocket>, value: $set_ty) -> ());
+    )+};
+}
+
 pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     gate_drop!(
         linker,
@@ -81,5 +91,24 @@ pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     gate_socket_value!(linker, "[method]tcp-socket.get-address-family",
         HostTcpSocket::get_address_family, super::validate_tcp,
         (socket: Resource<TcpSocket>) -> IpAddressFamily);
+    gate_socket!(linker, "[method]tcp-socket.set-listen-backlog-size",
+        HostTcpSocket::set_listen_backlog_size, view_sync, super::validate_tcp,
+        (socket: Resource<TcpSocket>, value: u64) -> ());
+    tcp_options!(linker,
+        "[method]tcp-socket.get-keep-alive-enabled", HostTcpSocket::get_keep_alive_enabled, bool,
+        "[method]tcp-socket.set-keep-alive-enabled", HostTcpSocket::set_keep_alive_enabled, bool;
+        "[method]tcp-socket.get-keep-alive-idle-time", HostTcpSocket::get_keep_alive_idle_time, u64,
+        "[method]tcp-socket.set-keep-alive-idle-time", HostTcpSocket::set_keep_alive_idle_time, u64;
+        "[method]tcp-socket.get-keep-alive-interval", HostTcpSocket::get_keep_alive_interval, u64,
+        "[method]tcp-socket.set-keep-alive-interval", HostTcpSocket::set_keep_alive_interval, u64;
+        "[method]tcp-socket.get-keep-alive-count", HostTcpSocket::get_keep_alive_count, u32,
+        "[method]tcp-socket.set-keep-alive-count", HostTcpSocket::set_keep_alive_count, u32;
+        "[method]tcp-socket.get-hop-limit", HostTcpSocket::get_hop_limit, u8,
+        "[method]tcp-socket.set-hop-limit", HostTcpSocket::set_hop_limit, u8;
+        "[method]tcp-socket.get-receive-buffer-size", HostTcpSocket::get_receive_buffer_size, u64,
+        "[method]tcp-socket.set-receive-buffer-size", HostTcpSocket::set_receive_buffer_size, u64;
+        "[method]tcp-socket.get-send-buffer-size", HostTcpSocket::get_send_buffer_size, u64,
+        "[method]tcp-socket.set-send-buffer-size", HostTcpSocket::set_send_buffer_size, u64;
+    );
     Ok(())
 }
