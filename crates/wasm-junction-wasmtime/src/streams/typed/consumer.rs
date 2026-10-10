@@ -16,15 +16,28 @@ use crate::stream_values::StreamValue;
 pub(super) fn lift<T: StreamValue>(
     stream: StreamAny,
     item_type: Type,
-    mut store: StoreContextMut<'_, StoreData>,
+    store: StoreContextMut<'_, StoreData>,
 ) -> Result<StreamHandle, wasmtime::Error> {
     let reader = stream.try_into_stream_reader::<T>()?;
+    lift_reader(
+        reader,
+        Some(item_type),
+        store,
+        ChannelDirection::GuestToHost,
+    )
+}
+
+pub(super) fn lift_reader<T: StreamValue>(
+    reader: wasmtime::component::StreamReader<T>,
+    item_type: Option<Type>,
+    mut store: StoreContextMut<'_, StoreData>,
+    direction: ChannelDirection,
+) -> Result<StreamHandle, wasmtime::Error> {
     let (writer, output) = OutputStream::<Val>::channel();
     let handle = output.__into_handle_with(Ok);
     let id = handle.id();
     let imports = store.data().imports.clone();
     let invocation = invocation_id(store.data())?;
-    let direction = ChannelDirection::GuestToHost;
     imports.emit(EngineEvent::ChannelOpen {
         invocation,
         stream: id,
@@ -51,7 +64,7 @@ pub(super) fn lift<T: StreamValue>(
 
 struct Consumer<T> {
     writer: Option<OutputStreamWriter<Val>>,
-    item_type: Type,
+    item_type: Option<Type>,
     id: u64,
     invocation: InvocationId,
     imports: Arc<dyn ImportDispatcher>,
@@ -96,7 +109,7 @@ impl<T: StreamValue> StreamConsumer<StoreData> for Consumer<T> {
         let mut values = Vec::with_capacity(items.len());
         for item in items {
             match item
-                .into_val(Some(&this.item_type), &mut store)
+                .into_val(this.item_type.as_ref(), &mut store)
                 .and_then(|value| {
                     value.ok_or_else(|| wasmtime::Error::msg("stream item cannot be unit"))
                 }) {

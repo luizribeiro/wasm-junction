@@ -20,6 +20,15 @@ pub(super) fn lower<T: StreamValue>(
     item_type: Type,
     mut store: StoreContextMut<'_, StoreData>,
 ) -> Result<StreamAny, wasmtime::Error> {
+    let reader = lower_reader::<T>(handle, Some(item_type), store.as_context_mut())?;
+    reader.try_into_stream_any(store.as_context_mut())
+}
+
+pub(super) fn lower_reader<T: StreamValue>(
+    handle: StreamHandle,
+    item_type: Option<Type>,
+    mut store: StoreContextMut<'_, StoreData>,
+) -> Result<StreamReader<T>, wasmtime::Error> {
     let id = handle.id();
     let input = InputStream::<Val>::__from_handle_with(handle, Ok)
         .map_err(|error| wasmtime::Error::msg(error.to_string()))?;
@@ -42,12 +51,12 @@ pub(super) fn lower<T: StreamValue>(
             marker: std::marker::PhantomData,
         },
     )?;
-    reader.try_into_stream_any(store.as_context_mut())
+    Ok(reader)
 }
 
 struct Producer<T> {
     input: Option<InputStream<Val>>,
-    item_type: Type,
+    item_type: Option<Type>,
     id: u64,
     invocation: InvocationId,
     imports: Arc<dyn ImportDispatcher>,
@@ -107,7 +116,7 @@ impl<T: StreamValue> StreamProducer<StoreData> for Producer<T> {
             Poll::Ready(Ok(Some(values))) => {
                 let values = values
                     .into_iter()
-                    .map(|value| T::from_val(Some(value), Some(&this.item_type), &mut store))
+                    .map(|value| T::from_val(Some(value), this.item_type.as_ref(), &mut store))
                     .collect::<Result<Vec<_>, _>>();
                 let values = match values {
                     Ok(values) => values,
