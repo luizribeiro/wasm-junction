@@ -10,8 +10,8 @@ use wasm_junction::{
 };
 use wasm_junction_conformance::{
     PoisonHost, RESOURCE_CLIENT, RESOURCE_HOST, ResourceHost, RetainHost, STREAM_PROBE, StreamHost,
-    VALUE_STREAM_PROBE, ValueStreamHost, resource_stream_component, run_streams, stream_component,
-    value_stream_component,
+    VALUE_STREAM_PROBE, ValueStreamHost, named_value_stream_component, resource_stream_component,
+    run_streams, stream_component, value_stream_component,
 };
 use wasm_junction_wasmtime::WasmtimeEngine;
 use wit_component::{ComponentEncoder, StringEncoding, dummy_module, embed_component_metadata};
@@ -601,6 +601,15 @@ fn unsupported_stream_items_are_refused_at_load_without_poisoning_the_app() {
                     "result",
                 ),
             ];
+            let error = app
+                .load(
+                    Component::from_bytes(named_value_stream_component())
+                        .unwrap()
+                        .named("named-record"),
+                )
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("stream item type `record`"));
             for (name, wit, shape) in cases {
                 let error = app
                     .load(
