@@ -61,7 +61,7 @@ const P2_WASI_INTERFACES: &[&str] = &[
 ];
 
 #[cfg(feature = "wasi-p3")]
-const P3_WASI_INTERFACES: [&str; 17] = [
+const P3_WASI_INTERFACES: [&str; 19] = [
     "wasi:cli/environment@0.3.0",
     "wasi:cli/exit@0.3.0",
     "wasi:cli/types@0.3.0",
@@ -76,6 +76,8 @@ const P3_WASI_INTERFACES: [&str; 17] = [
     "wasi:clocks/types@0.3.0",
     "wasi:clocks/monotonic-clock@0.3.0",
     "wasi:clocks/system-clock@0.3.0",
+    "wasi:filesystem/preopens@0.3.0",
+    "wasi:filesystem/types@0.3.0",
     "wasi:random/insecure-seed@0.3.0",
     "wasi:random/insecure@0.3.0",
     "wasi:random/random@0.3.0",

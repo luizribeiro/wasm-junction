@@ -6,42 +6,20 @@ use super::*;
 use wasmtime_wasi::filesystem::Descriptor;
 
 pub(super) const INTERFACE: &str = "wasi:filesystem/types@0.3.0";
-#[allow(
-    dead_code,
-    reason = "the Preview 3 filesystem remains deliberately unlinked"
-)]
 const PREOPENS_INTERFACE: &str = "wasi:filesystem/preopens@0.3.0";
-#[allow(
-    dead_code,
-    reason = "the Preview 3 filesystem remains deliberately unlinked"
-)]
 const DESCRIPTOR: &str = "descriptor";
 
-#[allow(
-    dead_code,
-    reason = "the complete interface remains unlinked until typed directory streams are designed"
-)]
 mod descriptors;
 mod records;
-#[allow(
-    dead_code,
-    reason = "the complete interface remains unlinked until typed directory streams are designed"
-)]
 mod resources;
-#[allow(
-    dead_code,
-    reason = "the complete interface remains unlinked until typed directory streams are designed"
-)]
 mod streams;
 #[cfg(test)]
 mod test_support;
 mod values;
 
-#[allow(
-    dead_code,
-    reason = "registration waits for a typed directory-stream middleware design"
-)]
-fn add(linker: &mut wasmtime::component::Linker<crate::engine::StoreData>) -> wasmtime::Result<()> {
+pub(super) fn add(
+    linker: &mut wasmtime::component::Linker<crate::engine::StoreData>,
+) -> wasmtime::Result<()> {
     resources::add(linker)?;
     descriptors::add_metadata(linker)?;
     descriptors::add_paths(linker)?;
@@ -54,7 +32,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn available_filesystem_gates_register_without_linking() {
+    fn filesystem_gates_register() {
         let mut config = wasmtime::Config::new();
         config
             .wasm_component_model_async(true)

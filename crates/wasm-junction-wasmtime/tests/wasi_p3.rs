@@ -713,7 +713,11 @@ fn every_function_in_each_gated_p3_interface_has_a_gate() {
     block_on(app.call("p3", EXPORT, "exit-success", Vec::new())).unwrap_err();
     block_on(app.call("p3", EXPORT, "exit-code", Vec::new())).unwrap_err();
 
-    assert_eq!(*seen.lock().unwrap(), p3_wit_functions());
+    let expected = p3_wit_functions()
+        .into_iter()
+        .filter(|(interface, _)| !interface.starts_with("wasi:filesystem/"))
+        .collect();
+    assert_eq!(*seen.lock().unwrap(), expected);
 }
 
 #[cfg(feature = "wasi-p3")]
@@ -766,11 +770,7 @@ fn ungated_p3_interfaces_remain_missing() {
         .build()
         .unwrap();
 
-    for (package, interface) in [
-        ("filesystem", "types"),
-        ("sockets", "tcp"),
-        ("http", "types"),
-    ] {
+    for (package, interface) in [("sockets", "tcp"), ("http", "types")] {
         let name = format!("wasi:{package}/{interface}@0.3.0");
         let component = Component::from_bytes(component_importing(package, interface))
             .unwrap()

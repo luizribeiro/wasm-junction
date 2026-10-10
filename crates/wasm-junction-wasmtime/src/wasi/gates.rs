@@ -1465,6 +1465,7 @@ pub(super) fn add_p3(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     use wasmtime_wasi::p3::bindings::random::{insecure, insecure_seed, random};
 
     cli::add(linker)?;
+    filesystem_p3::add(linker)?;
     linker.instance("wasi:clocks/types@0.3.0")?;
     gate!(linker, "wasi:clocks/monotonic-clock@0.3.0", "now", clocks,
         monotonic_clock::Host::now, plain, () -> u64);

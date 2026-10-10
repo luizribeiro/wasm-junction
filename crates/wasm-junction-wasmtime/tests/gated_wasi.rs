@@ -592,6 +592,8 @@ fn gated_wasi_set_changes_only_deliberately() {
             "wasi:clocks/types@0.3.0",
             "wasi:clocks/monotonic-clock@0.3.0",
             "wasi:clocks/system-clock@0.3.0",
+            "wasi:filesystem/preopens@0.3.0",
+            "wasi:filesystem/types@0.3.0",
             "wasi:random/insecure-seed@0.3.0",
             "wasi:random/insecure@0.3.0",
             "wasi:random/random@0.3.0",
