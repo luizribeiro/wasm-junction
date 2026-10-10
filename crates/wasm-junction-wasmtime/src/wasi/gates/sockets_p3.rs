@@ -3,20 +3,30 @@
     reason = "socket gates share the parent module's private gate machinery"
 )]
 use super::*;
-use wasmtime_wasi::p3::bindings::sockets::types::TcpSocket;
+use wasmtime_wasi::p3::bindings::sockets::types::{TcpSocket, UdpSocket};
 
 const INTERFACE: &str = "wasi:sockets/types@0.3.0";
 const LOOKUP_INTERFACE: &str = "wasi:sockets/ip-name-lookup@0.3.0";
 const TCP_SOCKET: &str = "tcp-socket";
+const UDP_SOCKET: &str = "udp-socket";
 
-#[allow(
-    dead_code,
-    unused_imports,
-    unused_macros,
-    reason = "the wrappers are consumed as socket families are registered"
-)]
 mod gate;
+mod udp;
 mod values;
+
+impl WitResource for UdpSocket {
+    const INTERFACE: &'static str = INTERFACE;
+    const NAME: &'static str = UDP_SOCKET;
+}
+
+fn validate_udp(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
+    validate_borrowed::<UdpSocket>(values.first().ok_or_else(|| shape(UDP_SOCKET))?, store)?;
+    validate_handle_contexts(values, store)
+}
+
+fn validate_none(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
+    validate_handle_contexts(values, store)
+}
 
 fn sockets_enabled(store: &StoreData) -> bool {
     store
@@ -33,5 +43,6 @@ fn require_sockets(store: &StoreData) -> Result<(), CallError> {
 }
 
 pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    udp::add(linker)?;
     gate::add_lookup(linker)
 }
