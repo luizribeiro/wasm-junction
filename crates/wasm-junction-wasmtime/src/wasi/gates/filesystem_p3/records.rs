@@ -131,21 +131,16 @@ impl FromVal for DirectoryEntry {
 impl crate::stream_values::StreamValue for DirectoryEntry {
     fn into_val(
         self,
-        _ty: Option<&wasmtime::component::Type>,
         _store: &mut wasmtime::StoreContextMut<'_, StoreData>,
-    ) -> Result<Option<Val>, wasmtime::Error> {
-        Ok(Some(self.to_val()))
+    ) -> Result<Val, wasmtime::Error> {
+        Ok(self.to_val())
     }
 
     fn from_val(
-        value: Option<Val>,
-        _ty: Option<&wasmtime::component::Type>,
+        value: Val,
         _store: &mut wasmtime::StoreContextMut<'_, StoreData>,
     ) -> Result<Self, wasmtime::Error> {
-        <Self as FromVal>::from_val(
-            value.ok_or_else(|| wasmtime::Error::msg("directory entry cannot be unit"))?,
-        )
-        .map_err(wasmtime::Error::new)
+        <Self as FromVal>::from_val(value).map_err(wasmtime::Error::new)
     }
 }
 

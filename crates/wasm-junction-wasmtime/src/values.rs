@@ -1,4 +1,5 @@
 use wasm_junction_core::{FutureHandle, Resource, ResourceOwnership, StreamHandle, Val};
+use wasmtime::component::types::StreamType;
 use wasmtime::component::{
     FutureAny, ResourceAny, ResourceType, StreamAny, Type, Val as WasmtimeVal,
 };
@@ -12,13 +13,13 @@ pub(crate) struct ExpectedResource {
 pub(crate) enum LiftValue {
     Future(FutureAny),
     Resource(ResourceAny),
-    Stream(StreamAny, Option<Type>),
+    Stream(StreamAny),
 }
 
 pub(crate) enum LowerValue {
     Future(FutureHandle),
     Resource(Resource, Option<ExpectedResource>),
-    Stream(StreamHandle, Type),
+    Stream(StreamHandle, StreamType),
 }
 
 pub(crate) fn from_wasmtime(
@@ -110,7 +111,7 @@ pub(crate) fn from_wasmtime(
         })),
         WasmtimeVal::Resource(value) => store(LiftValue::Resource(value)),
         WasmtimeVal::Future(value) => store(LiftValue::Future(value)),
-        WasmtimeVal::Stream(value) => store(LiftValue::Stream(value, stream_item_type(expected))),
+        WasmtimeVal::Stream(value) => store(LiftValue::Stream(value)),
         other => Err(wasmtime::Error::msg(format!(
             "unsupported component value: {other:?}"
         ))),
@@ -298,9 +299,9 @@ pub(crate) fn expected_resource(expected: Option<&Type>) -> Option<ExpectedResou
     }
 }
 
-fn stream_item_type(expected: Option<&Type>) -> Option<Type> {
+fn stream_type(expected: Option<&Type>) -> Option<StreamType> {
     match expected {
-        Some(Type::Stream(stream)) => stream.ty(),
+        Some(Type::Stream(stream)) => Some(stream.clone()),
         _ => None,
     }
 }
@@ -310,14 +311,17 @@ fn lower_stream_value(
     expected: Option<&Type>,
     store: &mut impl FnMut(LowerValue) -> Result<WasmtimeVal, wasmtime::Error>,
 ) -> Result<WasmtimeVal, wasmtime::Error> {
-    let item_type = stream_item_type(expected)
-        .ok_or_else(|| wasmtime::Error::msg("expected stream value type"))?;
+    let stream_type =
+        stream_type(expected).ok_or_else(|| wasmtime::Error::msg("expected stream value type"))?;
+    let item_type = stream_type
+        .ty()
+        .ok_or_else(|| wasmtime::Error::msg("expected stream item type"))?;
     if value.is_byte_stream() != (item_type == Type::U8) {
         return Err(wasmtime::Error::new(
             wasm_junction_core::CallError::refused("stream item type does not match its WIT type"),
         ));
     }
-    store(LowerValue::Stream(value, item_type))
+    store(LowerValue::Stream(value, stream_type))
 }
 
 fn convert_values(

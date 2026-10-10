@@ -6,28 +6,16 @@ use std::task::{Context, Poll};
 use wasm_junction_core::{
     ChannelDirection, EngineEvent, ImportDispatcher, InputStream, InvocationId, StreamHandle, Val,
 };
-use wasmtime::component::{
-    Destination, StreamAny, StreamProducer, StreamReader, StreamResult, Type, VecBuffer,
-};
+use wasmtime::component::{Destination, StreamProducer, StreamReader, StreamResult, VecBuffer};
 use wasmtime::{AsContextMut, StoreContextMut};
 
+use super::super::restore_owned_resources;
 use super::super::{close_channel, invocation_id};
-use super::restore_owned_resources;
 use crate::engine::StoreData;
 use crate::stream_values::StreamValue;
 
-pub(super) fn lower<T: StreamValue>(
-    handle: StreamHandle,
-    item_type: Type,
-    mut store: StoreContextMut<'_, StoreData>,
-) -> Result<StreamAny, wasmtime::Error> {
-    let reader = lower_reader::<T>(handle, Some(item_type), store.as_context_mut())?;
-    reader.try_into_stream_any(store.as_context_mut())
-}
-
 pub(super) fn lower_reader<T: StreamValue>(
     handle: StreamHandle,
-    item_type: Option<Type>,
     mut store: StoreContextMut<'_, StoreData>,
 ) -> Result<StreamReader<T>, wasmtime::Error> {
     let id = handle.id();
@@ -44,7 +32,6 @@ pub(super) fn lower_reader<T: StreamValue>(
         store.as_context_mut(),
         Producer::<T> {
             input: Some(input),
-            item_type,
             id,
             invocation,
             imports,
@@ -57,7 +44,6 @@ pub(super) fn lower_reader<T: StreamValue>(
 
 struct Producer<T> {
     input: Option<InputStream<Val>>,
-    item_type: Option<Type>,
     id: u64,
     invocation: InvocationId,
     imports: Arc<dyn ImportDispatcher>,
@@ -118,7 +104,7 @@ impl<T: StreamValue> StreamProducer<StoreData> for Producer<T> {
                 let mut converted = Vec::with_capacity(values.len());
                 let mut lowered = Vec::with_capacity(values.len());
                 for value in values {
-                    match T::from_val(Some(value.clone()), this.item_type.as_ref(), &mut store) {
+                    match T::from_val(value.clone(), &mut store) {
                         Ok(item) => {
                             converted.push(item);
                             lowered.push(value);

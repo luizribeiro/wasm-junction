@@ -30,7 +30,6 @@ use crate::WASI_HTTP_INTERFACES;
 use crate::WASI_INTERFACES;
 use crate::futures::ActiveFutures;
 use crate::imports::{ResourceDefinition, define_imports};
-use crate::stream_types::validate_component_streams;
 use crate::streams::{lower_typed_stream, recover_exported_stream};
 use crate::values::{ExpectedResource, LiftValue, LowerValue, from_wasmtime, to_wasmtime};
 #[cfg(feature = "wasi")]
@@ -45,28 +44,8 @@ pub(crate) struct StoreData {
     pub(crate) resources: Arc<[ResourceDefinition]>,
     pub(crate) owned_resources: HashSet<Resource>,
     pub(crate) active_streams: crate::streams::ActiveStreams,
+    pub(crate) returnable_streams: crate::streams::ReturnableStreams,
     pub(crate) active_futures: ActiveFutures<FutureAny>,
-}
-
-#[cfg(test)]
-impl StoreData {
-    pub(crate) fn for_value_test(
-        imports: Arc<dyn ImportDispatcher>,
-    ) -> Result<Self, wasmtime::Error> {
-        #[cfg(feature = "wasi")]
-        let wasi = wasi_context(&WasiSettings::new())?;
-        Ok(Self {
-            imports,
-            context: InvocationContext::default(),
-            component: Arc::from("test"),
-            #[cfg(feature = "wasi")]
-            wasi,
-            resources: Arc::from([]),
-            owned_resources: HashSet::new(),
-            active_streams: Arc::new(Mutex::new(HashMap::new())),
-            active_futures: ActiveFutures::default(),
-        })
-    }
 }
 
 #[cfg(feature = "wasi")]
@@ -106,6 +85,7 @@ impl StoreData {
             resources: Arc::from([]),
             owned_resources: HashSet::new(),
             active_streams: Arc::new(Mutex::new(HashMap::new())),
+            returnable_streams: Vec::new(),
             active_futures: ActiveFutures::default(),
         }
     }
@@ -330,8 +310,6 @@ fn compile_component(
 ) -> CompileResult {
     let component =
         Component::new(engine, bytes).map_err(|error| EngineError::new(error.to_string()))?;
-    validate_component_streams(&component, engine, crate::STATIC_STREAM_INTERFACES)
-        .map_err(|error| EngineError::new(error.to_string()))?;
     let resources = define_imports(&mut linker, &component)
         .map_err(|error| EngineError::new(error.to_string()))?;
     let pre = linker
@@ -397,6 +375,7 @@ impl Compiled {
                 resources: self.resources.clone(),
                 owned_resources: HashSet::new(),
                 active_streams: Arc::new(std::sync::Mutex::new(HashMap::new())),
+                returnable_streams: Vec::new(),
                 active_futures: ActiveFutures::default(),
             },
         );
@@ -459,8 +438,8 @@ impl Compiled {
                                         "guest-created futures cannot be returned because the Wasmtime store ends with each call",
                                     )))
                                 }),
-                                LiftValue::Stream(stream, item_type) => accessor
-                                    .with(|store| recover_exported_stream(stream, item_type, store))
+                                LiftValue::Stream(stream) => accessor
+                                    .with(|store| recover_exported_stream(stream, store))
                                     .map(Val::Stream),
                             })
                         })

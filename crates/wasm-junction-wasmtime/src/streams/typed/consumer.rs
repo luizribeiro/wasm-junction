@@ -6,31 +6,17 @@ use wasm_junction_core::{
     ChannelDirection, EngineEvent, ImportDispatcher, InvocationId, OutputStream,
     OutputStreamWriter, StreamHandle, Val,
 };
-use wasmtime::component::{Source, StreamAny, StreamConsumer, StreamResult, Type};
+use wasmtime::component::{Source, StreamConsumer, StreamResult};
 use wasmtime::{AsContextMut, StoreContextMut};
 
-use super::super::{ActiveStreams, ActiveWriter, close_channel, invocation_id, lock_active};
-use super::restore_owned_resources;
+use super::super::{
+    ActiveStreams, ActiveWriter, close_channel, invocation_id, lock_active, restore_owned_resources,
+};
 use crate::engine::StoreData;
 use crate::stream_values::StreamValue;
 
-pub(super) fn lift<T: StreamValue>(
-    stream: StreamAny,
-    item_type: Type,
-    store: StoreContextMut<'_, StoreData>,
-) -> Result<StreamHandle, wasmtime::Error> {
-    let reader = stream.try_into_stream_reader::<T>()?;
-    lift_reader(
-        reader,
-        Some(item_type),
-        store,
-        ChannelDirection::GuestToHost,
-    )
-}
-
 pub(super) fn lift_reader<T: StreamValue>(
     reader: wasmtime::component::StreamReader<T>,
-    item_type: Option<Type>,
     mut store: StoreContextMut<'_, StoreData>,
     direction: ChannelDirection,
 ) -> Result<StreamHandle, wasmtime::Error> {
@@ -50,7 +36,6 @@ pub(super) fn lift_reader<T: StreamValue>(
         store.as_context_mut(),
         Consumer::<T> {
             writer: Some(writer),
-            item_type,
             id,
             invocation,
             imports,
@@ -65,7 +50,6 @@ pub(super) fn lift_reader<T: StreamValue>(
 
 struct Consumer<T> {
     writer: Option<OutputStreamWriter<Val>>,
-    item_type: Option<Type>,
     id: u64,
     invocation: InvocationId,
     imports: Arc<dyn ImportDispatcher>,
@@ -109,11 +93,7 @@ impl<T: StreamValue> StreamConsumer<StoreData> for Consumer<T> {
         source.read(store.as_context_mut(), &mut items)?;
         let mut values = Vec::with_capacity(items.len());
         for item in items {
-            match item
-                .into_val(this.item_type.as_ref(), &mut store)
-                .and_then(|value| {
-                    value.ok_or_else(|| wasmtime::Error::msg("stream item cannot be unit"))
-                }) {
+            match item.into_val(&mut store) {
                 Ok(value) => values.push(value),
                 Err(error) => {
                     restore_owned_resources(&values, store.data_mut());

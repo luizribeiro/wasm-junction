@@ -1328,13 +1328,6 @@ mod sockets;
 #[cfg(feature = "wasi-p3")]
 mod sockets_p3;
 
-pub(super) const STATIC_STREAM_INTERFACES: &[&str] = &[
-    #[cfg(feature = "wasi-p3")]
-    filesystem_p3::INTERFACE,
-    #[cfg(feature = "wasi-p3")]
-    sockets_p3::INTERFACE,
-];
-
 #[cfg(feature = "wasi-p3")]
 pub(super) fn drop_owned_resource(
     store: &mut StoreData,

@@ -80,9 +80,8 @@ impl FromVal for types::IpSocketAddress {
 impl crate::stream_values::StreamValue for Resource<TcpSocket> {
     fn into_val(
         self,
-        _ty: Option<&wasmtime::component::Type>,
         store: &mut wasmtime::StoreContextMut<'_, StoreData>,
-    ) -> Result<Option<Val>, wasmtime::Error> {
+    ) -> Result<Val, wasmtime::Error> {
         let invocation = store
             .data()
             .context
@@ -101,15 +100,14 @@ impl crate::stream_values::StreamValue for Resource<TcpSocket> {
             INTERFACE, TCP_SOCKET, id, invocation,
         );
         store.data_mut().owned_resources.insert(resource.clone());
-        Ok(Some(Val::Resource(resource)))
+        Ok(Val::Resource(resource))
     }
 
     fn from_val(
-        value: Option<Val>,
-        _ty: Option<&wasmtime::component::Type>,
+        value: Val,
         store: &mut wasmtime::StoreContextMut<'_, StoreData>,
     ) -> Result<Self, wasmtime::Error> {
-        let Some(Val::Resource(resource)) = value else {
+        let Val::Resource(resource) = value else {
             return Err(wasmtime::Error::new(CallError::refused(
                 "expected tcp-socket stream item",
             )));

@@ -15,17 +15,12 @@
 mod engine;
 mod futures;
 mod imports;
-mod stream_types;
+#[cfg(feature = "wasi-p3")]
 mod stream_values;
 mod streams;
 mod values;
 #[cfg(feature = "wasi")]
 mod wasi;
-
-#[cfg(feature = "wasi")]
-const STATIC_STREAM_INTERFACES: &[&str] = wasi::STATIC_STREAM_INTERFACES;
-#[cfg(not(feature = "wasi"))]
-const STATIC_STREAM_INTERFACES: &[&str] = &[];
 
 pub use engine::WasmtimeEngine;
 

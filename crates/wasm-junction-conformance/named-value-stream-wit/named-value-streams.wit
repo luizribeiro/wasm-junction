@@ -5,7 +5,17 @@ interface probe {
     text: string,
   }
 
+  variant choice {
+    count(u32),
+    text(string),
+    empty,
+  }
+
   echo: async func(values: stream<note>) -> list<note>;
+  echo-tuples: async func(values: stream<tuple<u32, string>>) -> list<tuple<u32, string>>;
+  echo-results: async func(values: stream<result<u32, string>>) -> list<result<u32, string>>;
+  echo-variants: async func(values: stream<choice>) -> list<choice>;
+  echo-deep-lists: async func(values: stream<list<list<list<u32>>>>) -> list<list<list<list<u32>>>>;
 }
 
 world named-value-streams {

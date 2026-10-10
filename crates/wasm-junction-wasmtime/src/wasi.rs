@@ -11,8 +11,6 @@ use crate::engine::StoreData;
 mod gates;
 mod trampoline;
 
-pub(crate) const STATIC_STREAM_INTERFACES: &[&str] = gates::STATIC_STREAM_INTERFACES;
-
 #[cfg(feature = "wasi-p3")]
 pub(crate) fn drop_owned_resource(
     store: &mut StoreData,
