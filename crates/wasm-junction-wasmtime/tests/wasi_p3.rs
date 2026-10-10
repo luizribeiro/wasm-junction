@@ -4,6 +4,10 @@
 
 use std::future::Future;
 #[cfg(feature = "wasi-p3")]
+use std::io::{Read, Write};
+#[cfg(feature = "wasi-p3")]
+use std::net::{Shutdown, TcpStream};
+#[cfg(feature = "wasi-p3")]
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 #[cfg(feature = "wasi-p3")]
 use std::sync::{Arc, Mutex};
@@ -164,6 +168,112 @@ fn sockets_app(middleware: impl Middleware + 'static) -> App {
         .unwrap();
     block_on(app.load(Component::from_bytes(COMPONENT).unwrap().named("p3"))).unwrap();
     app
+}
+
+#[cfg(feature = "wasi-p3")]
+fn socket_port(value: &Val) -> Option<u16> {
+    let Val::Variant {
+        case,
+        value: Some(value),
+    } = value
+    else {
+        return None;
+    };
+    if case != "ipv4" {
+        return None;
+    }
+    let Val::Record(fields) = value.as_ref() else {
+        return None;
+    };
+    fields.iter().find_map(|(name, value)| {
+        (name == "port")
+            .then_some(value)
+            .and_then(|value| match value {
+                Val::U16(port) => Some(*port),
+                _ => None,
+            })
+    })
+}
+
+#[cfg(feature = "wasi-p3")]
+struct AnnounceListener(Mutex<Option<std::sync::mpsc::Sender<u16>>>);
+
+#[cfg(feature = "wasi-p3")]
+impl Middleware for AnnounceListener {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        let port = (call.interface.as_ref() == "wasi:sockets/types@0.3.0"
+            && call.function.as_ref() == "[method]tcp-socket.listen")
+            .then(|| call.args.get(1).and_then(socket_port))
+            .flatten();
+        if let Some(port) = port
+            && let Some(sender) = self.0.lock().unwrap().take()
+        {
+            sender.send(port).unwrap();
+        }
+        next.run(call).await
+    }
+}
+
+#[cfg(feature = "wasi-p3")]
+fn tcp_request(port: u16, request: &[u8]) -> Vec<u8> {
+    let mut client = tcp_connect(port);
+    client.write_all(request).unwrap();
+    client.shutdown(Shutdown::Write).unwrap();
+    let mut response = Vec::new();
+    client.read_to_end(&mut response).unwrap();
+    response
+}
+
+#[cfg(feature = "wasi-p3")]
+fn tcp_connect(port: u16) -> TcpStream {
+    loop {
+        match TcpStream::connect(("127.0.0.1", port)) {
+            Ok(client) => return client,
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(1)),
+        }
+    }
+}
+
+#[test]
+#[cfg(feature = "wasi-p3")]
+fn tcp_accept_stream_echoes_two_complete_requests() {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let clients = std::thread::spawn(move || {
+        let port = receiver.recv().unwrap();
+        [
+            tcp_request(port, b"first request"),
+            tcp_request(port, b"second request"),
+        ]
+    });
+    let app = sockets_app(AnnounceListener(Mutex::new(Some(sender))));
+
+    let result = block_on(app.call("p3", EXPORT, "tcp-echo", vec![Val::U8(2)])).unwrap();
+    assert_eq!(
+        result,
+        [Val::Result(Ok(Some(Box::new(Val::List(vec![
+            Val::from("first request"),
+            Val::from("second request"),
+        ])))))]
+    );
+    assert_eq!(
+        clients.join().unwrap(),
+        [b"first request".to_vec(), b"second request".to_vec()]
+    );
+}
+
+#[test]
+#[cfg(feature = "wasi-p3")]
+fn tcp_stream_failures_reach_the_guest() {
+    let app = sockets_app(Pass);
+
+    let result = block_on(app.call("p3", EXPORT, "tcp-stream-failures", Vec::new())).unwrap();
+    assert_eq!(
+        result,
+        [Val::List(vec![
+            Val::from("ErrorCode::InvalidState"),
+            Val::from("ErrorCode::InvalidState")
+        ])]
+    );
 }
 
 #[test]
