@@ -487,6 +487,50 @@ fn tcp_stream_failures_reach_the_guest() {
     );
 }
 
+#[cfg(feature = "wasi-p3")]
+struct DropListener {
+    events: ChannelEvents,
+}
+
+#[cfg(feature = "wasi-p3")]
+impl Middleware for DropListener {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        next.run(call).await
+    }
+
+    fn event(&self, event: &Event) {
+        record_channel_event(&self.events, event);
+    }
+}
+
+#[test]
+#[cfg(feature = "wasi-p3")]
+fn dropping_accept_stream_stops_its_pump_and_preserves_the_next_call() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let app = sockets_app(DropListener {
+        events: events.clone(),
+    });
+
+    let dropped = block_on(app.call("p3", EXPORT, "drop-accept-stream", Vec::new())).unwrap();
+    assert!(dropped.is_empty());
+    let next = block_on(app.call("p3", EXPORT, "lookup-localhost", Vec::new())).unwrap();
+    let [Val::Result(Ok(Some(addresses)))] = next.as_slice() else {
+        panic!("lookup returned the wrong shape")
+    };
+    assert!(matches!(addresses.as_ref(), Val::U32(count) if *count > 0));
+    let events = events.lock().unwrap();
+    let opens = events
+        .iter()
+        .filter(|event| event.0 && event.3 == ChannelDirection::HostToGuest)
+        .count();
+    let closes = events
+        .iter()
+        .filter(|event| !event.0 && event.3 == ChannelDirection::HostToGuest)
+        .count();
+    assert!(opens > 0);
+    assert_eq!(opens, closes);
+}
+
 #[test]
 #[cfg(feature = "wasi-p3")]
 fn filesystem_streams_write_append_read_and_list() {
