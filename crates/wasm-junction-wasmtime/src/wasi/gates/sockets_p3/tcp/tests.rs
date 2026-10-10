@@ -37,3 +37,43 @@ async fn disabled_settings_refuse_connect_without_poisoning_store() {
         IpAddressFamily::Ipv4
     );
 }
+
+#[tokio::test]
+async fn disabled_settings_refuse_listen_without_poisoning_store() {
+    let mut store = store();
+    let listener =
+        HostTcpSocket::create(&mut views::sockets(store.data_mut()), IpAddressFamily::Ipv4)
+            .unwrap();
+    let address = IpSocketAddress::Ipv4(
+        wasmtime_wasi::p3::bindings::sockets::types::Ipv4SocketAddress {
+            port: 0,
+            address: (127, 0, 0, 1),
+        },
+    );
+    HostTcpSocket::bind(
+        &mut views::sockets(store.data_mut()),
+        Resource::new_borrow(listener.rep()),
+        address,
+    )
+    .await
+    .unwrap();
+    let invocation = store.data().context.invocation_id().unwrap();
+    let args = scope_values(
+        vec![resource_to_val(
+            &Resource::<TcpSocket>::new_borrow(listener.rep()),
+            INTERFACE,
+            TCP_SOCKET,
+        )],
+        invocation,
+    );
+
+    let error = listen_real(store.as_context_mut(), args).await.unwrap_err();
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert!(
+        !HostTcpSocket::get_is_listening(
+            &mut views::sockets(store.data_mut()),
+            Resource::new_borrow(listener.rep()),
+        )
+        .unwrap()
+    );
+}
