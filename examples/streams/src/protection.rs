@@ -24,7 +24,15 @@ impl Middleware for ProtectTickets {
             });
         }
 
-        next.run(call).await
+        let filters_tickets =
+            call.interface.as_ref() == SUPPORT_INTERFACE && call.function.as_ref() == "tickets";
+        let mut result = next.run(call).await?;
+        if filters_tickets && let Some(Val::Stream(stream)) = result.first_mut() {
+            *stream = stream.take().filter_items(
+                |item| !matches!(item, Val::String(ticket) if ticket.starts_with("private: ")),
+            );
+        }
+        Ok(result)
     }
 }
 
