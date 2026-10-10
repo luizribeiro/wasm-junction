@@ -21,9 +21,9 @@ pub(super) fn finish_result<T: FromVal>(
 }
 
 macro_rules! gate_socket {
-    ($linker:ident, $name:literal, $method:path, $mode:ident, $validate:expr,
+    ($linker:ident, $iface:expr, $name:literal, $method:path, $mode:ident, $validate:expr,
      ($($arg:ident: $ty:ty),*) -> $ok:ty) => {
-        $linker.instance(super::INTERFACE)?.func_wrap_async(
+        $linker.instance($iface)?.func_wrap_async(
             $name,
             |mut store, ($($arg,)*): ($($ty,)*)| Box::new(async move {
                 let invocation = store.data().context.invocation_id()
@@ -37,30 +37,20 @@ macro_rules! gate_socket {
                     $(let $arg = <$ty>::from_val(
                         args.next().ok_or_else(|| super::shape("another argument"))?
                     )?;)*
-                    let result = gate_socket!(@call $mode, $method, store.data_mut() $(, $arg)*);
+                    let result = $crate::wasi::gates::sockets::gate::call_socket!(
+                        $mode, $method, store.data_mut() $(, $arg)*
+                    );
                     let result = super::convert_trappable(result)?;
                     let invocation = store.data().context.invocation_id()
                         .ok_or_else(|| CallError::trap("WASI call has no invocation id"))?;
                     Ok(super::scope_values(vec![super::p3_result_value(result)], invocation))
                 });
                 let outcome = super::trampoline::gate(
-                    &mut store, super::INTERFACE, $name, args, real,
+                    &mut store, $iface, $name, args, real,
                 ).await;
                 Ok(($crate::wasi::gates::sockets_p3::gate::finish_result::<$ok>(outcome)?,))
             }),
         )?;
-    };
-    (@call view_sync, $method:path, $store:expr $(, $arg:ident)*) => {
-        $method(&mut super::views::sockets($store) $(, $arg)*)
-    };
-    (@call view_async, $method:path, $store:expr $(, $arg:ident)*) => {
-        $method(&mut super::views::sockets($store) $(, $arg)*).await
-    };
-    (@call store_sync, $method:path, $store:expr $(, $arg:ident)*) => {
-        $method($store $(, $arg)*)
-    };
-    (@call store_async, $method:path, $store:expr $(, $arg:ident)*) => {
-        $method($store $(, $arg)*).await
     };
 }
 

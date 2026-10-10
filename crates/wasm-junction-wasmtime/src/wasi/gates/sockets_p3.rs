@@ -1,3 +1,4 @@
+use super::sockets::validate_none;
 #[allow(
     clippy::wildcard_imports,
     reason = "socket gates share the parent module's private gate machinery"
@@ -34,10 +35,6 @@ fn validate_tcp(values: &[Val], store: &mut StoreData) -> Result<(), CallError> 
 
 fn validate_udp(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
     validate_borrowed::<UdpSocket>(values.first().ok_or_else(|| shape(UDP_SOCKET))?, store)?;
-    validate_handle_contexts(values, store)
-}
-
-fn validate_none(values: &[Val], store: &mut StoreData) -> Result<(), CallError> {
     validate_handle_contexts(values, store)
 }
 

@@ -14,6 +14,7 @@ use super::gate::{gate_socket, gate_socket_concurrent, gate_socket_value};
 )]
 use super::*;
 use crate::streams::{lift_static_stream, lower_static_stream};
+use crate::wasi::gates::sockets::gate::socket_options;
 
 #[cfg(test)]
 mod tests;
@@ -285,16 +286,6 @@ fn add_receive(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     Ok(())
 }
 
-macro_rules! tcp_options {
-    ($linker:ident, $($get:literal, $get_method:path, $get_ty:ty,
-        $set:literal, $set_method:path, $set_ty:ty;)+) => {$(
-        gate_socket!($linker, $get, $get_method, view_sync, super::validate_tcp,
-            (socket: Resource<TcpSocket>) -> $get_ty);
-        gate_socket!($linker, $set, $set_method, view_sync, super::validate_tcp,
-            (socket: Resource<TcpSocket>, value: $set_ty) -> ());
-    )+};
-}
-
 pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     gate_drop!(
         linker,
@@ -306,19 +297,19 @@ pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         None,
         drop_socket
     );
-    gate_socket!(linker, "[static]tcp-socket.create", HostTcpSocket::create, view_sync,
+    gate_socket!(linker, INTERFACE, "[static]tcp-socket.create", HostTcpSocket::create, view_sync,
         super::validate_none, (family: IpAddressFamily) -> Resource<TcpSocket>);
-    gate_socket!(linker, "[method]tcp-socket.bind", bind, store_async, super::validate_tcp,
+    gate_socket!(linker, INTERFACE, "[method]tcp-socket.bind", bind, store_async, super::validate_tcp,
         (socket: Resource<TcpSocket>, address: IpSocketAddress) -> ());
     gate_socket_concurrent!(linker, "[method]tcp-socket.connect", connect,
         super::validate_tcp, (socket: Resource<TcpSocket>, address: IpSocketAddress) -> ());
     add_listen(linker)?;
     add_send(linker)?;
     add_receive(linker)?;
-    gate_socket!(linker, "[method]tcp-socket.get-local-address",
+    gate_socket!(linker, INTERFACE, "[method]tcp-socket.get-local-address",
         HostTcpSocket::get_local_address, view_sync, super::validate_tcp,
         (socket: Resource<TcpSocket>) -> IpSocketAddress);
-    gate_socket!(linker, "[method]tcp-socket.get-remote-address",
+    gate_socket!(linker, INTERFACE, "[method]tcp-socket.get-remote-address",
         HostTcpSocket::get_remote_address, view_sync, super::validate_tcp,
         (socket: Resource<TcpSocket>) -> IpSocketAddress);
     gate_socket_value!(linker, "[method]tcp-socket.get-is-listening",
@@ -327,10 +318,10 @@ pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     gate_socket_value!(linker, "[method]tcp-socket.get-address-family",
         HostTcpSocket::get_address_family, super::validate_tcp,
         (socket: Resource<TcpSocket>) -> IpAddressFamily);
-    gate_socket!(linker, "[method]tcp-socket.set-listen-backlog-size",
+    gate_socket!(linker, INTERFACE, "[method]tcp-socket.set-listen-backlog-size",
         HostTcpSocket::set_listen_backlog_size, view_sync, super::validate_tcp,
         (socket: Resource<TcpSocket>, value: u64) -> ());
-    tcp_options!(linker,
+    socket_options!(gate_socket, linker, INTERFACE, TcpSocket, super::validate_tcp,
         "[method]tcp-socket.get-keep-alive-enabled", HostTcpSocket::get_keep_alive_enabled, bool,
         "[method]tcp-socket.set-keep-alive-enabled", HostTcpSocket::set_keep_alive_enabled, bool;
         "[method]tcp-socket.get-keep-alive-idle-time", HostTcpSocket::get_keep_alive_idle_time, u64,

@@ -11,6 +11,7 @@ use super::gate::{gate_socket, gate_socket_concurrent, gate_socket_value};
     reason = "UDP gates share the socket module's private gate machinery"
 )]
 use super::*;
+use crate::wasi::gates::sockets::gate::socket_options;
 
 async fn bind(
     store: &mut StoreData,
@@ -64,16 +65,6 @@ fn drop_socket(store: &mut StoreData, socket: Resource<UdpSocket>) -> wasmtime::
     HostUdpSocket::drop(&mut views::sockets(store), socket)
 }
 
-macro_rules! udp_options {
-    ($linker:ident, $($get:literal, $get_method:path, $get_ty:ty,
-        $set:literal, $set_method:path, $set_ty:ty;)+) => {$(
-        gate_socket!($linker, $get, $get_method, view_sync, super::validate_udp,
-            (socket: Resource<UdpSocket>) -> $get_ty);
-        gate_socket!($linker, $set, $set_method, view_sync, super::validate_udp,
-            (socket: Resource<UdpSocket>, value: $set_ty) -> ());
-    )+};
-}
-
 pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     gate_drop!(
         linker,
@@ -85,28 +76,28 @@ pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         None,
         drop_socket
     );
-    gate_socket!(linker, "[static]udp-socket.create", HostUdpSocket::create, view_async,
+    gate_socket!(linker, INTERFACE, "[static]udp-socket.create", HostUdpSocket::create, view_async,
         super::validate_none, (family: IpAddressFamily) -> Resource<UdpSocket>);
-    gate_socket!(linker, "[method]udp-socket.bind", bind, store_async, super::validate_udp,
+    gate_socket!(linker, INTERFACE, "[method]udp-socket.bind", bind, store_async, super::validate_udp,
         (socket: Resource<UdpSocket>, address: IpSocketAddress) -> ());
-    gate_socket!(linker, "[method]udp-socket.connect", connect, store_async, super::validate_udp,
+    gate_socket!(linker, INTERFACE, "[method]udp-socket.connect", connect, store_async, super::validate_udp,
         (socket: Resource<UdpSocket>, address: IpSocketAddress) -> ());
-    gate_socket!(linker, "[method]udp-socket.disconnect", HostUdpSocket::disconnect, view_sync,
+    gate_socket!(linker, INTERFACE, "[method]udp-socket.disconnect", HostUdpSocket::disconnect, view_sync,
         super::validate_udp, (socket: Resource<UdpSocket>) -> ());
     gate_socket_concurrent!(linker, "[method]udp-socket.send", send, super::validate_udp,
         (socket: Resource<UdpSocket>, data: Vec<u8>, remote: Option<IpSocketAddress>) -> ());
     gate_socket_concurrent!(linker, "[method]udp-socket.receive", receive, super::validate_udp,
         (socket: Resource<UdpSocket>) -> (Vec<u8>, IpSocketAddress));
-    gate_socket!(linker, "[method]udp-socket.get-local-address",
+    gate_socket!(linker, INTERFACE, "[method]udp-socket.get-local-address",
         HostUdpSocket::get_local_address, view_sync, super::validate_udp,
         (socket: Resource<UdpSocket>) -> IpSocketAddress);
-    gate_socket!(linker, "[method]udp-socket.get-remote-address",
+    gate_socket!(linker, INTERFACE, "[method]udp-socket.get-remote-address",
         HostUdpSocket::get_remote_address, view_sync, super::validate_udp,
         (socket: Resource<UdpSocket>) -> IpSocketAddress);
     gate_socket_value!(linker, "[method]udp-socket.get-address-family",
         HostUdpSocket::get_address_family, super::validate_udp,
         (socket: Resource<UdpSocket>) -> IpAddressFamily);
-    udp_options!(linker,
+    socket_options!(gate_socket, linker, INTERFACE, UdpSocket, super::validate_udp,
         "[method]udp-socket.get-unicast-hop-limit", HostUdpSocket::get_unicast_hop_limit, u8,
         "[method]udp-socket.set-unicast-hop-limit", HostUdpSocket::set_unicast_hop_limit, u8;
         "[method]udp-socket.get-receive-buffer-size", HostUdpSocket::get_receive_buffer_size, u64,
