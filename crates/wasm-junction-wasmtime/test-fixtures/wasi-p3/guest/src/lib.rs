@@ -196,6 +196,72 @@ fn loopback(port: u16) -> wasi::sockets::types::IpSocketAddress {
     )
 }
 
+async fn echo_socket(socket: wasi::sockets::types::TcpSocket) -> Result<String, String> {
+    let (bytes, received) = socket.receive();
+    let bytes = bytes.collect().await;
+    received.await.map_err(|error| format!("{error:?}"))?;
+    let text = String::from_utf8(bytes.clone()).map_err(|error| error.to_string())?;
+    let (mut writer, reader) = wit_stream::new();
+    let write = async move {
+        assert!(writer.write_all(bytes).await.is_empty());
+    };
+    let sent = socket.send(reader).into_future();
+    let (_, result) = join(write, sent).await;
+    result.map_err(|error| format!("{error:?}"))?;
+    Ok(text)
+}
+
+async fn tcp_echo(count: u8) -> Result<Vec<String>, String> {
+    use wasi::sockets::types::{IpAddressFamily, TcpSocket};
+
+    let listener = TcpSocket::create(IpAddressFamily::Ipv4)
+        .map_err(|error| format!("{error:?}"))?;
+    listener
+        .bind(loopback(0))
+        .map_err(|error| format!("{error:?}"))?;
+    let mut accepted = listener
+        .listen()
+        .map_err(|error| format!("{error:?}"))?;
+    let mut messages = Vec::new();
+    for _ in 0..count {
+        let socket = accepted
+            .next()
+            .await
+            .ok_or_else(|| "accept stream closed".to_owned())?;
+        messages.push(echo_socket(socket).await?);
+    }
+    Ok(messages)
+}
+
+async fn drop_accept_stream() -> Result<(), String> {
+    use wasi::sockets::types::{IpAddressFamily, TcpSocket};
+
+    let listener = TcpSocket::create(IpAddressFamily::Ipv4)
+        .map_err(|error| format!("{error:?}"))?;
+    listener
+        .bind(loopback(0))
+        .map_err(|error| format!("{error:?}"))?;
+    drop(
+        listener
+            .listen()
+            .map_err(|error| format!("{error:?}"))?,
+    );
+    Ok(())
+}
+
+async fn tcp_stream_failures() -> Vec<String> {
+    use wasi::sockets::types::{IpAddressFamily, TcpSocket};
+
+    let socket = TcpSocket::create(IpAddressFamily::Ipv4).unwrap();
+    let (writer, reader) = wit_stream::new();
+    drop(writer);
+    let send = socket.send(reader).into_future().await.unwrap_err();
+    let (stream, completion) = socket.receive();
+    drop(stream);
+    let receive = completion.await.unwrap_err();
+    vec![format!("{send:?}"), format!("{receive:?}")]
+}
+
 async fn cover_sockets() {
     use wasi::sockets::types::{IpAddressFamily, TcpSocket, UdpSocket};
 
@@ -248,6 +314,25 @@ async fn cover_sockets() {
     let _ = udp.connect(loopback(9));
     let _ = udp.disconnect();
     let _ = wasi::sockets::ip_name_lookup::resolve_addresses("localhost".to_owned()).await;
+}
+
+async fn udp_receive() -> Result<String, String> {
+    use wasi::sockets::types::{IpAddressFamily, UdpSocket};
+
+    let socket = UdpSocket::create(IpAddressFamily::Ipv4)
+        .map_err(|error| format!("{error:?}"))?;
+    socket
+        .bind(loopback(0))
+        .map_err(|error| format!("{error:?}"))?;
+    let (bytes, remote) = socket
+        .receive()
+        .await
+        .map_err(|error| format!("{error:?}"))?;
+    socket
+        .send(bytes.clone(), Some(remote))
+        .await
+        .map_err(|error| format!("{error:?}"))?;
+    String::from_utf8(bytes).map_err(|error| error.to_string())
 }
 
 impl exports::test::wasi_p3::probe::Guest for Component {
@@ -306,6 +391,29 @@ impl exports::test::wasi_p3::probe::Guest for Component {
 
     async fn filesystem_coverage() {
         cover_filesystem().await;
+    }
+
+    async fn tcp_echo(count: u8) -> Result<Vec<String>, String> {
+        tcp_echo(count).await
+    }
+
+    async fn tcp_stream_failures() -> Vec<String> {
+        tcp_stream_failures().await
+    }
+
+    async fn drop_accept_stream() {
+        drop_accept_stream().await.unwrap();
+    }
+
+    async fn udp_receive() -> Result<String, String> {
+        udp_receive().await
+    }
+
+    async fn lookup_localhost() -> Result<u32, String> {
+        wasi::sockets::ip_name_lookup::resolve_addresses("localhost".to_owned())
+            .await
+            .map(|addresses| u32::try_from(addresses.len()).unwrap())
+            .map_err(|error| format!("{error:?}"))
     }
 
     async fn sockets_coverage() {

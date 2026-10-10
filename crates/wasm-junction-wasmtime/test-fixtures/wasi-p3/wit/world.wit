@@ -8,6 +8,11 @@ interface probe {
   list-directory: async func() -> result<list<string>, string>;
   drop-directory-listing: async func() -> list<string>;
   filesystem-coverage: async func();
+  tcp-echo: async func(count: u8) -> result<list<string>, string>;
+  tcp-stream-failures: async func() -> list<string>;
+  drop-accept-stream: async func();
+  udp-receive: async func() -> result<string, string>;
+  lookup-localhost: async func() -> result<u32, string>;
   sockets-coverage: async func();
   exit-success: async func();
   exit-code: async func();
