@@ -1,7 +1,9 @@
 use wasmtime::AsContextMut;
 use wasmtime::component::{Access, FutureReader, Linker, Resource, StreamReader};
 use wasmtime_wasi::filesystem::{WasiFilesystem, WasiFilesystemView};
-use wasmtime_wasi::p3::bindings::filesystem::types::{ErrorCode, HostDescriptorWithStore};
+use wasmtime_wasi::p3::bindings::filesystem::types::{
+    DirectoryEntry, ErrorCode, HostDescriptorWithStore,
+};
 
 use super::{
     CallError, CallErrorKind, ChannelDirection, DESCRIPTOR, Descriptor, FromVal, INTERFACE,
@@ -9,7 +11,7 @@ use super::{
     lift_stream_with_direction_plain, lower_future_plain, lower_stream_handoff_plain,
     resource_from_val, resource_to_val, scope_values, shape, trampoline,
 };
-use crate::streams::lift_static_stream;
+use crate::streams::{lift_static_stream, lower_static_stream};
 use crate::wasi::gates::filesystem::gate::{add_context_for, validate_context_for};
 
 fn add_context(args: &mut Vals, store: &mut StoreData) -> Result<(), CallError> {
@@ -153,6 +155,13 @@ fn read_plain_real(
     Box::pin(async move { read_body(&mut store, args) })
 }
 
+fn read_directory_plain_real(
+    mut store: StoreContextMut<'_, StoreData>,
+    args: Vals,
+) -> wasm_junction_core::BoxFuture<'_, Result<Vals, CallError>> {
+    Box::pin(async move { read_directory_body(&mut store, args) })
+}
+
 fn add_write(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     linker.instance(INTERFACE)?.func_wrap(
         "[method]descriptor.write-via-stream",
@@ -278,8 +287,67 @@ fn add_read(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     Ok(())
 }
 
+fn add_read_directory(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    linker.instance(INTERFACE)?.func_wrap_async(
+        "[method]descriptor.read-directory",
+        |mut store, (descriptor,): (Resource<Descriptor>,)| {
+            Box::new(async move {
+                let invocation = store
+                    .data()
+                    .context
+                    .invocation_id()
+                    .ok_or_else(|| wasmtime::Error::msg("WASI call has no invocation id"))?;
+                let mut args = scope_values(
+                    vec![resource_to_val(&descriptor, INTERFACE, DESCRIPTOR)],
+                    invocation,
+                );
+                add_context(&mut args, store.data_mut()).map_err(wasmtime::Error::new)?;
+                let outcome = trampoline::gate(
+                    &mut store,
+                    INTERFACE,
+                    "[method]descriptor.read-directory",
+                    args,
+                    read_directory_plain_real,
+                )
+                .await;
+                let outcome = match outcome {
+                    Ok(values) => values,
+                    Err(error) if error.kind() == CallErrorKind::Refused => {
+                        // There is no dynamic item type with which to lower a rejected call.
+                        let stream = StreamReader::<DirectoryEntry>::new(
+                            store.as_context_mut(),
+                            std::iter::empty(),
+                        )?;
+                        let future = FutureReader::new(store.as_context_mut(), async {
+                            Ok::<_, wasmtime::Error>(Err(ErrorCode::Access))
+                        })?;
+                        return Ok(((stream, future),));
+                    }
+                    Err(error) => return Err(wasmtime::Error::new(error)),
+                };
+                let [Val::Tuple(pair)] =
+                    <[Val; 1]>::try_from(outcome).map_err(|_| shape("stream and future"))?
+                else {
+                    return Err(wasmtime::Error::new(shape("stream and future")));
+                };
+                let [stream, future] =
+                    <[Val; 2]>::try_from(pair).map_err(|_| shape("stream and future"))?;
+                let Val::Stream(stream) = stream else {
+                    return Err(wasmtime::Error::new(shape("stream")));
+                };
+                Ok(((
+                    lower_static_stream(stream, store.as_context_mut())?,
+                    lower_future_plain::<Result<(), ErrorCode>>(&mut store, future)?,
+                ),))
+            })
+        },
+    )?;
+    Ok(())
+}
+
 pub(super) fn add(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     add_read(linker)?;
+    add_read_directory(linker)?;
     add_write(linker)
 }
 
