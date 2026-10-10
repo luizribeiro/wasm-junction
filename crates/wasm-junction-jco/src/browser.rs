@@ -351,9 +351,23 @@ impl PumpControl {
     }
 }
 
-fn remember_stream_error(stored: &RefCell<Option<CallError>>, error: CallError) {
-    if stored.borrow().is_none() {
-        *stored.borrow_mut() = Some(error);
+fn remember_stream_error(
+    stored: &RefCell<Option<CallError>>,
+    resources: &ResourceTracker,
+    streams: &RefCell<HashMap<u64, ActiveGuestStream>>,
+    error: CallError,
+) {
+    let first = {
+        let mut stored = stored.borrow_mut();
+        if stored.is_some() {
+            false
+        } else {
+            *stored = Some(error);
+            true
+        }
+    };
+    if first {
+        Bridge::abort_streams_for(resources, streams);
     }
 }
 
@@ -436,6 +450,8 @@ impl Bridge {
                     Err(error) => {
                         remember_stream_error(
                             &import_error,
+                            &resources,
+                            &active,
                             CallError::trap(format!(
                                 "could not read guest stream: {}",
                                 js_error(&error)
@@ -453,7 +469,7 @@ impl Bridge {
                         match lift_stream_chunk(value, &item, &resources) {
                             Ok(values) => writer.write(values).await,
                             Err(error) => {
-                                remember_stream_error(&import_error, error);
+                                remember_stream_error(&import_error, &resources, &active, error);
                                 writer.abort();
                                 break;
                             }
@@ -474,10 +490,19 @@ impl Bridge {
     }
 
     fn abort_streams(&self) {
-        for id in self.resources.host_ids() {
-            self.close_host_stream(id);
+        Self::abort_streams_for(&self.resources, &self.guest_streams);
+    }
+
+    fn abort_streams_for(
+        resources: &ResourceTracker,
+        guest_streams: &RefCell<HashMap<u64, ActiveGuestStream>>,
+    ) {
+        for id in resources.host_ids() {
+            if let Some(input) = resources.take_host(id) {
+                input.close_reader();
+            }
         }
-        for stream in self.guest_streams.borrow().values() {
+        for stream in guest_streams.borrow().values() {
             stream.writer.abort();
             stream.pump.cancel();
         }
@@ -790,5 +815,55 @@ mod tests {
         assert!(closed.get());
         drop(bridge);
         assert!(active.upgrade().is_none());
+    }
+
+    #[wasm_bindgen_test]
+    async fn pump_failure_aborts_a_sibling_guest_stream() {
+        let resources = ResourceTracker::default();
+        let streams = Rc::new(RefCell::new(HashMap::new()));
+        let error = Rc::new(RefCell::new(None));
+
+        let pending = Object::new();
+        let pending_read =
+            Closure::wrap(
+                Box::new(|_options: JsValue| Promise::new(&mut |_resolve, _reject| {}))
+                    as Box<dyn FnMut(JsValue) -> Promise>,
+            );
+        Reflect::set(&pending, &"read".into(), pending_read.as_ref()).unwrap();
+        let sibling = Bridge::open_guest_stream(
+            pending.into(),
+            ValueType::String,
+            resources.clone(),
+            streams.clone(),
+            error.clone(),
+        );
+
+        let rejected = Object::new();
+        let rejected_read = Closure::wrap(Box::new(|_options: JsValue| {
+            Promise::reject(&JsValue::from_str("pump failed"))
+        }) as Box<dyn FnMut(JsValue) -> Promise>);
+        Reflect::set(&rejected, &"read".into(), rejected_read.as_ref()).unwrap();
+        Bridge::open_guest_stream(
+            rejected.into(),
+            ValueType::String,
+            resources,
+            streams,
+            error.clone(),
+        );
+
+        let mut sibling =
+            wasm_junction_core::InputStream::<Val>::__from_handle_with(sibling, Ok).unwrap();
+        assert_eq!(
+            sibling.read().await.unwrap_err().to_string(),
+            "stream was aborted when its invocation ended"
+        );
+        assert!(
+            error
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .to_string()
+                .contains("pump failed")
+        );
     }
 }
