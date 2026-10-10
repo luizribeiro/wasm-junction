@@ -13,7 +13,7 @@ use std::{collections::BTreeSet, path::Path, process::Command};
 #[cfg(feature = "wasi-p3")]
 use tokio::sync::Notify;
 use wasm_junction::LoadError;
-use wasm_junction::{App, Component};
+use wasm_junction::{Access, App, Component};
 #[cfg(feature = "wasi-p3")]
 use wasm_junction::{
     Call, CallError, CallErrorKind, ChannelDirection, Event, InputStream, Middleware, Next,
@@ -101,6 +101,78 @@ fn p3_app(middleware: impl Middleware + 'static) -> App {
     .unwrap();
     block_on(app.load(Component::from_bytes(COMPONENT).unwrap().named("p3"))).unwrap();
     app
+}
+
+#[cfg(feature = "wasi-p3")]
+struct TestDirectory(std::path::PathBuf);
+
+#[cfg(feature = "wasi-p3")]
+impl TestDirectory {
+    fn new(name: &str) -> Self {
+        let path =
+            std::env::temp_dir().join(format!("wasm-junction-p3-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        Self(path)
+    }
+}
+
+#[cfg(feature = "wasi-p3")]
+impl Drop for TestDirectory {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[cfg(feature = "wasi-p3")]
+struct Pass;
+
+#[cfg(feature = "wasi-p3")]
+impl Middleware for Pass {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        next.run(call).await
+    }
+}
+
+#[cfg(feature = "wasi-p3")]
+fn filesystem_app(middleware: impl Middleware + 'static, directory: &TestDirectory) -> App {
+    let app = App::builder()
+        .engine(WasmtimeEngine::new().unwrap())
+        .provide(wasm_junction::wasi::provider())
+        .middleware(middleware)
+        .build()
+        .unwrap();
+    app.configure(
+        "p3",
+        wasm_junction::WasiSettings::new().preopen(&directory.0, "/data", Access::ReadWrite),
+    )
+    .unwrap();
+    block_on(app.load(Component::from_bytes(COMPONENT).unwrap().named("p3"))).unwrap();
+    app
+}
+
+#[test]
+#[cfg(feature = "wasi-p3")]
+fn filesystem_streams_write_append_read_and_list() {
+    let directory = TestDirectory::new("streams");
+    std::fs::write(directory.0.join("first.txt"), b"first").unwrap();
+    std::fs::write(directory.0.join("second.txt"), b"second").unwrap();
+    let app = filesystem_app(Pass, &directory);
+
+    let result = block_on(app.call("p3", EXPORT, "filesystem", Vec::new())).unwrap();
+    let [Val::String(result)] = result.as_slice() else {
+        panic!("filesystem probe returned the wrong shape")
+    };
+    let expected = std::fs::read_dir(&directory.0)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect::<Vec<_>>()
+        .join(",");
+    assert_eq!(result, &format!("hello world|{expected}"));
+    assert_eq!(
+        std::fs::read(directory.0.join("note.txt")).unwrap(),
+        b"hello world"
+    );
 }
 
 #[test]
