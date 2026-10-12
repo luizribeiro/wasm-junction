@@ -11,8 +11,9 @@ use wasm_junction_core::WASI_HTTP_PROVIDER_NAME;
 #[cfg(feature = "wasi")]
 use wasm_junction_core::{Access, WASI_PROVIDER_NAME, WasiSettings};
 use wasm_junction_core::{
-    BoxFuture, CallError, CompiledComponent, Engine, EngineError, FutureHandle, ImportDispatcher,
-    InvocationContext, Resource, Val, Vals, validate_resource_lowering,
+    BoxFuture, CallError, CompiledComponent, Engine, EngineError, FutureHandle, GuestBacktrace,
+    GuestFrame, ImportDispatcher, InvocationContext, Resource, TrapCode, Val, Vals,
+    validate_resource_lowering,
 };
 use wasmtime::component::{
     Component, FutureAny, InstancePre, Linker, ResourceAny, ResourceDynamic, ResourceType,
@@ -361,16 +362,63 @@ impl CompiledComponent for Compiled {
         args: Vals,
     ) -> BoxFuture<'_, Result<Vals, CallError>> {
         Box::pin(async move {
+            let error_component = component.clone();
             self.call_export(imports, context, component, &interface, &function, args)
                 .await
-                .map_err(|error| {
-                    error
-                        .downcast_ref::<CallError>()
-                        .cloned()
-                        .unwrap_or_else(|| CallError::trap(format!("{error:#}")))
-                })
+                .map_err(|error| call_error(&error, &error_component))
         })
     }
+}
+
+fn call_error(error: &wasmtime::Error, component: &str) -> CallError {
+    if let Some(error) = error.downcast_ref::<CallError>() {
+        return error.clone();
+    }
+    let Some(trap) = error.downcast_ref::<wasmtime::Trap>() else {
+        return CallError::trap(error.to_string());
+    };
+    let code = trap_code(*trap);
+    let message = code.map_or_else(|| trap.to_string(), |code| format!("wasm trap: {code}"));
+    let backtrace = error
+        .downcast_ref::<wasmtime::WasmBacktrace>()
+        .map(|backtrace| {
+            GuestBacktrace::new(
+                backtrace
+                    .frames()
+                    .iter()
+                    .map(|frame| {
+                        GuestFrame::new(
+                            component,
+                            frame.func_name().map(str::to_owned),
+                            frame.module_offset(),
+                        )
+                    })
+                    .collect(),
+            )
+        });
+    CallError::guest_trap(message, code, backtrace)
+}
+
+fn trap_code(trap: wasmtime::Trap) -> Option<TrapCode> {
+    Some(match trap {
+        wasmtime::Trap::StackOverflow => TrapCode::StackOverflow,
+        wasmtime::Trap::MemoryOutOfBounds => TrapCode::MemoryOutOfBounds,
+        wasmtime::Trap::HeapMisaligned => TrapCode::HeapMisaligned,
+        wasmtime::Trap::TableOutOfBounds => TrapCode::TableOutOfBounds,
+        wasmtime::Trap::IndirectCallToNull => TrapCode::IndirectCallToNull,
+        wasmtime::Trap::BadSignature => TrapCode::IndirectCallTypeMismatch,
+        wasmtime::Trap::IntegerOverflow => TrapCode::IntegerOverflow,
+        wasmtime::Trap::IntegerDivisionByZero => TrapCode::IntegerDivideByZero,
+        wasmtime::Trap::BadConversionToInteger => TrapCode::BadConversionToInteger,
+        wasmtime::Trap::UnreachableCodeReached => TrapCode::Unreachable,
+        wasmtime::Trap::Interrupt => TrapCode::Interrupt,
+        wasmtime::Trap::OutOfFuel => TrapCode::OutOfFuel,
+        wasmtime::Trap::NullReference => TrapCode::NullReference,
+        wasmtime::Trap::ArrayOutOfBounds => TrapCode::ArrayOutOfBounds,
+        wasmtime::Trap::AllocationTooLarge => TrapCode::AllocationTooLarge,
+        wasmtime::Trap::CastFailure => TrapCode::CastFailure,
+        _ => return None,
+    })
 }
 
 impl Compiled {
@@ -391,7 +439,7 @@ impl Compiled {
             StoreData {
                 imports,
                 context,
-                component,
+                component: component.clone(),
                 #[cfg(feature = "wasi")]
                 wasi: wasi_context(&wasi)?,
                 resources: self.resources.clone(),
@@ -476,7 +524,10 @@ impl Compiled {
             Ok(values) => cleanup.map(|()| values),
             Err(error) => match cleanup {
                 Ok(()) => Err(error),
-                Err(cleanup) => Err(wasmtime::Error::msg(format!("{error:#}; {cleanup:#}"))),
+                Err(cleanup) => Err(wasmtime::Error::new(
+                    call_error(&error, &component)
+                        .with_cleanup_error(call_error(&cleanup, &component)),
+                )),
             },
         }
     }

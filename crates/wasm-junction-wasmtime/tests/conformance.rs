@@ -10,7 +10,7 @@ use std::time::Duration;
 use wasm_junction::{
     App, BoxFuture, Call, CallContext, CallError, CallErrorKind, CompiledComponent, Component,
     Engine, EngineError, ImportDispatcher, InvocationContext, Middleware, Next, Provided, Provider,
-    Resource, Val, Vals, WasiSettings,
+    Resource, TrapCode, Val, Vals, WasiSettings,
 };
 #[cfg(feature = "wasi")]
 use wasm_junction::{Caller, LoadError};
@@ -711,10 +711,17 @@ fn wit_error_provider_refusal_and_guest_trap_remain_distinct() {
 
     let trap = block_on(fixture.call("crash", Vec::new())).unwrap_err();
     assert_eq!(trap.kind(), CallErrorKind::Trap);
+    assert_eq!(
+        trap.to_string(),
+        "wasm trap: unreachable instruction executed"
+    );
+    assert_eq!(trap.trap_code(), Some(TrapCode::Unreachable));
+    let backtrace = trap.backtrace().unwrap();
     assert!(
-        trap.to_string()
-            .contains("example:notes/summarizer@0.1.0#crash"),
-        "{trap}"
+        backtrace.frames().iter().any(|frame| frame
+            .function()
+            .is_some_and(|name| name.contains("example:notes/summarizer@0.1.0#crash"))),
+        "{backtrace}"
     );
 }
 

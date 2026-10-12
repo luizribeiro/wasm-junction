@@ -7,7 +7,7 @@ use std::task::{Context, Poll, Wake, Waker};
 
 use wasm_junction::{
     App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Component, Handle, Provided,
-    Provider, Resource, ResourceTable, Val, Vals,
+    Provider, Resource, ResourceTable, TrapCode, Val, Vals,
 };
 use wasm_junction_conformance::{RESOURCE_CLIENT, RESOURCE_HOST, resource_component};
 use wasm_junction_wasmtime::WasmtimeEngine;
@@ -179,10 +179,14 @@ fn traps_include_cleanup_failures_after_attempting_every_drop() {
     ))
     .unwrap_err();
     assert_eq!(error.kind(), CallErrorKind::Trap);
-    assert!(error.to_string().contains("wasm `unreachable`"), "{error}");
-    assert!(
-        error.to_string().contains("drop refused for session#0"),
-        "{error}"
+    assert_eq!(
+        error.to_string(),
+        "wasm trap: unreachable instruction executed"
+    );
+    assert_eq!(error.trap_code(), Some(TrapCode::Unreachable));
+    assert_eq!(
+        error.cleanup_error().unwrap().to_string(),
+        "resource cleanup failed: drop refused for session#0"
     );
     assert_eq!(
         *provider.0.attempts.lock().unwrap(),
