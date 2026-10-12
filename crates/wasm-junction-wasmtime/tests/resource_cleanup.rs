@@ -108,11 +108,11 @@ impl Provider for FailingDropHost {
                     let [Val::Resource(session)] = call.args.as_slice() else {
                         return Err(CallError::trap("session.profile expects a session"));
                     };
-                    Ok(vec![Val::from(
-                        self.0
-                            .sessions
-                            .with(session, |user| format!("profile:{user}"))?,
-                    )])
+                    let user = self.0.sessions.with(session, Clone::clone)?;
+                    if user == "refuse" {
+                        return Err(CallError::refused("profile refused"));
+                    }
+                    Ok(vec![Val::from(format!("profile:{user}"))])
                 }
                 function => Err(CallError::unavailable(format!(
                     "failing resource host has no `{function}` function"
@@ -163,6 +163,37 @@ fn successful_calls_report_cleanup_failures_after_attempting_every_drop() {
                 marker: Some(42),
             }
         ]
+    );
+    assert_eq!(provider.active_resources(), 1);
+    provider.remove_failed_resource();
+}
+
+#[test]
+fn refusals_keep_their_kind_when_cleanup_fails() {
+    let provider = FailingDropHost::default();
+    let error = block_on(provider.app().call(
+        "resource-client",
+        RESOURCE_CLIENT,
+        "drop-after-refusal",
+        Vec::new(),
+    ))
+    .unwrap_err();
+
+    assert_eq!(error.kind(), CallErrorKind::Refused);
+    assert_eq!(error.to_string(), "profile refused");
+    assert_eq!(error.trap_code(), None);
+    assert_eq!(error.backtrace(), None);
+    assert_eq!(
+        error.cleanup_error().unwrap().to_string(),
+        "resource cleanup failed: drop refused for session#0"
+    );
+    assert_eq!(
+        *provider.0.attempts.lock().unwrap(),
+        [DropAttempt {
+            resource: 0,
+            caller: "resource-client".to_owned(),
+            marker: None,
+        }]
     );
     assert_eq!(provider.active_resources(), 1);
     provider.remove_failed_resource();
