@@ -16,10 +16,10 @@ use wasm_junction::{
 use wasm_junction::{Caller, LoadError};
 use wasm_junction_conformance::{
     CYCLE_A, DECORATION, Fixture, FixtureHost, RELOAD_GREETER, RESOURCE_CLIENT, RESOURCE_HOST,
-    ReloadGreeter, ReloadHost, ResourceHost, RoutedFixture, RoutedHost, SUMMARIZER, WRITER,
-    component, cycle_a_component, cycle_b_component, reload_v1_component, reload_v2_component,
-    resource_component, run, run_reload, run_resource_refusal, run_resources, run_routed,
-    sample_note, translator_component, writer_component,
+    ReloadGreeter, ReloadHost, ResourceHost, RoutedFixture, RoutedHost, SUMMARIZER, TRAP_PROBE,
+    WRITER, component, cycle_a_component, cycle_b_component, reload_v1_component,
+    reload_v2_component, resource_component, run, run_reload, run_resource_refusal, run_resources,
+    run_routed, sample_note, translator_component, trap_component, writer_component,
 };
 use wasm_junction_wasmtime::WasmtimeEngine;
 
@@ -723,6 +723,39 @@ fn wit_error_provider_refusal_and_guest_trap_remain_distinct() {
             .is_some_and(|name| name.contains("example:notes/summarizer@0.1.0#crash"))),
         "{backtrace}"
     );
+}
+
+#[test]
+fn common_guest_traps_have_portable_codes() {
+    let app = App::builder()
+        .engine(WasmtimeEngine::new().unwrap())
+        .build()
+        .unwrap();
+    block_on(
+        app.load(
+            Component::from_bytes(trap_component())
+                .unwrap()
+                .named("trap-probe"),
+        ),
+    )
+    .unwrap();
+
+    for (function, code, message) in [
+        (
+            "out-of-bounds",
+            TrapCode::MemoryOutOfBounds,
+            "wasm trap: out of bounds memory access",
+        ),
+        (
+            "stack-overflow",
+            TrapCode::StackOverflow,
+            "wasm trap: call stack exhausted",
+        ),
+    ] {
+        let error = block_on(app.call("trap-probe", TRAP_PROBE, function, Vec::new())).unwrap_err();
+        assert_eq!(error.trap_code(), Some(code));
+        assert_eq!(error.to_string(), message);
+    }
 }
 
 #[test]

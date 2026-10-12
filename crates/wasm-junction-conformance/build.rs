@@ -1,8 +1,13 @@
 //! Builds the WebAssembly component used by the conformance fixture.
 
+use std::env::var_os;
+use std::io;
+use std::path::PathBuf;
+use std::process::Command;
+
 use wasm_junction_guest_build::build;
 
-fn main() -> std::io::Result<()> {
+fn main() -> io::Result<()> {
     println!("cargo::rerun-if-changed=guest");
     println!("cargo::rerun-if-changed=dispatch-wit");
     println!("cargo::rerun-if-changed=resource-wit");
@@ -12,6 +17,8 @@ fn main() -> std::io::Result<()> {
     println!("cargo::rerun-if-changed=value-stream-wit");
     println!("cargo::rerun-if-changed=named-value-stream-wit");
     println!("cargo::rerun-if-changed=wit");
+    println!("cargo::rerun-if-changed=trap-component.wat");
+    parse_trap_component()?;
     build(
         "guest/Cargo.toml",
         "notes_summary_guest.wasm",
@@ -57,4 +64,16 @@ fn main() -> std::io::Result<()> {
         build("guest/Cargo.toml", binary, output)?;
     }
     Ok(())
+}
+
+fn parse_trap_component() -> io::Result<()> {
+    let output = PathBuf::from(var_os("OUT_DIR").ok_or(io::ErrorKind::NotFound)?)
+        .join("trap-component.wasm");
+    Command::new("wasm-tools")
+        .args(["parse", "trap-component.wat", "-o"])
+        .arg(output)
+        .status()?
+        .success()
+        .then_some(())
+        .ok_or(io::ErrorKind::Other.into())
 }

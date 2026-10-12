@@ -78,6 +78,8 @@ pub const RELOAD_WRITER: &str = "example:reload/writer@0.1.0";
 pub const DISPATCH_PINGER: &str = "example:dispatch/pinger@0.1.0";
 /// The dispatch fixture's exported loop interface.
 pub const DISPATCH_RUNNER: &str = "example:dispatch/runner@0.1.0";
+/// The interface exported by the guest-trap fixture.
+pub const TRAP_PROBE: &str = "example:traps/probe@0.1.0";
 
 pub(crate) struct SessionId(pub u32);
 pub(crate) struct TranslatorHop;
@@ -88,6 +90,12 @@ pub(crate) struct ComponentSettings(pub &'static str);
 #[must_use]
 pub fn component() -> &'static [u8] {
     include_bytes!(concat!(env!("OUT_DIR"), "/notes-summary.wasm"))
+}
+
+/// Returns a component with exports that raise common guest traps.
+#[must_use]
+pub fn trap_component() -> &'static [u8] {
+    include_bytes!(concat!(env!("OUT_DIR"), "/trap-component.wasm"))
 }
 
 /// Returns the fixture that repeatedly calls a plain host import.

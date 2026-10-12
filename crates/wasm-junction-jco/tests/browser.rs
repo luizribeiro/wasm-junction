@@ -24,12 +24,12 @@ use wasm_junction_conformance::{
     CYCLE_A, DECORATION, DISPATCH_PINGER, DISPATCH_RUNNER, Fixture, FixtureHost,
     NAMED_VALUE_STREAM_PROBE, PoisonHost, RESOURCE_CLIENT, RESOURCE_HOST, ReloadGreeter,
     ReloadHost, ResourceHost, RetainHost, RoutedFixture, RoutedHost, STREAM_PROBE, SUMMARIZER,
-    StreamHost, TRANSLATOR, VALUE_STREAM_PROBE, ValueStreamHost, WRITER, component,
+    StreamHost, TRANSLATOR, TRAP_PROBE, VALUE_STREAM_PROBE, ValueStreamHost, WRITER, component,
     cycle_a_component, cycle_b_component, dispatch_component, named_value_stream_component,
     reload_v1_component, reload_v2_component, resource_component, resource_stream_component,
     run_default, run_reload, run_resource_refusal, run_resources, run_routed, run_streams,
-    sample_note, sample_summary, stream_component, translator_component, value_stream_component,
-    writer_component,
+    sample_note, sample_summary, stream_component, translator_component, trap_component,
+    value_stream_component, writer_component,
 };
 use wasm_junction_jco::JcoEngine;
 
@@ -195,6 +195,51 @@ async fn wit_error_provider_refusal_and_guest_trap_remain_distinct() {
     );
     assert_eq!(trap.trap_code(), Some(TrapCode::Unreachable));
     assert_eq!(trap.backtrace(), None);
+}
+
+#[wasm_bindgen_test]
+async fn out_of_bounds_guest_trap_has_a_portable_code() {
+    let error = common_guest_trap("out-of-bounds").await;
+    assert_eq!(
+        error.trap_code(),
+        Some(TrapCode::MemoryOutOfBounds),
+        "{error}"
+    );
+    assert_eq!(error.to_string(), "wasm trap: out of bounds memory access");
+    assert_eq!(error.backtrace(), None);
+}
+
+#[wasm_bindgen_test]
+async fn stack_overflow_guest_trap_has_a_portable_code() {
+    let error = common_guest_trap("stack-overflow").await;
+    assert_eq!(error.trap_code(), Some(TrapCode::StackOverflow), "{error}");
+    assert_eq!(error.to_string(), "wasm trap: call stack exhausted");
+    assert_eq!(error.backtrace(), None);
+}
+
+#[wasm_bindgen_test]
+async fn integer_divide_by_zero_guest_trap_has_a_portable_code() {
+    let error = common_guest_trap("integer-divide-by-zero").await;
+    assert_eq!(
+        error.trap_code(),
+        Some(TrapCode::IntegerDivideByZero),
+        "{error}"
+    );
+    assert_eq!(error.to_string(), "wasm trap: integer divide by zero");
+}
+
+async fn common_guest_trap(function: &str) -> CallError {
+    let app = App::builder().engine(JcoEngine::new()).build().unwrap();
+    app.load(
+        Component::from_bytes(trap_component())
+            .unwrap()
+            .named("trap-probe"),
+    )
+    .await
+    .unwrap();
+    app.call("trap-probe", TRAP_PROBE, function, Vec::new())
+        .await
+        .unwrap_err()
 }
 
 #[wasm_bindgen_test]
