@@ -33,8 +33,8 @@ pub use wasm_junction_core::{
     EngineError, EngineEvent, Extensions, FromVal, FutureHandle, HostBound, ImportDispatcher,
     ImportTarget, InputStream, InvocationContext, InvocationId, MaybeSend, OutputStream,
     OutputStreamWriter, Resource, ResourceOwnership, ResourceTable, StreamError, StreamHandle,
-    ToVal, TypeError, Val, Vals, WASI_HTTP_PROVIDER_NAME, WASI_PROVIDER_NAME, WasiSettings,
-    validate_resource_for_invocation,
+    ToVal, TrapCode, TypeError, Val, Vals, WASI_HTTP_PROVIDER_NAME, WASI_PROVIDER_NAME,
+    WasiSettings, validate_resource_for_invocation,
 };
 /// Generates bindings for every interface in a local WIT package.
 ///

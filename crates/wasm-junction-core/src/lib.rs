@@ -18,7 +18,7 @@ pub use engine::{
     Access, ChannelDirection, CompiledComponent, Engine, EngineError, EngineEvent,
     ImportDispatcher, ImportTarget, WASI_HTTP_PROVIDER_NAME, WASI_PROVIDER_NAME, WasiSettings,
 };
-pub use error::{CallError, CallErrorKind};
+pub use error::{CallError, CallErrorKind, TrapCode};
 pub use future::{BoxFuture, HostBound, MaybeSend};
 pub use future_value::FutureHandle;
 pub use invocation::InvocationId;
