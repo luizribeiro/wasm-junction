@@ -10,7 +10,7 @@ use wasm_bindgen::{JsCast, prelude::*};
 use wasm_bindgen_futures::{future_to_promise, spawn_local};
 use wasm_junction_core::{
     BoxFuture, CallError, CompiledComponent, Engine, EngineError, ImportDispatcher,
-    InvocationContext, OutputStream, OutputStreamWriter, StreamHandle, Val, Vals,
+    InvocationContext, OutputStream, OutputStreamWriter, StreamHandle, TrapCode, Val, Vals,
 };
 
 use crate::types::{Signatures, ValueType};
@@ -231,10 +231,7 @@ impl CompiledComponent for BrowserCompiled {
                     {
                         Ok(result)
                     } else {
-                        Err(CallError::trap(format!(
-                            "component export `{interface}#{function}` trapped: {}",
-                            js_error(&error)
-                        )))
+                        Err(guest_trap(&error))
                     }
                 }
             };
@@ -242,7 +239,7 @@ impl CompiledComponent for BrowserCompiled {
                 (Ok(values), Ok(())) => Ok(values),
                 (Err(error), Ok(())) => Err(error),
                 (Ok(_), Err(cleanup)) => Err(cleanup),
-                (Err(error), Err(cleanup)) => Err(CallError::trap(format!("{error}; {cleanup}"))),
+                (Err(error), Err(cleanup)) => Err(error.with_cleanup_error(cleanup)),
             }
         })
     }
@@ -664,6 +661,38 @@ fn js_error(value: &JsValue) -> String {
                 .and_then(|message| message.as_string())
         })
         .unwrap_or_else(|| format!("JavaScript error: {value:?}"))
+}
+
+fn guest_trap(error: &JsValue) -> CallError {
+    let message = js_error(error);
+    let code = trap_code(&message);
+    let message = code.map_or_else(
+        || format!("wasm trap: {message}"),
+        |code| format!("wasm trap: {code}"),
+    );
+    CallError::guest_trap(message, code, None)
+}
+
+fn trap_code(message: &str) -> Option<TrapCode> {
+    let message = message.to_ascii_lowercase();
+    if message.contains("unreachable") {
+        Some(TrapCode::Unreachable)
+    } else if message.contains("memory access out of bounds")
+        || message.contains("out of bounds memory access")
+        || message.contains("index out of bounds")
+    {
+        Some(TrapCode::MemoryOutOfBounds)
+    } else if message.contains("maximum call stack size exceeded")
+        || message.contains("call stack exhausted")
+        || message.contains("stack overflow")
+        || message.contains("too much recursion")
+    {
+        Some(TrapCode::StackOverflow)
+    } else if message.contains("divide by zero") || message.contains("division by zero") {
+        Some(TrapCode::IntegerDivideByZero)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]

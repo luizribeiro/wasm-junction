@@ -18,7 +18,7 @@ use wasm_encoder::{ImportSection, Instruction, Module, TypeSection, ValType};
 use wasm_junction::{
     App, BoxFuture, Call, CallContext, CallError, CallErrorKind, CompiledComponent, Component,
     Engine, EngineError, ImportDispatcher, InputStream, InvocationContext, Middleware, Next,
-    OutputStream, Provided, Provider, Resource, Val, Vals,
+    OutputStream, Provided, Provider, Resource, TrapCode, Val, Vals,
 };
 use wasm_junction_conformance::{
     CYCLE_A, DECORATION, DISPATCH_PINGER, DISPATCH_RUNNER, Fixture, FixtureHost,
@@ -189,7 +189,12 @@ async fn wit_error_provider_refusal_and_guest_trap_remain_distinct() {
 
     let trap = fixture.call("crash", Vec::new()).await.unwrap_err();
     assert_eq!(trap.kind(), CallErrorKind::Trap);
-    assert!(trap.to_string().contains(&format!("{SUMMARIZER}#crash")));
+    assert_eq!(
+        trap.to_string(),
+        "wasm trap: unreachable instruction executed"
+    );
+    assert_eq!(trap.trap_code(), Some(TrapCode::Unreachable));
+    assert_eq!(trap.backtrace(), None);
 }
 
 #[wasm_bindgen_test]

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 use wasm_junction::{
     App, BoxFuture, Call, CallContext, CallError, CallErrorKind, Component, Handle, Provided,
-    Provider, Resource, ResourceTable, Val, Vals,
+    Provider, Resource, ResourceTable, TrapCode, Val, Vals,
 };
 use wasm_junction_conformance::{RESOURCE_CLIENT, RESOURCE_HOST, resource_component};
 use wasm_junction_jco::JcoEngine;
@@ -169,12 +169,15 @@ async fn traps_include_cleanup_failures_after_attempting_every_drop() {
         .await
         .unwrap_err();
     assert_eq!(error.kind(), CallErrorKind::Trap);
-    let message = error.to_string();
-    assert!(
-        message.to_ascii_lowercase().contains("unreachable"),
-        "{message}"
+    assert_eq!(
+        error.to_string(),
+        "wasm trap: unreachable instruction executed"
     );
-    assert!(message.contains("drop refused for session#0"));
+    assert_eq!(error.trap_code(), Some(TrapCode::Unreachable));
+    assert_eq!(
+        error.cleanup_error().unwrap().to_string(),
+        "invocation cleanup failed: resource cleanup failed: drop refused for session#0"
+    );
     assert_eq!(
         *provider.0.attempts.borrow(),
         [
