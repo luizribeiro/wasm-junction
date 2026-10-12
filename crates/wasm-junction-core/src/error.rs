@@ -9,6 +9,9 @@ use crate::{StreamError, TypeError};
 pub struct CallError {
     kind: CallErrorKind,
     message: String,
+    trap_code: Option<TrapCode>,
+    backtrace: Option<GuestBacktrace>,
+    cleanup_error: Option<Box<Self>>,
 }
 
 /// The broad category of a [`CallError`].
@@ -181,6 +184,25 @@ impl CallError {
         Self::new(CallErrorKind::Trap, message)
     }
 
+    /// Creates a trap raised by guest WebAssembly with structured diagnostics.
+    ///
+    /// Engines use this constructor after translating their own trap and frame
+    /// types into [`TrapCode`] and [`GuestBacktrace`].
+    #[must_use]
+    pub fn guest_trap(
+        message: impl Into<String>,
+        trap_code: Option<TrapCode>,
+        backtrace: Option<GuestBacktrace>,
+    ) -> Self {
+        Self {
+            kind: CallErrorKind::Trap,
+            message: message.into(),
+            trap_code,
+            backtrace,
+            cleanup_error: None,
+        }
+    }
+
     /// Creates a refusal with a message suitable for the call's recipient.
     #[must_use]
     pub fn refused(message: impl Into<String>) -> Self {
@@ -199,17 +221,69 @@ impl CallError {
         self.kind
     }
 
+    /// Returns the structured cause when guest WebAssembly raised this trap.
+    #[must_use]
+    pub const fn trap_code(&self) -> Option<TrapCode> {
+        self.trap_code
+    }
+
+    /// Returns the captured guest frames when this error came from guest code.
+    #[must_use]
+    pub const fn backtrace(&self) -> Option<&GuestBacktrace> {
+        self.backtrace.as_ref()
+    }
+
+    /// Returns the newest cleanup failure that happened after this error.
+    ///
+    /// Earlier cleanup failures remain available by following this accessor
+    /// on the returned error.
+    #[must_use]
+    pub fn cleanup_error(&self) -> Option<&Self> {
+        self.cleanup_error.as_deref()
+    }
+
+    /// Attaches a cleanup failure without changing this error's kind or message.
+    ///
+    /// ```
+    /// use wasm_junction_core::{CallError, CallErrorKind};
+    ///
+    /// let error = CallError::refused("private note")
+    ///     .with_cleanup_error(CallError::trap("resource drop failed"));
+    /// assert_eq!(error.kind(), CallErrorKind::Refused);
+    /// assert_eq!(error.to_string(), "private note");
+    /// assert_eq!(error.cleanup_error().unwrap().to_string(), "resource drop failed");
+    /// ```
+    #[must_use]
+    pub fn with_cleanup_error(mut self, mut cleanup_error: Self) -> Self {
+        if let Some(previous) = self.cleanup_error.take() {
+            cleanup_error.append_cleanup_error(*previous);
+        }
+        self.cleanup_error = Some(Box::new(cleanup_error));
+        self
+    }
+
+    fn append_cleanup_error(&mut self, cleanup_error: Self) {
+        if let Some(existing) = &mut self.cleanup_error {
+            existing.append_cleanup_error(cleanup_error);
+        } else {
+            self.cleanup_error = Some(Box::new(cleanup_error));
+        }
+    }
+
     fn new(kind: CallErrorKind, message: impl Into<String>) -> Self {
         Self {
             kind,
             message: message.into(),
+            trap_code: None,
+            backtrace: None,
+            cleanup_error: None,
         }
     }
 }
 
 impl Display for CallError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        Display::fmt(&self.message, formatter)
+        Display::fmt(self.message.lines().next().unwrap_or_default(), formatter)
     }
 }
 
@@ -244,6 +318,8 @@ mod tests {
         let call_error = CallError::from(stream_error);
         assert_eq!(call_error.kind(), CallErrorKind::Trap);
         assert_eq!(call_error.to_string(), "stream already has a reader");
+        assert_eq!(call_error.trap_code(), None);
+        assert_eq!(call_error.backtrace(), None);
     }
 
     #[test]
@@ -272,5 +348,62 @@ mod tests {
             backtrace.to_string(),
             "summarizer::crash at wasm offset 0x2a\nsummarizer::<unknown>"
         );
+    }
+
+    #[test]
+    fn call_error_display_is_one_line_and_cleanup_keeps_the_original() {
+        let backtrace = GuestBacktrace::new(vec![GuestFrame::new(
+            "summarizer",
+            Some("crash".to_owned()),
+            Some(42),
+        )]);
+        let error = CallError::guest_trap(
+            "wasm trap: unreachable instruction executed\nwasm backtrace follows",
+            Some(TrapCode::Unreachable),
+            Some(backtrace),
+        )
+        .with_cleanup_error(CallError::trap("resource cleanup failed"));
+
+        assert_eq!(
+            error.to_string(),
+            "wasm trap: unreachable instruction executed"
+        );
+        assert_eq!(error.kind(), CallErrorKind::Trap);
+        assert_eq!(error.trap_code(), Some(TrapCode::Unreachable));
+        assert_eq!(
+            error.backtrace().unwrap().frames()[0].function(),
+            Some("crash")
+        );
+        assert_eq!(
+            error.cleanup_error().unwrap().to_string(),
+            "resource cleanup failed"
+        );
+    }
+
+    #[test]
+    fn nested_cleanup_failures_are_chained() {
+        let error = CallError::refused("private note")
+            .with_cleanup_error(CallError::trap("callee cleanup failed"))
+            .with_cleanup_error(CallError::trap("caller cleanup failed"));
+
+        assert_eq!(error.kind(), CallErrorKind::Refused);
+        assert_eq!(error.to_string(), "private note");
+        let caller_cleanup = error.cleanup_error().unwrap();
+        assert_eq!(caller_cleanup.to_string(), "caller cleanup failed");
+        assert_eq!(
+            caller_cleanup.cleanup_error().unwrap().to_string(),
+            "callee cleanup failed"
+        );
+    }
+
+    #[test]
+    fn non_guest_errors_have_no_trap_diagnostics() {
+        for error in [
+            CallError::refused("private note"),
+            CallError::unavailable("component unloaded"),
+        ] {
+            assert_eq!(error.trap_code(), None);
+            assert_eq!(error.backtrace(), None);
+        }
     }
 }
