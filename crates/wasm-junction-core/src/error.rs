@@ -84,6 +84,96 @@ impl Display for TrapCode {
         formatter.write_str(reason)
     }
 }
+
+/// A guest WebAssembly backtrace, independent of the engine that captured it.
+///
+/// ```
+/// use wasm_junction_core::{GuestBacktrace, GuestFrame};
+///
+/// let trace = GuestBacktrace::new(vec![GuestFrame::new(
+///     "summarizer",
+///     Some("crash".to_owned()),
+///     Some(42),
+/// )]);
+/// assert_eq!(trace.to_string(), "summarizer::crash at wasm offset 0x2a");
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GuestBacktrace {
+    frames: Vec<GuestFrame>,
+}
+
+impl GuestBacktrace {
+    /// Creates a backtrace from frames ordered from innermost to outermost.
+    #[must_use]
+    pub fn new(frames: Vec<GuestFrame>) -> Self {
+        Self { frames }
+    }
+
+    /// Returns the captured frames, ordered from innermost to outermost.
+    #[must_use]
+    pub fn frames(&self) -> &[GuestFrame] {
+        &self.frames
+    }
+}
+
+impl Display for GuestBacktrace {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (index, frame) in self.frames.iter().enumerate() {
+            if index != 0 {
+                formatter.write_str("\n")?;
+            }
+            write!(formatter, "{}::", frame.component)?;
+            formatter.write_str(frame.function.as_deref().unwrap_or("<unknown>"))?;
+            if let Some(offset) = frame.module_offset {
+                write!(formatter, " at wasm offset 0x{offset:x}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// One function frame in a [`GuestBacktrace`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GuestFrame {
+    component: String,
+    function: Option<String>,
+    module_offset: Option<usize>,
+}
+
+impl GuestFrame {
+    /// Creates a frame captured while executing `component`.
+    #[must_use]
+    pub fn new(
+        component: impl Into<String>,
+        function: Option<String>,
+        module_offset: Option<usize>,
+    ) -> Self {
+        Self {
+            component: component.into(),
+            function,
+            module_offset,
+        }
+    }
+
+    /// Returns the application component that was executing.
+    #[must_use]
+    pub fn component(&self) -> &str {
+        &self.component
+    }
+
+    /// Returns the guest function name when the engine could recover one.
+    #[must_use]
+    pub fn function(&self) -> Option<&str> {
+        self.function.as_deref()
+    }
+
+    /// Returns the instruction offset from the start of the WebAssembly module.
+    #[must_use]
+    pub const fn module_offset(&self) -> Option<usize> {
+        self.module_offset
+    }
+}
+
 impl CallError {
     /// Creates a guest trap with a message suitable for the call's recipient.
     #[must_use]
@@ -165,6 +255,22 @@ mod tests {
         assert_eq!(
             TrapCode::MemoryOutOfBounds.to_string(),
             "out of bounds memory access"
+        );
+    }
+
+    #[test]
+    fn guest_backtrace_exposes_and_displays_one_frame_per_line() {
+        let backtrace = GuestBacktrace::new(vec![
+            GuestFrame::new("summarizer", Some("crash".to_owned()), Some(42)),
+            GuestFrame::new("summarizer", None, None),
+        ]);
+
+        assert_eq!(backtrace.frames()[0].component(), "summarizer");
+        assert_eq!(backtrace.frames()[0].function(), Some("crash"));
+        assert_eq!(backtrace.frames()[0].module_offset(), Some(42));
+        assert_eq!(
+            backtrace.to_string(),
+            "summarizer::crash at wasm offset 0x2a\nsummarizer::<unknown>"
         );
     }
 }
