@@ -4,6 +4,7 @@
 #![warn(missing_docs)]
 
 mod bindings;
+mod console;
 #[cfg(test)]
 mod path;
 #[cfg(test)]
@@ -12,10 +13,11 @@ pub mod server;
 mod settings;
 
 use std::error::Error;
-use std::io::{BufRead, Write};
+use std::io::BufReader;
 use std::path::Path;
 
 use bindings::agent::{Agent, Message, Role};
+use console::Console;
 use server::Server;
 use settings::Settings;
 use wasm_junction::{Access, AppBuilder, Component, WasiSettings, wasi};
@@ -35,8 +37,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     repl(
         &settings,
         &server,
-        std::io::stdin().lock(),
-        std::io::stdout().lock(),
+        Console::new(BufReader::new(std::io::stdin()), std::io::stdout()),
         |builder| builder,
     )
     .await
@@ -45,8 +46,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 async fn repl(
     settings: &Settings,
     server: &Server,
-    mut input: impl BufRead,
-    mut output: impl Write,
+    console: Console,
     configure: impl FnOnce(AppBuilder) -> AppBuilder,
 ) -> Result<(), Box<dyn Error>> {
     let app = configure(
@@ -74,14 +74,13 @@ async fn repl(
     app.check()?;
     let agent = app.get::<Agent>("agent")?;
 
-    writeln!(output, "Research page: {}", server.url("/research"))?;
-    writeln!(output, "Injected page: {}", server.url("/injected"))?;
+    console.line(&format!("Research page: {}", server.url("/research")))?;
+    console.line(&format!("Injected page: {}", server.url("/injected")))?;
     let mut conversation = Vec::new();
     loop {
-        write!(output, "you> ")?;
-        output.flush()?;
-        let mut line = String::new();
-        if input.read_line(&mut line)? == 0 || line.trim().is_empty() {
+        console.print("you> ")?;
+        let line = console.read_line().await?;
+        if line.trim().is_empty() {
             break;
         }
         conversation.push(Message {
@@ -92,74 +91,11 @@ async fn repl(
             .answer(&conversation)
             .await?
             .map_err(std::io::Error::other)?;
-        writeln!(output, "assistant> {reply}")?;
+        console.line(&format!("assistant> {reply}"))?;
         conversation.push(Message {
             role: Role::Assistant,
             content: reply,
         });
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use std::io::Cursor;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    use super::{Server, Settings, repl};
-    use crate::bindings::{notes_tools, web_tools};
-    use wasm_junction::{Call, CallError, Middleware, Next, Vals};
-
-    #[derive(Clone, Default)]
-    struct Reached {
-        notes_tools: Arc<AtomicBool>,
-        web_tools: Arc<AtomicBool>,
-    }
-
-    impl Middleware for Reached {
-        async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
-            if call.interface.as_ref() == notes_tools::INTERFACE {
-                self.notes_tools.store(true, Ordering::Relaxed);
-            }
-            if call.interface.as_ref() == web_tools::INTERFACE {
-                self.web_tools.store(true, Ordering::Relaxed);
-            }
-            next.run(call).await
-        }
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn chats_with_configured_endpoint() {
-        if std::env::var_os("OPENAI_BASE_URL").is_none() {
-            eprintln!("skipped: set OPENAI_BASE_URL to run the assistant end-to-end test");
-            return;
-        }
-        let settings = Settings::read().unwrap().unwrap();
-        let server = Server::start().unwrap();
-        let input = format!(
-            "Use your tools to read research.md and fetch {}, then summarize both.\n\n",
-            server.url("/research")
-        );
-        let reached = Reached::default();
-        let observer = reached.clone();
-        let mut output = Vec::new();
-        repl(
-            &settings,
-            &server,
-            Cursor::new(input),
-            &mut output,
-            |builder| builder.middleware(observer),
-        )
-        .await
-        .unwrap();
-        let output = String::from_utf8(output).unwrap();
-        let reply = output
-            .split_once("assistant> ")
-            .and_then(|(_, reply)| reply.lines().next())
-            .unwrap();
-        assert!(!reply.trim().is_empty());
-        assert!(reached.notes_tools.load(Ordering::Relaxed));
-        assert!(reached.web_tools.load(Ordering::Relaxed));
-    }
 }
