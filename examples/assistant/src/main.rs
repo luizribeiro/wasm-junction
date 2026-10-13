@@ -17,7 +17,7 @@ use std::path::Path;
 use bindings::agent::{Agent, Message, Role};
 use console::Console;
 use fixtures::Fixtures;
-use policy::Policy;
+use policy::{Policy, PolicyMiddleware};
 use settings::Settings;
 use tokio::sync::mpsc;
 use wasm_junction::{Access, AppBuilder, Component, WasiSettings, wasi};
@@ -55,13 +55,13 @@ async fn repl(
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("policy.rego"),
         &settings.private_data_hosts,
     )
-    .map_err(std::io::Error::other)?
-    .with_consent(consent);
+    .map_err(std::io::Error::other)?;
+    let middleware = PolicyMiddleware::new(policy.clone()).with_consent(consent);
     let app = configure(
         AppBuilder::default()
             .provide(wasi::provider())
             .provide(wasi::http::provider())
-            .middleware(policy.clone()),
+            .middleware(middleware),
     )
     .build()?;
     app.configure("agent", settings.wasi())?;
@@ -110,10 +110,7 @@ async fn repl(
             content: line.trim().to_owned(),
         });
         let reply = console
-            .wait(
-                agent.with(policy.clone()).answer(&conversation),
-                &mut requests,
-            )
+            .wait(agent.answer(&conversation), &mut requests)
             .await??;
         match reply {
             Ok(reply) => {

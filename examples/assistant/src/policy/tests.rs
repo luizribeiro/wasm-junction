@@ -1,8 +1,9 @@
 use std::fs;
-use wasm_junction::{Call, Caller, Val};
+use tokio::sync::mpsc;
+use wasm_junction::{Call, CallErrorKind, Caller, Val};
 
 use super::event::value_text;
-use super::{Event, Policy, Verdict, Why};
+use super::{Event, Policy, PolicyMiddleware, Verdict, Why};
 
 #[test]
 fn builds_generic_events_with_fixed_structured_text() {
@@ -218,6 +219,46 @@ fn open_at(path: &str, flags: &[&str]) -> Event {
 fn open_at_from(caller: &str, path: &str, flags: &[&str]) -> Event {
     let call = filesystem_call(caller, path, flags);
     Event::from_call(&call, std::path::Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap()
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn middleware_owns_policy_and_handles_consent() {
+    assert!(consent_result(Some(true)).await.is_ok());
+    for answer in [Some(false), None] {
+        assert_eq!(
+            consent_result(answer).await.unwrap_err().kind(),
+            CallErrorKind::Refused
+        );
+    }
+}
+
+async fn consent_result(answer: Option<bool>) -> Result<Vec<Val>, wasm_junction::CallError> {
+    let (sender, mut requests) = mpsc::unbounded_channel();
+    let middleware = PolicyMiddleware::new(load_policy(&[]));
+    let middleware = if answer.is_some() {
+        middleware.with_consent(sender)
+    } else {
+        middleware
+    };
+    middleware
+        .enforce(
+            filesystem_call("notes-tools", "private/diary.md", &["read"]),
+            stub_next,
+        )
+        .await?;
+    let send = middleware.enforce(http_call("agent", "outside.test"), stub_next);
+    if let Some(answer) = answer {
+        let reply = async move {
+            requests.recv().await.unwrap().answer.send(answer).unwrap();
+        };
+        tokio::join!(send, reply).0
+    } else {
+        send.await
+    }
+}
+
+async fn stub_next(call: Call) -> Result<Vec<Val>, wasm_junction::CallError> {
+    Ok(call.args)
 }
 
 fn filesystem_call(caller: &str, path: &str, flags: &[&str]) -> Call {

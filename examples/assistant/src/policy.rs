@@ -3,15 +3,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use regorus::{Engine, Value};
-use tokio::sync::mpsc;
-
-use crate::console::ConsentRequest;
-
 mod decision;
 mod event;
 mod middleware;
 
 use decision::evaluate;
+pub(crate) use middleware::PolicyMiddleware;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Event {
@@ -38,7 +35,6 @@ pub(crate) struct Why {
 #[derive(Clone)]
 pub(crate) struct Policy {
     inner: Arc<Mutex<State>>,
-    consent: Option<mpsc::UnboundedSender<ConsentRequest>>,
     base: PathBuf,
 }
 
@@ -79,14 +75,8 @@ impl Policy {
                 approved: BTreeSet::new(),
                 trace: Vec::new(),
             })),
-            consent: None,
             base: path.parent().unwrap_or_else(|| Path::new(".")).to_owned(),
         })
-    }
-
-    pub(crate) fn with_consent(mut self, consent: mpsc::UnboundedSender<ConsentRequest>) -> Self {
-        self.consent = Some(consent);
-        self
     }
 
     pub(crate) fn decide(&self, event: &Event) -> Result<Verdict, String> {
