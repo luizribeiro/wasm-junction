@@ -57,6 +57,7 @@ async fn refuses_consent_then_continues_chatting() {
         &settings,
         &fixtures,
         Console::new(Cursor::new(input), output.clone()),
+        false,
         |builder| builder.middleware(observer),
     )
     .await
@@ -65,7 +66,7 @@ async fn refuses_consent_then_continues_chatting() {
     assert!(output.contains("[y/N]"));
     assert!(output.contains("assistant error>"));
     assert!(output.contains("private/diary.md"));
-    assert!(output.contains("asked → no"));
+    assert!(output.contains("  ? send "));
     assert_eq!(output.matches("assistant> ").count(), 1);
     assert!(reached.notes_tools.load(Ordering::Relaxed));
 }

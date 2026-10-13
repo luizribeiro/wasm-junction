@@ -42,7 +42,6 @@ pub(super) struct State {
     engine: Engine,
     history: Vec<Event>,
     approved: BTreeSet<String>,
-    trace: Vec<String>,
 }
 
 pub(super) struct Decision {
@@ -73,7 +72,6 @@ impl Policy {
                 engine,
                 history: Vec::new(),
                 approved: BTreeSet::new(),
-                trace: Vec::new(),
             })),
             base: path.parent().unwrap_or_else(|| Path::new(".")).to_owned(),
         })
@@ -110,11 +108,6 @@ impl Policy {
         state.approved.extend(decision.reasons);
         state.history.push(event.clone());
         Ok(())
-    }
-
-    pub(crate) fn take_trace(&self) -> Result<Vec<String>, String> {
-        let mut state = self.inner.lock().map_err(|error| error.to_string())?;
-        Ok(std::mem::take(&mut state.trace))
     }
 }
 

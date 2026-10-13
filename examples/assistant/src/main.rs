@@ -34,11 +34,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         println!("Set OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL.");
         return Ok(());
     };
+    let verbose = std::env::args().any(|argument| argument == "--verbose");
     let fixtures = Fixtures::start()?;
     repl(
         &settings,
         &fixtures,
         Console::new(BufReader::new(std::io::stdin()), std::io::stdout()),
+        verbose,
         |builder| builder,
     )
     .await
@@ -48,6 +50,7 @@ async fn repl(
     settings: &Settings,
     fixtures: &Fixtures,
     console: Console,
+    verbose: bool,
     configure: impl FnOnce(AppBuilder) -> AppBuilder,
 ) -> Result<(), Box<dyn Error>> {
     let (consent, mut requests) = mpsc::unbounded_channel();
@@ -56,7 +59,13 @@ async fn repl(
         &settings.private_data_hosts,
     )
     .map_err(std::io::Error::other)?;
-    let middleware = PolicyMiddleware::new(policy.clone()).with_consent(consent);
+    let middleware = PolicyMiddleware::new(
+        policy,
+        console.clone(),
+        settings.model_host().to_owned(),
+        verbose,
+    )
+    .with_consent(consent);
     let app = configure(
         AppBuilder::default()
             .provide(wasi::provider())
@@ -121,9 +130,6 @@ async fn repl(
                 });
             }
             Err(error) => console.line(&format!("assistant error> {error}"))?,
-        }
-        for effect in policy.take_trace().map_err(std::io::Error::other)? {
-            console.line(&format!("trace> {effect}"))?;
         }
     }
     Ok(())

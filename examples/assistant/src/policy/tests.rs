@@ -1,9 +1,11 @@
 use std::fs;
+use std::io::Cursor;
 use tokio::sync::mpsc;
 use wasm_junction::{Call, CallErrorKind, Caller, Val};
 
 use super::event::value_text;
 use super::{Event, Policy, PolicyMiddleware, Verdict, Why};
+use crate::console::Console;
 
 #[test]
 fn builds_generic_events_with_fixed_structured_text() {
@@ -234,7 +236,8 @@ async fn middleware_owns_policy_and_handles_consent() {
 
 async fn consent_result(answer: Option<bool>) -> Result<Vec<Val>, wasm_junction::CallError> {
     let (sender, mut requests) = mpsc::unbounded_channel();
-    let middleware = PolicyMiddleware::new(load_policy(&[]));
+    let console = Console::new(Cursor::new(Vec::<u8>::new()), std::io::sink());
+    let middleware = PolicyMiddleware::new(load_policy(&[]), console, "model.test".into(), false);
     let middleware = if answer.is_some() {
         middleware.with_consent(sender)
     } else {

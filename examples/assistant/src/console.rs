@@ -62,8 +62,8 @@ impl Console {
 
     async fn answer(&self, request: ConsentRequest) -> std::io::Result<()> {
         self.print(&format!(
-            "Allow {}? {} [y/N] ",
-            request.effect, request.reason
+            "  ? {} — {} — allow? [y/N] ",
+            request.effect, request.reason,
         ))?;
         let answer = self.read_line().await?;
         let allowed = matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes");

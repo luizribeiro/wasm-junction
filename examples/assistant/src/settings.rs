@@ -43,6 +43,10 @@ impl Settings {
             .env("OPENAI_API_KEY", &self.api_key)
             .env("OPENAI_MODEL", &self.model)
     }
+
+    pub(crate) fn model_host(&self) -> &str {
+        &self.authority
+    }
 }
 
 pub(crate) fn load_dotenv() -> Result<(), dotenvy::Error> {
