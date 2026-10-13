@@ -7,6 +7,8 @@ on native targets. The project is early in development and its API is not yet st
 
 ## Examples
 
+- [`examples/assistant`](examples/assistant) assembles a chat model, notes, and web access from
+  three components.
 - [`examples/greeter`](examples/greeter) calls a component that reads users from a host provider.
 - [`examples/clock`](examples/clock) intercepts WASI clock calls with middleware.
 - [`examples/translate`](examples/translate) routes calls from one component to either of two
