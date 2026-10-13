@@ -30,7 +30,7 @@ wasm-junction-core = { path = "../wasm-junction-core", version = "=0.0.0" }
 http = { version = "1", optional = true }
 http-body = { version = "1", optional = true }
 http-body-util = { version = "0.1", optional = true }
-tokio = { version = "1", features = ["macros", "sync"], optional = true }
+tokio = { version = "1", features = ["macros", "sync", "time"], optional = true }
 wasmtime = { version = "=49.0.2", default-features = false, features = ["component-model-async", "cranelift", "runtime", "std"] }
 wasmtime-wasi = { version = "=49.0.2", default-features = false, features = ["p2"], optional = true }
 wasmtime-wasi-http = { version = "=49.0.2", default-features = false, features = ["component-model-async", "default-send-request", "p2"], optional = true }

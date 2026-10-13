@@ -7,8 +7,9 @@ mod support;
 use std::path::Path;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-use support::HttpServer;
+use support::{HttpServer, TcpProbeServer};
 use wasm_junction::{
     App, Call, CallError, ChannelDirection, Component, Event, Middleware, Next, Resource, Val,
     Vals, WasiSettings,
@@ -52,6 +53,34 @@ fn request(app: &App, authority: String, path: &str) -> Vals {
         vec![Val::from(authority), Val::from(path)],
     ))
     .unwrap()
+}
+
+fn request_with_options(
+    app: &App,
+    authority: String,
+    secure: bool,
+    timeout: Duration,
+) -> Result<Vals, tokio::time::error::Elapsed> {
+    block_on(async {
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            app.call(
+                "http-p2",
+                EXPORT,
+                "request-with-options",
+                vec![
+                    Val::from(authority),
+                    Val::from("/"),
+                    Val::from(secure),
+                    Val::Option(Some(Box::new(Val::from(
+                        u64::try_from(timeout.as_nanos()).unwrap(),
+                    )))),
+                ],
+            ),
+        )
+        .await
+    })
+    .map(|result| result.unwrap())
 }
 
 struct Policy {
@@ -152,6 +181,73 @@ fn early_response_does_not_silently_truncate_request_body() {
 
     assert_eq!(result, [Val::from("sent")]);
     assert_eq!(body, vec![b'x'; BODY_SIZE]);
+}
+
+#[test]
+fn dropping_response_closes_its_connection() {
+    let server = HttpServer::stall_after_headers();
+    let app = load(
+        Policy {
+            deny: false,
+            seen: Arc::new(Mutex::new(None)),
+        },
+        true,
+    );
+
+    let result = block_on(app.call(
+        "http-p2",
+        EXPORT,
+        "drop-response",
+        vec![Val::from(server.authority()), Val::from("/drop")],
+    ))
+    .unwrap();
+
+    assert_eq!(result, [Val::from("dropped")]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !server.connection_closed() {
+        assert!(Instant::now() < deadline, "connection remained open");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(server.finish().starts_with("POST /drop HTTP/1.1\r\n"));
+}
+
+#[test]
+fn https_send_reaches_the_wire_as_tls() {
+    // This is scheme-preservation coverage, not a regression test for the stall.
+    let server = TcpProbeServer::close_after_prefix();
+    let app = load(
+        Policy {
+            deny: false,
+            seen: Arc::new(Mutex::new(None)),
+        },
+        true,
+    );
+
+    let result =
+        request_with_options(&app, server.authority(), true, Duration::from_millis(500)).unwrap();
+
+    assert!(matches!(&result[..], [Val::String(message)] if message.starts_with("error: ")));
+    assert_eq!(&server.finish()[..3], &[0x16, 0x03, 0x01]);
+}
+
+#[test]
+fn https_handshake_obeys_request_timeouts() {
+    let server = TcpProbeServer::hold_after_prefix();
+    let app = load(
+        Policy {
+            deny: false,
+            seen: Arc::new(Mutex::new(None)),
+        },
+        true,
+    );
+    let started = Instant::now();
+
+    let result = request_with_options(&app, server.authority(), true, Duration::from_millis(500))
+        .expect("HTTPS request ignored its timeout");
+
+    assert!(started.elapsed() < Duration::from_secs(4));
+    assert!(matches!(&result[..], [Val::String(message)] if message.starts_with("error: ")));
+    assert_eq!(&server.finish()[..2], &[0x16, 0x03]);
 }
 
 #[test]

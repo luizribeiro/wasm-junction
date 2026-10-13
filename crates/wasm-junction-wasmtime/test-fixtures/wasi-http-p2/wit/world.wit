@@ -2,6 +2,13 @@ package test:wasi-http-p2@0.1.0;
 
 interface probe {
   request: func(authority: string, path: string) -> string;
+  request-with-options: func(
+    authority: string,
+    path: string,
+    secure: bool,
+    timeout-nanoseconds: option<u64>,
+  ) -> string;
+  drop-response: func(authority: string, path: string) -> string;
   large-request: func(authority: string, path: string) -> string;
 }
 

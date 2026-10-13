@@ -21,6 +21,19 @@ pub struct HttpServer {
     thread: JoinHandle<()>,
 }
 
+#[allow(
+    dead_code,
+    reason = "each integration-test binary compiles this shared support module"
+)]
+pub struct TcpProbeServer {
+    address: SocketAddr,
+    bytes: Receiver<Vec<u8>>,
+    prefix_received: Arc<AtomicBool>,
+    connection_closed: Arc<AtomicBool>,
+    stop: Option<Sender<()>>,
+    thread: JoinHandle<()>,
+}
+
 fn request_complete(request: &[u8]) -> bool {
     let Some(end) = find_subslice(request, b"\r\n\r\n") else {
         return false;
@@ -187,5 +200,96 @@ impl HttpServer {
         }
         self.thread.join().unwrap();
         String::from_utf8_lossy(&request).into_owned()
+    }
+}
+
+#[allow(
+    dead_code,
+    reason = "each integration-test binary compiles this shared support module"
+)]
+impl TcpProbeServer {
+    pub fn close_after_prefix() -> Self {
+        Self::start(false)
+    }
+
+    pub fn hold_after_prefix() -> Self {
+        Self::start(true)
+    }
+
+    fn start(hold: bool) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (bytes_sender, bytes) = mpsc::channel();
+        let prefix_received = Arc::new(AtomicBool::new(false));
+        let thread_prefix_received = prefix_received.clone();
+        let connection_closed = Arc::new(AtomicBool::new(false));
+        let thread_connection_closed = connection_closed.clone();
+        let (stop, stopped) = mpsc::channel();
+        let thread = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut prefix = vec![0; 5];
+            stream.read_exact(&mut prefix).unwrap();
+            bytes_sender.send(prefix).unwrap();
+            thread_prefix_received.store(true, Ordering::Release);
+            if hold {
+                stream
+                    .set_read_timeout(Some(Duration::from_millis(50)))
+                    .unwrap();
+                let mut buffer = [0; 1024];
+                loop {
+                    if stopped.try_recv().is_ok() {
+                        break;
+                    }
+                    match stream.read(&mut buffer) {
+                        Ok(0) => {
+                            thread_connection_closed.store(true, Ordering::Release);
+                            break;
+                        }
+                        Ok(_) => {}
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                            ) => {}
+                        Err(_) => {
+                            thread_connection_closed.store(true, Ordering::Release);
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        Self {
+            address,
+            bytes,
+            prefix_received,
+            connection_closed,
+            stop: hold.then_some(stop),
+            thread,
+        }
+    }
+
+    pub fn authority(&self) -> String {
+        self.address.to_string()
+    }
+
+    pub fn has_received_prefix(&self) -> bool {
+        self.prefix_received.load(Ordering::Acquire)
+    }
+
+    pub fn connection_closed(&self) -> bool {
+        self.connection_closed.load(Ordering::Acquire)
+    }
+
+    pub fn finish(mut self) -> Vec<u8> {
+        let bytes = self.bytes.recv_timeout(Duration::from_secs(5)).unwrap();
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        self.thread.join().unwrap();
+        bytes
     }
 }

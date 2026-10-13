@@ -7,9 +7,24 @@ struct Component;
 
 impl exports::test::wasi_http_p2::probe::Guest for Component {
     fn request(authority: String, path: String) -> String {
-        match send(authority, path) {
-            Ok(response) => response,
-            Err(wasi::http::types::ErrorCode::HttpRequestDenied) => "denied".into(),
+        request(authority, path, false, None)
+    }
+
+    fn request_with_options(
+        authority: String,
+        path: String,
+        secure: bool,
+        timeout_nanoseconds: Option<u64>,
+    ) -> String {
+        request(authority, path, secure, timeout_nanoseconds)
+    }
+
+    fn drop_response(authority: String, path: String) -> String {
+        match open(authority, path, false, None) {
+            Ok(response) => {
+                drop(response);
+                "dropped".into()
+            }
             Err(error) => format!("error: {error:?}"),
         }
     }
@@ -22,43 +37,32 @@ impl exports::test::wasi_http_p2::probe::Guest for Component {
     }
 }
 
+fn request(
+    authority: String,
+    path: String,
+    secure: bool,
+    timeout_nanoseconds: Option<u64>,
+) -> String {
+    match send(authority, path, secure, timeout_nanoseconds) {
+        Ok(response) => response,
+        Err(wasi::http::types::ErrorCode::HttpRequestDenied) => "denied".into(),
+        Err(error) => format!("error: {error:?}"),
+    }
+}
+
 fn error(message: &str) -> wasi::http::types::ErrorCode {
     wasi::http::types::ErrorCode::InternalError(Some(message.into()))
 }
 
-fn send(authority: String, path: String) -> Result<String, wasi::http::types::ErrorCode> {
-    use wasi::http::outgoing_handler;
-    use wasi::http::types::{Fields, IncomingBody, Method, OutgoingBody, OutgoingRequest, Scheme};
+fn send(
+    authority: String,
+    path: String,
+    secure: bool,
+    timeout_nanoseconds: Option<u64>,
+) -> Result<String, wasi::http::types::ErrorCode> {
+    use wasi::http::types::IncomingBody;
 
-    let headers = Fields::from_list(&[("x-client".into(), b"visible".to_vec())])
-        .map_err(|_| error("headers"))?;
-    let request = OutgoingRequest::new(headers);
-    request
-        .set_method(&Method::Post)
-        .map_err(|()| error("method"))?;
-    request
-        .set_scheme(Some(&Scheme::Http))
-        .map_err(|()| error("scheme"))?;
-    request
-        .set_authority(Some(&authority))
-        .map_err(|()| error("authority"))?;
-    request
-        .set_path_with_query(Some(&path))
-        .map_err(|()| error("path"))?;
-    let body = request.body().map_err(|()| error("body"))?;
-    let future = outgoing_handler::handle(request, None)?;
-    let stream = body.write().map_err(|()| error("stream"))?;
-    stream
-        .blocking_write_and_flush(b"guest-body")
-        .map_err(|_| error("write"))?;
-    drop(stream);
-    OutgoingBody::finish(body, None)?;
-
-    future.subscribe().block();
-    let response = future
-        .get()
-        .ok_or_else(|| error("not ready"))?
-        .map_err(|()| error("consumed"))??;
+    let response = open(authority, path, secure, timeout_nanoseconds)?;
     let status = response.status();
     drop(response.headers());
     let body = response.consume().map_err(|()| error("response body"))?;
@@ -77,6 +81,56 @@ fn send(authority: String, path: String) -> Result<String, wasi::http::types::Er
     trailers.subscribe().block();
     let _ = trailers.get();
     Ok(format!("{status}:{}", String::from_utf8_lossy(&bytes)))
+}
+
+fn open(
+    authority: String,
+    path: String,
+    secure: bool,
+    timeout_nanoseconds: Option<u64>,
+) -> Result<wasi::http::types::IncomingResponse, wasi::http::types::ErrorCode> {
+    use wasi::http::outgoing_handler;
+    use wasi::http::types::{
+        Fields, Method, OutgoingBody, OutgoingRequest, RequestOptions, Scheme,
+    };
+
+    let headers = Fields::from_list(&[("x-client".into(), b"visible".to_vec())])
+        .map_err(|_| error("headers"))?;
+    let request = OutgoingRequest::new(headers);
+    request
+        .set_method(&Method::Post)
+        .map_err(|()| error("method"))?;
+    let scheme = if secure { Scheme::Https } else { Scheme::Http };
+    request
+        .set_scheme(Some(&scheme))
+        .map_err(|()| error("scheme"))?;
+    request
+        .set_authority(Some(&authority))
+        .map_err(|()| error("authority"))?;
+    request
+        .set_path_with_query(Some(&path))
+        .map_err(|()| error("path"))?;
+    let body = request.body().map_err(|()| error("body"))?;
+    let options = timeout_nanoseconds.map(|timeout| {
+        let options = RequestOptions::new();
+        options.set_connect_timeout(Some(timeout)).unwrap();
+        options.set_first_byte_timeout(Some(timeout)).unwrap();
+        options.set_between_bytes_timeout(Some(timeout)).unwrap();
+        options
+    });
+    let future = outgoing_handler::handle(request, options)?;
+    let stream = body.write().map_err(|()| error("stream"))?;
+    stream
+        .blocking_write_and_flush(b"guest-body")
+        .map_err(|_| error("write"))?;
+    drop(stream);
+    OutgoingBody::finish(body, None)?;
+
+    future.subscribe().block();
+    future
+        .get()
+        .ok_or_else(|| error("not ready"))?
+        .map_err(|()| error("consumed"))?
 }
 
 fn send_large(

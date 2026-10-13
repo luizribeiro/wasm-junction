@@ -2,6 +2,12 @@ package test:wasi-http@0.1.0;
 
 interface probe {
   request: async func(authority: string, path: string) -> string;
+  request-with-options: async func(
+    authority: string,
+    path: string,
+    secure: bool,
+    timeout-nanoseconds: option<u64>,
+  ) -> string;
   empty-request: async func(
     authority: string,
     path: string,

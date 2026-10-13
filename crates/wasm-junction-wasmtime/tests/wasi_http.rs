@@ -8,9 +8,9 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use support::HttpServer;
+use support::{HttpServer, TcpProbeServer};
 use wasm_junction::{
     App, Call, CallError, Component, LoadError, Middleware, Next, Resource, Val, Vals, WasiSettings,
 };
@@ -53,6 +53,34 @@ fn load(middleware: impl Middleware + 'static, network: bool) -> App {
         .unwrap();
     block_on(app.load(Component::from_bytes(COMPONENT).unwrap().named("http"))).unwrap();
     app
+}
+
+fn request_with_options(
+    app: &App,
+    authority: String,
+    secure: bool,
+    timeout: Duration,
+) -> Result<Vals, tokio::time::error::Elapsed> {
+    block_on(async {
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            app.call(
+                "http",
+                EXPORT,
+                "request-with-options",
+                vec![
+                    Val::from(authority),
+                    Val::from("/"),
+                    Val::from(secure),
+                    Val::Option(Some(Box::new(Val::from(
+                        u64::try_from(timeout.as_nanos()).unwrap(),
+                    )))),
+                ],
+            ),
+        )
+        .await
+    })
+    .map(|result| result.unwrap())
 }
 
 fn empty_request(
@@ -263,6 +291,74 @@ fn cancelling_call_closes_its_connection() {
     });
 
     assert!(server.finish().starts_with("GET /hold HTTP/1.1\r\n"));
+}
+
+#[test]
+fn cancelling_call_during_tls_closes_its_connection() {
+    let server = TcpProbeServer::hold_after_prefix();
+    let app = load(SendPolicy { deny: false }, true);
+    let runtime = runtime();
+
+    runtime.block_on(async {
+        let mut call = Box::pin(app.call(
+            "http",
+            EXPORT,
+            "request-with-options",
+            vec![
+                Val::from(server.authority()),
+                Val::from("/"),
+                Val::from(true),
+                Val::Option(Some(Box::new(Val::from(60_000_000_000_u64)))),
+            ],
+        ));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !server.has_received_prefix() {
+                tokio::select! {
+                    result = &mut call => panic!("call completed during TLS setup: {result:?}"),
+                    () = tokio::time::sleep(Duration::from_millis(10)) => {}
+                }
+            }
+        })
+        .await
+        .expect("TLS handshake did not reach the peer");
+        drop(call);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !server.connection_closed() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("TLS connection remained open after cancellation");
+    });
+
+    assert_eq!(&server.finish()[..2], &[0x16, 0x03]);
+}
+
+#[test]
+fn https_send_reaches_the_wire_as_tls() {
+    // This is scheme-preservation coverage, not a regression test for the stall.
+    let server = TcpProbeServer::close_after_prefix();
+    let app = load(SendPolicy { deny: false }, true);
+
+    let result =
+        request_with_options(&app, server.authority(), true, Duration::from_millis(500)).unwrap();
+
+    assert!(matches!(&result[..], [Val::String(message)] if message.starts_with("error: ")));
+    assert_eq!(&server.finish()[..3], &[0x16, 0x03, 0x01]);
+}
+
+#[test]
+fn https_handshake_obeys_request_timeouts() {
+    let server = TcpProbeServer::hold_after_prefix();
+    let app = load(SendPolicy { deny: false }, true);
+    let started = Instant::now();
+
+    let result = request_with_options(&app, server.authority(), true, Duration::from_millis(500))
+        .expect("HTTPS request ignored its timeout");
+
+    assert!(started.elapsed() < Duration::from_secs(4));
+    assert!(matches!(&result[..], [Val::String(message)] if message.starts_with("error: ")));
+    assert_eq!(&server.finish()[..2], &[0x16, 0x03]);
 }
 
 fn variant(case: &str) -> Val {

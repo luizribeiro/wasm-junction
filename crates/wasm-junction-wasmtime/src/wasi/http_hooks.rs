@@ -2,12 +2,16 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
+use http::uri::Scheme;
 use http_body::Body;
 use http_body_util::BodyExt;
 use tokio::sync::oneshot;
 use wasmtime_wasi::runtime::{AbortOnDropJoinHandle, spawn};
 use wasmtime_wasi_http::{Error, RequestOptions, WasiBody, WasiHttpHooks, default_send_request};
+
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(600);
 
 pub(crate) struct HttpHooks;
 
@@ -28,9 +32,17 @@ impl WasiHttpHooks for HttpHooks {
                 >,
             > + Send,
     > {
+        let deadline = https_response_deadline(&request, options);
         Box::new(async move {
             let (request, request_result) = RequestBody::wrap(request);
-            let (response, io) = default_send_request(request, options).await?;
+            let send = default_send_request(request, options);
+            let (response, io) = if let Some(deadline) = deadline {
+                tokio::time::timeout(deadline, send)
+                    .await
+                    .map_err(|_| Error::ConnectionTimeout)??
+            } else {
+                send.await?
+            };
             let (connection, connection_result) = ConnectionTask::spawn(io);
             let response = response.map(|body| {
                 ConnectionBody::new(body.boxed_unsync(), connection.clone(), connection_result)
@@ -184,9 +196,26 @@ impl Body for ConnectionBody {
     }
 }
 
+fn https_response_deadline<B>(
+    request: &http::Request<B>,
+    options: Option<RequestOptions>,
+) -> Option<Duration> {
+    (request.uri().scheme() == Some(&Scheme::HTTPS)).then(|| {
+        // The upstream sender applies these phases separately but leaves the TLS handshake
+        // unbounded, so their sum is the least restrictive deadline that still covers it.
+        let connect = options
+            .and_then(|options| options.connect_timeout)
+            .unwrap_or(DEFAULT_TIMEOUT);
+        let first_byte = options
+            .and_then(|options| options.first_byte_timeout)
+            .unwrap_or(DEFAULT_TIMEOUT);
+        connect.saturating_add(first_byte)
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ConnectionBody, ConnectionTask};
+    use super::{ConnectionBody, ConnectionTask, DEFAULT_TIMEOUT, https_response_deadline};
     use http_body_util::{BodyExt, Empty};
     use std::convert::Infallible;
     use std::io::Read;
@@ -194,7 +223,7 @@ mod tests {
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
-    use wasmtime_wasi_http::{Error, WasiBody};
+    use wasmtime_wasi_http::{Error, RequestOptions, WasiBody};
 
     fn empty_body() -> WasiBody {
         Empty::new()
@@ -273,5 +302,41 @@ mod tests {
         let error = runtime.block_on(async { body.frame().await.unwrap().unwrap_err() });
 
         assert!(matches!(error, Error::ConnectionTimeout));
+    }
+
+    #[test]
+    fn response_deadline_uses_https_phase_budget() {
+        let configured = RequestOptions {
+            connect_timeout: Some(Duration::from_secs(2)),
+            first_byte_timeout: Some(Duration::from_secs(3)),
+            between_bytes_timeout: Some(Duration::from_secs(7)),
+        };
+        let connect_only = RequestOptions {
+            connect_timeout: Some(Duration::from_secs(2)),
+            ..RequestOptions::default()
+        };
+        let cases = [
+            ("http://example.test/", None, None),
+            (
+                "https://example.test/",
+                None,
+                Some(DEFAULT_TIMEOUT.saturating_add(DEFAULT_TIMEOUT)),
+            ),
+            (
+                "https://example.test/",
+                Some(configured),
+                Some(Duration::from_secs(5)),
+            ),
+            (
+                "https://example.test/",
+                Some(connect_only),
+                Some(Duration::from_secs(2).saturating_add(DEFAULT_TIMEOUT)),
+            ),
+        ];
+
+        for (uri, options, expected) in cases {
+            let request = http::Request::builder().uri(uri).body(()).unwrap();
+            assert_eq!(https_response_deadline(&request, options), expected);
+        }
     }
 }

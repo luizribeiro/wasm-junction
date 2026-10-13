@@ -11,11 +11,16 @@ struct Component;
 
 impl exports::test::wasi_http::probe::Guest for Component {
     async fn request(authority: String, path: String) -> String {
-        match send(authority, path).await {
-            Ok(response) => response,
-            Err(ErrorCode::HttpRequestDenied) => "denied".into(),
-            Err(error) => format!("error: {error:?}"),
-        }
+        request(authority, path, false, None).await
+    }
+
+    async fn request_with_options(
+        authority: String,
+        path: String,
+        secure: bool,
+        timeout_nanoseconds: Option<u64>,
+    ) -> String {
+        request(authority, path, secure, timeout_nanoseconds).await
     }
 
     async fn empty_request(
@@ -73,6 +78,19 @@ impl exports::test::wasi_http::probe::Guest for Component {
             Ok(()) => "ok".into(),
             Err(error) => format!("error: {error:?}"),
         }
+    }
+}
+
+async fn request(
+    authority: String,
+    path: String,
+    secure: bool,
+    timeout_nanoseconds: Option<u64>,
+) -> String {
+    match send(authority, path, secure, timeout_nanoseconds).await {
+        Ok(response) => response,
+        Err(ErrorCode::HttpRequestDenied) => "denied".into(),
+        Err(error) => format!("error: {error:?}"),
     }
 }
 
@@ -172,17 +190,36 @@ fn option(_: wasip3::http::types::RequestOptionsError) -> ErrorCode {
     ErrorCode::InternalError(Some("invalid option".into()))
 }
 
-async fn send(authority: String, path: String) -> Result<String, ErrorCode> {
+async fn send(
+    authority: String,
+    path: String,
+    secure: bool,
+    timeout_nanoseconds: Option<u64>,
+) -> Result<String, ErrorCode> {
     let headers = Fields::from_list(&[("x-client".into(), b"visible".to_vec())])
         .map_err(|_| ErrorCode::InternalError(Some("invalid headers".into())))?;
     let (mut body_writer, body_reader) = wit_stream::new();
     let (trailers_writer, trailers_reader) = wit_future::new(|| Ok(None));
-    let (request, completion) = Request::new(headers, Some(body_reader), trailers_reader, None);
+    let options = timeout_nanoseconds
+        .map(|timeout| {
+            let options = wasip3::http::types::RequestOptions::new();
+            options.set_connect_timeout(Some(timeout)).map_err(option)?;
+            options
+                .set_first_byte_timeout(Some(timeout))
+                .map_err(option)?;
+            options
+                .set_between_bytes_timeout(Some(timeout))
+                .map_err(option)?;
+            Ok(options)
+        })
+        .transpose()?;
+    let (request, completion) = Request::new(headers, Some(body_reader), trailers_reader, options);
     request
         .set_method(&Method::Post)
         .map_err(|()| ErrorCode::HttpRequestMethodInvalid)?;
+    let scheme = if secure { Scheme::Https } else { Scheme::Http };
     request
-        .set_scheme(Some(&Scheme::Http))
+        .set_scheme(Some(&scheme))
         .map_err(|()| ErrorCode::HttpRequestUriInvalid)?;
     request
         .set_authority(Some(&authority))
