@@ -9,3 +9,5 @@ crate-type = ["cdylib"]
 
 [dependencies]
 serde_json.workspace = true
+wasip3.workspace = true
+wit-bindgen.workspace = true
