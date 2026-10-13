@@ -30,6 +30,7 @@ struct Facts(Arc<Mutex<FactState>>);
 #[derive(Default)]
 struct FactState {
     calls: Vec<CallFact>,
+    refusal: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -55,8 +56,24 @@ impl Middleware for Policy {
                 context: policy_context(&call),
             });
         }
+        if call.interface.as_ref() == HTTP
+            && call.function.as_ref() == "handle"
+            && facts.as_ref().is_some_and(private_note_was_read)
+        {
+            let reason = "tainted by `/notes/private/diary.md`".to_owned();
+            facts.unwrap().0.lock().unwrap().refusal = Some(reason.clone());
+            return Err(CallError::refused(reason));
+        }
         next.run(call).await
     }
+}
+
+fn private_note_was_read(facts: &Facts) -> bool {
+    facts.0.lock().unwrap().calls.iter().any(|fact| {
+        fact.interface == FILESYSTEM
+            && fact.function == "[method]descriptor.open-at"
+            && fact.context.as_deref() == Some("/notes/private/diary.md")
+    })
 }
 
 fn policy_context(call: &Call) -> Option<String> {
@@ -185,4 +202,28 @@ fn facts_span_routed_component_and_wasi_calls() {
         .position(|fact| fact.interface == HTTP && fact.context.as_deref() == Some(&authority))
         .unwrap();
     assert!(file < http);
+}
+
+#[test]
+fn facts_from_a_routed_read_refuse_a_later_http_call() {
+    let notes = NotesDirectory::new();
+    let (_app, assistant) = loaded(&notes, Policy);
+    let facts = Facts::default();
+
+    let result = block_on(
+        assistant
+            .with(facts.clone())
+            .run("/notes/private/diary.md", "private.example"),
+    )
+    .unwrap();
+    assert_eq!(result, "private note|denied");
+    assert_eq!(
+        facts.0.lock().unwrap().refusal.as_deref(),
+        Some("tainted by `/notes/private/diary.md`")
+    );
+
+    let server = HttpServer::start(b"ignored");
+    let result = block_on(assistant.run("/notes/private/diary.md", &server.authority())).unwrap();
+    assert_eq!(result, "private note|sent");
+    assert!(server.finish().starts_with("GET /research HTTP/1.1\r\n"));
 }
