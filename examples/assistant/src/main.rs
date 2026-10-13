@@ -6,6 +6,8 @@
 mod bindings;
 #[cfg(test)]
 mod path;
+#[cfg(test)]
+mod policy;
 pub mod server;
 
 use std::error::Error;
