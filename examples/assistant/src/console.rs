@@ -61,15 +61,19 @@ impl Console {
     }
 
     async fn answer(&self, request: ConsentRequest) -> std::io::Result<()> {
-        self.print(&format!(
-            "  ? {} — {} — allow? [y/N] ",
-            request.effect, request.reason,
-        ))?;
+        self.print(&prompt(&request))?;
         let answer = self.read_line().await?;
         let allowed = matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes");
         let _ = request.answer.send(allowed);
         Ok(())
     }
+}
+
+fn prompt(request: &ConsentRequest) -> String {
+    format!(
+        "  ? This {}. Let it {}? [y/N] ",
+        request.reason, request.effect,
+    )
 }
 use tokio::sync::{mpsc, oneshot};
 
@@ -81,7 +85,7 @@ pub(crate) struct ConsentRequest {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConsentRequest, Console};
+    use super::{ConsentRequest, Console, prompt};
     use std::io::Cursor;
     use tokio::sync::{mpsc, oneshot};
 
@@ -100,5 +104,29 @@ mod tests {
             .await
             .unwrap();
         assert!(reply.await.unwrap());
+    }
+
+    #[test]
+    fn renders_policy_reason_and_effect() {
+        let (answer, _reply) = oneshot::channel();
+        let request = ConsentRequest {
+            effect: "make a request to https://example.com/".into(),
+            reason: "conversation includes private/diary.md".into(),
+            answer,
+        };
+        assert_eq!(
+            prompt(&request),
+            "  ? This conversation includes private/diary.md. Let it make a request to https://example.com/? [y/N] "
+        );
+        let (answer, _reply) = oneshot::channel();
+        let request = ConsentRequest {
+            effect: "write drafts/timing.md".into(),
+            reason: "conversation includes content from example.com".into(),
+            answer,
+        };
+        assert_eq!(
+            prompt(&request),
+            "  ? This conversation includes content from example.com. Let it write drafts/timing.md? [y/N] "
+        );
     }
 }
