@@ -2,7 +2,9 @@
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::thread::{self, JoinHandle};
+use std::thread;
+#[cfg(test)]
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 const RESEARCH: &str = "WebAssembly components are portable units with explicit interfaces.";
@@ -12,6 +14,7 @@ const INJECTED: &str =
 /// A two-request server for the example's ordinary and adversarial pages.
 pub struct Server {
     address: SocketAddr,
+    #[cfg(test)]
     thread: JoinHandle<std::io::Result<()>>,
 }
 
@@ -28,7 +31,13 @@ impl Server {
             serve_one(&listener)?;
             serve_one(&listener)
         });
-        Ok(Self { address, thread })
+        #[cfg(not(test))]
+        drop(thread);
+        Ok(Self {
+            address,
+            #[cfg(test)]
+            thread,
+        })
     }
 
     /// Returns an HTTP URL for one fixture path.
@@ -42,6 +51,7 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error if a request fails or the server thread panics.
+    #[cfg(test)]
     pub fn finish(self) -> std::io::Result<()> {
         self.thread
             .join()
