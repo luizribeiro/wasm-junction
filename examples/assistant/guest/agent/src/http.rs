@@ -2,9 +2,19 @@ use wasip3::http::client;
 use wasip3::http::types::{ErrorCode, Fields, Method, Request, Response, Scheme};
 use wasip3::{wit_future, wit_stream};
 
-pub(crate) async fn post(base_url: &str, api_key: &str, body: Vec<u8>) -> Result<Vec<u8>, String> {
-    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-    let location = Location::parse(&url)?;
+pub(crate) async fn post(
+    scheme: &str,
+    authority: &str,
+    path_prefix: &str,
+    api_key: &str,
+    body: Vec<u8>,
+) -> Result<Vec<u8>, String> {
+    let scheme = match scheme {
+        "http" => Scheme::Http,
+        "https" => Scheme::Https,
+        _ => return Err("model URL must use HTTP or HTTPS".into()),
+    };
+    let path = format!("{path_prefix}/chat/completions");
     let headers = Fields::new();
     headers
         .append("content-type", b"application/json")
@@ -16,15 +26,9 @@ pub(crate) async fn post(base_url: &str, api_key: &str, body: Vec<u8>) -> Result
     let (trailers_writer, trailers_reader) = wit_future::new(|| Ok(None));
     let (request, completion) = Request::new(headers, Some(body_reader), trailers_reader, None);
     request.set_method(&Method::Post).map_err(invalid)?;
-    request
-        .set_scheme(Some(&location.scheme))
-        .map_err(invalid)?;
-    request
-        .set_authority(Some(&location.authority))
-        .map_err(invalid)?;
-    request
-        .set_path_with_query(Some(&location.path))
-        .map_err(invalid)?;
+    request.set_scheme(Some(&scheme)).map_err(invalid)?;
+    request.set_authority(Some(authority)).map_err(invalid)?;
+    request.set_path_with_query(Some(&path)).map_err(invalid)?;
     wit_bindgen::spawn_local(async move {
         let _ = body_writer.write_all(body).await;
         drop((body_writer, trailers_writer));
@@ -54,40 +58,6 @@ async fn receive(response: Response) -> Result<Vec<u8>, String> {
         ));
     }
     Ok(bytes)
-}
-
-struct Location {
-    scheme: Scheme,
-    authority: String,
-    path: String,
-}
-
-impl Location {
-    fn parse(url: &str) -> Result<Self, String> {
-        let (scheme, rest) = url
-            .split_once("://")
-            .ok_or_else(|| "model URL has no scheme".to_owned())?;
-        let scheme = match scheme {
-            "http" => Scheme::Http,
-            "https" => Scheme::Https,
-            _ => return Err("model URL must use HTTP or HTTPS".into()),
-        };
-        let separator = rest.find(['/', '?']);
-        let (authority, path) = separator.map_or((rest, "/"), |index| rest.split_at(index));
-        if authority.is_empty() {
-            return Err("model URL has no authority".into());
-        }
-        let path = if path.starts_with('?') {
-            format!("/{path}")
-        } else {
-            path.to_owned()
-        };
-        Ok(Self {
-            scheme,
-            authority: authority.into(),
-            path,
-        })
-    }
 }
 
 fn invalid((): ()) -> String {

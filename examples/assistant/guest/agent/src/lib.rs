@@ -22,7 +22,14 @@ impl exports::example::assistant::agent::Guest for Component {
         messages.extend(conversation.into_iter().map(message));
         for _ in 0..MAX_ROUNDS {
             let request = chat::request(&settings.model, &messages)?;
-            let response = http::post(&settings.base_url, &settings.api_key, request).await?;
+            let response = http::post(
+                &settings.scheme,
+                &settings.authority,
+                &settings.path_prefix,
+                &settings.api_key,
+                request,
+            )
+            .await?;
             match chat::reply(&response)? {
                 Reply::Final(answer) => return Ok(answer),
                 Reply::Tools { message, calls } => {
@@ -43,7 +50,9 @@ impl exports::example::assistant::agent::Guest for Component {
 }
 
 struct Settings {
-    base_url: String,
+    scheme: String,
+    authority: String,
+    path_prefix: String,
     api_key: String,
     model: String,
 }
@@ -59,7 +68,9 @@ impl Settings {
                 .ok_or_else(|| format!("missing component setting {name}"))
         };
         Ok(Self {
-            base_url: get("OPENAI_BASE_URL")?,
+            scheme: get("OPENAI_SCHEME")?,
+            authority: get("OPENAI_AUTHORITY")?,
+            path_prefix: get("OPENAI_PATH_PREFIX")?,
             api_key: get("OPENAI_API_KEY")?,
             model: get("OPENAI_MODEL")?,
         })
