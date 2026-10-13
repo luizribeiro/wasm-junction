@@ -14,17 +14,37 @@ decision := {"verdict": "deny", "reasons": deny, "effect": effect(input.event)} 
 else := {"verdict": "ask", "reasons": ask, "effect": effect(input.event)} if count(ask) > 0
 else := {"verdict": "allow", "reasons": set(), "effect": effect(input.event)} if true
 
-private_reads contains path if {
+turn_private contains path if {
 	some earlier in input.history
 	path := reading(earlier)
 	startswith(path, private_prefix)
 }
 
-web_fetches contains host if {
+turn_private contains path if {
+	some earlier in input.history
+	path := reading(earlier)
+	startswith(path, drafts_prefix)
+}
+
+turn_untrusted contains path if {
+	some earlier in input.history
+	path := reading(earlier)
+	startswith(path, drafts_prefix)
+}
+
+turn_untrusted contains host if {
 	some earlier in input.history
 	earlier.caller == "web-tools"
 	host := sending(earlier)
 }
+
+turn_untrusted contains "weather-tools" if {
+	some earlier in input.history
+	earlier.caller == "weather-tools"
+	sending(earlier)
+}
+
+turn_label := {"private": turn_private, "untrusted": turn_untrusted}
 
 open_at(event) := {"path": event.arguments[2], "flags": event.arguments[4]} if {
 	event.interface == "wasi:filesystem/types@0.3.0"

@@ -39,14 +39,14 @@ deny contains sprintf("%s may not send to %s", [caller, host]) if {
 ask contains reason if {
 	host := sending(input.event)
 	not host in trusted_hosts
-	some path in private_reads
-	reason := sprintf("send to %s after reading %s", [host, path])
+	some path in input.label.private
+	reason := sprintf("send to %s with %s in the conversation", [host, path])
 	not reason in input.approved
 }
 
 ask contains reason if {
 	path := writing(input.event)
-	some host in web_fetches
-	reason := sprintf("write %s after fetching from %s", [path, host])
+	some source in input.label.untrusted
+	reason := sprintf("write %s with content from %s in the conversation", [path, source])
 	not reason in input.approved
 }

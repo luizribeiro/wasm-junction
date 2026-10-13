@@ -142,7 +142,7 @@ fn confines_files_and_hosts_to_their_declared_tools() {
 fn private_send_exceptions_use_history_trust_and_approval() {
     let private = open_at("private/diary.md", &["read"]);
     let outside = http_send("agent", "outside.example");
-    let reason = "send to outside.example after reading private/diary.md";
+    let reason = "send to outside.example with private/diary.md in the conversation";
 
     let policy = load_policy(&[]);
     assert!(matches!(policy.decide(&private), Ok(Verdict::Allow(_))));
@@ -187,7 +187,9 @@ fn writes_ask_only_after_web_fetches() {
         fetched.decide(&write).unwrap(),
         Verdict::Ask(Why {
             effect: "write drafts/summary.md".into(),
-            reasons: vec!["write drafts/summary.md after fetching from news.example".into()],
+            reasons: vec![
+                "write drafts/summary.md with content from news.example in the conversation".into(),
+            ],
         })
     );
 
@@ -200,6 +202,48 @@ fn writes_ask_only_after_web_fetches() {
         model.decide(&write).unwrap(),
         Verdict::Allow("write drafts/summary.md".into())
     );
+}
+
+#[test]
+fn dropped_turn_drops_its_private_label() {
+    let policy = load_policy(&[]);
+    policy.begin_turn().unwrap();
+    assert!(matches!(
+        policy.decide(&open_at("private/diary.md", &["read"])),
+        Ok(Verdict::Allow(_))
+    ));
+    assert!(matches!(
+        policy.decide(&http_send("agent", "model.example")),
+        Ok(Verdict::Ask(_))
+    ));
+    policy.end_turn(false).unwrap();
+
+    policy.begin_turn().unwrap();
+    assert_eq!(
+        policy
+            .decide(&http_send("web-tools", "example.com"))
+            .unwrap(),
+        Verdict::Allow("send example.com".into())
+    );
+}
+
+#[test]
+fn kept_turn_carries_its_private_label() {
+    let policy = load_policy(&[]);
+    policy.begin_turn().unwrap();
+    policy
+        .decide(&open_at("private/diary.md", &["read"]))
+        .unwrap();
+    policy
+        .approve(&http_send("agent", "model.example"))
+        .unwrap();
+    policy.end_turn(true).unwrap();
+
+    policy.begin_turn().unwrap();
+    assert!(matches!(
+        policy.decide(&http_send("web-tools", "example.com")),
+        Ok(Verdict::Ask(_))
+    ));
 }
 
 fn load_policy(trusted_hosts: &[&str]) -> Policy {

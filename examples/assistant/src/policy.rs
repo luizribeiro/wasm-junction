@@ -40,8 +40,15 @@ pub(crate) struct Policy {
 
 pub(super) struct State {
     engine: Engine,
-    history: Vec<Event>,
+    turn: Vec<Event>,
+    conversation: Vec<Label>,
     approved: BTreeSet<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct Label {
+    private: BTreeSet<String>,
+    untrusted: BTreeSet<String>,
 }
 
 pub(super) struct Decision {
@@ -70,7 +77,8 @@ impl Policy {
         Ok(Self {
             inner: Arc::new(Mutex::new(State {
                 engine,
-                history: Vec::new(),
+                turn: Vec::new(),
+                conversation: Vec::new(),
                 approved: BTreeSet::new(),
             })),
             base: path.parent().unwrap_or_else(|| Path::new(".")).to_owned(),
@@ -90,7 +98,7 @@ impl Policy {
         };
         match decision.verdict.as_str() {
             "allow" => {
-                state.history.push(event.clone());
+                state.turn.push(event.clone());
                 Ok(Verdict::Allow(why.effect))
             }
             "ask" => Ok(Verdict::Ask(why)),
@@ -106,8 +114,35 @@ impl Policy {
         let mut state = self.inner.lock().map_err(|error| error.to_string())?;
         let decision = evaluate(&mut state, event)?;
         state.approved.extend(decision.reasons);
-        state.history.push(event.clone());
+        state.turn.push(event.clone());
         Ok(())
+    }
+
+    pub(crate) fn begin_turn(&self) -> Result<(), String> {
+        let mut state = self.inner.lock().map_err(|error| error.to_string())?;
+        state.turn.clear();
+        Ok(())
+    }
+
+    pub(crate) fn end_turn(&self, keep: bool) -> Result<(), String> {
+        let mut state = self.inner.lock().map_err(|error| error.to_string())?;
+        if keep {
+            let label = decision::turn_label(&mut state)?;
+            state.conversation.push(label);
+        }
+        state.turn.clear();
+        Ok(())
+    }
+}
+
+impl Label {
+    fn join(&mut self, other: &Self) {
+        self.private.extend(other.private.iter().cloned());
+        self.untrusted.extend(other.untrusted.iter().cloned());
+    }
+
+    fn json(&self) -> serde_json::Value {
+        serde_json::json!({"private": self.private, "untrusted": self.untrusted})
     }
 }
 

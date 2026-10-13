@@ -55,7 +55,7 @@ async fn repl(
     )
     .map_err(std::io::Error::other)?;
     let middleware = PolicyMiddleware::new(
-        policy,
+        policy.clone(),
         console.clone(),
         settings.model_host().to_owned(),
         verbose,
@@ -104,22 +104,36 @@ async fn repl(
         if line.trim().is_empty() {
             break;
         }
+        policy.begin_turn().map_err(std::io::Error::other)?;
         conversation.push(Message {
             role: Role::User,
             content: line.trim().to_owned(),
         });
-        let reply = console
+        let answer = console
             .wait(agent.answer(&conversation), &mut requests)
-            .await??;
+            .await?;
+        let reply = match answer {
+            Ok(reply) => reply,
+            Err(error) => {
+                conversation.pop();
+                policy.end_turn(false).map_err(std::io::Error::other)?;
+                return Err(error.into());
+            }
+        };
         match reply {
             Ok(reply) => {
+                policy.end_turn(true).map_err(std::io::Error::other)?;
                 console.line(&format!("assistant> {reply}"))?;
                 conversation.push(Message {
                     role: Role::Assistant,
                     content: reply,
                 });
             }
-            Err(error) => console.line(&format!("assistant error> {error}"))?,
+            Err(error) => {
+                conversation.pop();
+                policy.end_turn(false).map_err(std::io::Error::other)?;
+                console.line(&format!("assistant error> {error}"))?;
+            }
         }
     }
     Ok(())
