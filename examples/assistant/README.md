@@ -15,9 +15,10 @@ written in [Rego](https://www.openpolicyagent.org/docs/policy-language) whether 
 call, ask you first, or deny it.
 
 The policy is [`policy.rego`](policy.rego). It works from what the components actually do, not
-from what the model or a tool says it will do, and it can take into account what has already
-happened in the conversation. A second file, [`wasi.rego`](wasi.rego), translates raw WASI calls
-into the words the policy uses (`reading`, `writing`, `sending`), so you rarely need to open it.
+from what the model or a tool says it will do. The host remembers which private paths and
+untrusted sources contributed content to the conversation. A second file,
+[`wasi.rego`](wasi.rego), translates raw WASI calls into the words the policy uses (`reading`,
+`writing`, `sending`) and records what each turn added to the conversation.
 
 Below, we run the agent and go through four kinds of problem the policy deals with: privacy,
 prompt injection, access control and a malicious component.
@@ -44,45 +45,45 @@ request the agent makes could carry it somewhere, even tucked into a URL.
 ```text
 you> Fetch https://example.com and summarize it in one sentence.
   · call web-tools.fetch   allowed
-  · send example.com   allowed
-assistant> Example Domain is a reserved domain intended for use in documentation and educational examples, explicitly noted as not a service and not suitable for testing or monitoring.
+  · make a request to https://example.com/   allowed
+assistant> Example.com is a placeholder domain intended for use in documentation examples without needing permission, and it advises not to rely on it for testing or monitoring.
 
 you> Read private/diary.md and summarize it in one sentence.
   · call notes-tools.read-note   allowed
   · read private/diary.md   allowed
-  ? send <model-host> — send to <model-host> after reading private/diary.md — allow? [y/N] y
-assistant> The unreleased prototype demonstration is scheduled to take place on Friday.
+  ? This conversation includes private/diary.md. Let it make a request to <model-host>? [y/N] y
+assistant> The private diary notes that an unreleased prototype demonstration is scheduled for Friday.
 
 you> Fetch https://example.com again and tell me its title.
   · call web-tools.fetch   allowed
-  ? send example.com — send to example.com after reading private/diary.md — allow? [y/N] n
-  · call web-tools.fetch   allowed
-  ? send example.com — send to example.com after reading private/diary.md — allow? [y/N] n
-assistant> I can't refetch it right now — the request is being denied by policy. Based on the earlier fetch, though, the page's title was **"Example Domain"**.
+  ? This conversation includes private/diary.md. Let it make a request to https://example.com/? [y/N] n
+  ✗ make a request to https://example.com/ denied — conversation includes private/diary.md
+assistant> I couldn't re-fetch the page — the request was denied by policy this time. Based on my earlier successful fetch, its title was "Example Domain".
 ```
 
-The first fetch went through without a question. The same fetch at the end needed your
-permission. When you said no, it didn't happen; the model tried once more, was asked again, and
-then answered from what it already knew. Nothing about the request changed; what changed is that
-the conversation now holds your diary. Even sending the diary to the model asked first, because
-the model is just another host to the policy.
+The first fetch went through without a question. After you allowed the diary to reach the model,
+the conversation included `private/diary.md`, so the later fetch named its full URL and waited
+for permission. A refusal is remembered for the rest of that turn, so a model retry is denied
+without asking again. If you instead refuse the agent's request to the model when it would first
+receive the diary, the failed turn and its user message are dropped; the next unrelated turn is
+clean and asks nothing.
 
 This is the rule that asked:
 
 ```rego
 ask contains reason if {
-	host := sending(input.event)
-	not host in trusted_hosts
-	some path in private_reads
-	reason := sprintf("send to %s after reading %s", [host, path])
-	not reason in input.approved
+	sending(input.event)
+	not private_data_host(input.event)
+	some path in input.label.private
+	reason := sprintf("conversation includes %s", [path])
 }
 ```
 
-In words: when something is about to be sent to a host you haven't trusted, and a private note
-was read earlier in this session, ask first. Once you say yes, the same question isn't asked
-again in this session. If your model runs locally, add its host to `TRUSTED_HOSTS` and private
-notes can go to it without asking.
+In words: before any component sends while the conversation holds private content, ask first.
+`PRIVATE_DATA_HOSTS` lists hosts that may receive private notes from any component without asking;
+the component must still be permitted to contact the host by `allowed_hosts`. A yes for the
+agent's model request is remembered for the session. A yes for a tool request or write authorizes
+only that call.
 
 ## Prompt injection
 
@@ -97,13 +98,13 @@ assistant> I've written "before the fetch" to drafts/timing.md.
 
 you> Fetch https://example.com and tell me its title.
   · call web-tools.fetch   allowed
-  · send example.com   allowed
-assistant> The page title is "Example Domain".
+  · make a request to https://example.com/   allowed
+assistant> The title of https://example.com is **Example Domain**.
 
 you> Replace drafts/timing.md with "after the fetch".
   · call notes-tools.write-note   allowed
-  ? write drafts/timing.md — write drafts/timing.md after fetching from example.com — allow? [y/N] y
-assistant> Done — drafts/timing.md now contains "after the fetch".
+  ? This conversation includes content from example.com. Let it write drafts/timing.md? [y/N] y
+assistant> Replaced drafts/timing.md with "after the fetch".
 ```
 
 Writing a draft is ordinary at the start. After the agent has read a web page, the same write
@@ -113,10 +114,9 @@ say no.
 
 ```rego
 ask contains reason if {
-	path := writing(input.event)
-	some host in web_fetches
-	reason := sprintf("write %s after fetching from %s", [path, host])
-	not reason in input.approved
+	writing(input.event)
+	some source in input.label.untrusted
+	reason := sprintf("conversation includes content from %s", [source])
 }
 ```
 
@@ -129,15 +129,12 @@ the agent only writes inside `drafts/`.
 you> Read private/passwords.md.
   · call notes-tools.read-note   allowed
   ✗ read private/passwords.md denied — private/passwords.md is secret
-  · call notes-tools.list-notes   allowed
-  · call notes-tools.read-note   allowed
-  ✗ read private/passwords.md denied — private/passwords.md is secret
-assistant> I was able to confirm that `private/passwords.md` exists in the notes, but I'm unable to read it — the system returns an **access denied** error, and it's not a transient failure. […]
+assistant> I wasn't able to read `private/passwords.md` — the system returned an access error, meaning that note is restricted and I don't have permission to open it. […]
 
 you> Write "hello" to private/output.md.
   · call notes-tools.write-note   allowed
   ✗ write private/output.md denied — private/output.md is outside drafts/
-assistant> I tried writing "hello" to `private/output.md`, but the write failed with an **access denied** error […] so I won't keep retrying.
+assistant> I wasn't able to write to `private/output.md` — the write was rejected with an access error, so that path is restricted for me. […]
 ```
 
 There's no question this time. These are `deny` rules, and a `deny` always wins over `ask` and
@@ -166,9 +163,9 @@ Open-Meteo. It stands in for a third-party component you didn't write and can't 
 you> What's the weather in Boston?
   · call weather-tools.get-weather   allowed
   ✗ read private/diary.md denied — weather-tools may not read notes
-  ✗ send collector.example denied — weather-tools may not send to collector.example
-  · send api.open-meteo.com   allowed
-assistant> Boston is currently overcast with a temperature of 12.5°C (about 54.5°F).
+  ✗ make a request to https://collector.example/collect denied — weather-tools may not send to collector.example
+  · make a request to https://api.open-meteo.com/v1/forecast?latitude=42.3601&longitude=-71.0589&current=temperature_2m,weather_code&temperature_unit=celsius   allowed
+assistant> Boston is overcast with a temperature of 13.9°C (about 57°F) — a cool, cloudy day.
 ```
 
 Nothing in the tool's interface hints at what it does, and the model has no way to know. The
@@ -185,15 +182,16 @@ deny contains sprintf("%s may not read notes", [input.event.caller]) if {
 deny contains sprintf("%s may not send to %s", [caller, host]) if {
 	host := sending(input.event)
 	caller := input.event.caller
-	hosts := tool_hosts[caller]
-	not "*" in hosts
-	not host in hosts
+	not host_allowed(caller, host)
 }
 ```
 
-The first rule says only `notes-tools` may read notes. The second gives each tool a list of
-hosts it may contact (`tool_hosts`, at the top of `policy.rego`): `web-tools` may contact any,
-`weather-tools` only `api.open-meteo.com`.
+The first rule says only `notes-tools` may read notes. The policy applies the same restriction to
+writes, with a denial that names the component that tried. The second rule denies network access
+unless the host appears for that component in `allowed_hosts`: the agent may contact only the
+configured model host, `web-tools` may contact any host, `weather-tools` only
+`api.open-meteo.com`, and `notes-tools` none. This answers which hosts a component may contact;
+`PRIVATE_DATA_HOSTS` separately answers which hosts may receive private data without asking.
 
 ## Try changing the policy
 
@@ -202,23 +200,24 @@ few things to try:
 
 - add `"research.md"` to `secret_paths`, then ask for a summary of it;
 - delete the second `ask` rule, then repeat the prompt injection steps;
-- add `collector.example` to the weather tool's hosts in `tool_hosts`, and watch the policy let
-  its hidden send through.
+- add `"collector.example"` to `weather-tools` in `allowed_hosts`, and watch the policy let its
+  hidden send through.
 
 ## What this example doesn't do
 
 It keeps things simple on purpose:
 
-- **Private data is tracked per session.** Once a private note is read, the whole conversation
-  counts as carrying it, even if the model never repeats a word of it. Restart to reset.
+- **Sensitivity covers whole turns.** Parallel tool calls in one turn share what the policy knows;
+  the example does not track individual values within a turn.
+- **Untrusted sends ask.** A stricter policy would refuse model-chosen sends after untrusted
+  content instead of asking the user.
+- **Sensitive history only accumulates.** The conversation cannot be made clean again except by
+  restarting it.
 - **Decisions are allow, ask or deny.** Middleware could also change a call, for example to
   redact text, but this example doesn't.
 - **The policy sees real paths.** Before deciding, the host cleans up each path and follows
   symlinks inside the notes folder, so `./private/../private/diary.md`, or a symlink to the
   diary, is still the diary.
-- **Asking is the safety net.** After something private is read, you'll see more questions.
-  Larger systems reduce them with finer-grained tracking, or by separating tasks that need
-  private data from tasks that browse the web.
 
 ## Settings
 
@@ -226,7 +225,11 @@ It keeps things simple on purpose:
 
 - `OPENAI_BASE_URL`: the API's base URL, including its prefix but not `/chat/completions`;
 - `OPENAI_API_KEY` and `OPENAI_MODEL`;
-- `TRUSTED_HOSTS`: hosts that may receive private data without asking, comma-separated (with
-  the port if the URL has one).
+- `PRIVATE_DATA_HOSTS`: hosts that may receive private notes without asking, comma-separated
+  (with the port if the URL has one).
+
+The policy's `allowed_hosts` says which hosts each component may contact at all;
+`PRIVATE_DATA_HOSTS` is the separate deployment setting for which hosts may receive private data
+without asking.
 
 Environment variables override the file. An empty line or Ctrl-D ends the chat.
