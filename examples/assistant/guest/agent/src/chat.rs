@@ -2,13 +2,13 @@ use serde_json::{Value, json};
 
 const SYSTEM: &str = "You are a research assistant. Use list_notes to discover notes, read_note to read one by path, write_note to create or replace one, and fetch to retrieve a URL.";
 
-pub struct ToolCall {
-    pub id: String,
-    pub name: String,
-    pub arguments: String,
+pub(crate) struct ToolCall {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) arguments: String,
 }
 
-pub enum Reply {
+pub(crate) enum Reply {
     Final(String),
     Tools {
         message: Value,
@@ -16,11 +16,11 @@ pub enum Reply {
     },
 }
 
-pub fn system_message() -> Value {
+pub(crate) fn system_message() -> Value {
     json!({"role": "system", "content": SYSTEM})
 }
 
-pub fn request(model: &str, messages: &[Value]) -> Result<Vec<u8>, String> {
+pub(crate) fn request(model: &str, messages: &[Value]) -> Result<Vec<u8>, String> {
     serde_json::to_vec(&json!({
         "model": model,
         "messages": messages,
@@ -56,7 +56,7 @@ pub fn request(model: &str, messages: &[Value]) -> Result<Vec<u8>, String> {
     .map_err(|error| error.to_string())
 }
 
-pub fn reply(body: &[u8]) -> Result<Reply, String> {
+pub(crate) fn reply(body: &[u8]) -> Result<Reply, String> {
     let root: Value = serde_json::from_slice(body).map_err(|error| error.to_string())?;
     let message = root
         .pointer("/choices/0/message")

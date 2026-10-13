@@ -8,7 +8,8 @@ use std::path::PathBuf;
 use std::process::Command;
 
 const TARGET: &str = "wasm32-unknown-unknown";
-const COMPONENTS: [(&str, &str); 2] = [
+const COMPONENTS: [(&str, &str); 3] = [
+    ("agent_guest.wasm", "agent.wasm"),
     ("notes_tools_guest.wasm", "notes-tools.wasm"),
     ("web_tools_guest.wasm", "web-tools.wasm"),
 ];
@@ -42,7 +43,7 @@ fn main() -> io::Result<()> {
             .arg(output.join(component))
             .status()?;
         if !status.success() {
-            return Err(io::Error::other("assistant componentization failed"));
+            return Err(io::Error::other("example componentization failed"));
         }
     }
     Ok(())

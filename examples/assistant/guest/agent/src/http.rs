@@ -2,7 +2,7 @@ use wasip3::http::client;
 use wasip3::http::types::{ErrorCode, Fields, Method, Request, Response, Scheme};
 use wasip3::{wit_future, wit_stream};
 
-pub async fn post(base_url: &str, api_key: &str, body: Vec<u8>) -> Result<Vec<u8>, String> {
+pub(crate) async fn post(base_url: &str, api_key: &str, body: Vec<u8>) -> Result<Vec<u8>, String> {
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let location = Location::parse(&url)?;
     let headers = Fields::new();
