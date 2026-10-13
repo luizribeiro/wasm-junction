@@ -4,6 +4,8 @@
 #![warn(missing_docs)]
 
 mod bindings;
+#[cfg(test)]
+mod path;
 pub mod server;
 
 use std::error::Error;
