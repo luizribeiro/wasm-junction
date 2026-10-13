@@ -13,6 +13,12 @@ fn main() -> std::io::Result<()> {
         "wasi_http_p2_test_guest.wasm",
         "wasi-http-p2-test.wasm",
     )?;
+    println!("cargo::rerun-if-changed=test-fixtures/call-facts");
+    wasm_junction_guest_build::build_wasi(
+        "test-fixtures/call-facts/Cargo.toml",
+        "call_facts_test_guest.wasm",
+        "call-facts-test.wasm",
+    )?;
     println!("cargo::rerun-if-changed=test-fixtures/wasi-p3");
     wasm_junction_guest_build::build(
         "test-fixtures/wasi-p3/Cargo.toml",

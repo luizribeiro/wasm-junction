@@ -1,0 +1,10 @@
+package test:call-facts@0.1.0;
+
+interface agent {
+  run: func(path: string, authority: string) -> string;
+}
+
+world fixture {
+  import test:wasi/environment@0.1.0;
+  export agent;
+}

@@ -1,0 +1,5 @@
+package test:wasi@0.1.0;
+
+interface environment {
+  read-file: func(path: string) -> result<string, string>;
+}
