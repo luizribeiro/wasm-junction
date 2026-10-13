@@ -51,16 +51,21 @@ private_data_host(event) if {
 }
 
 ask contains reason if {
-	host := sending(input.event)
+	sending(input.event)
 	not private_data_host(input.event)
 	some path in input.label.private
-	reason := sprintf("send to %s with %s in the conversation", [host, path])
-	not reason in input.approved
+	reason := sprintf("conversation includes %s", [path])
 }
 
 ask contains reason if {
-	path := writing(input.event)
+	writing(input.event)
 	some source in input.label.untrusted
-	reason := sprintf("write %s with content from %s in the conversation", [path, source])
-	not reason in input.approved
+	reason := sprintf("conversation includes content from %s", [source])
+}
+
+consent_key(event, reason) := sprintf("%s|%s|%s", [event.caller, effect(event), reason])
+
+deny contains reason if {
+	some reason in ask
+	consent_key(input.event, reason) in input.refused
 }

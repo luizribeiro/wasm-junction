@@ -18,6 +18,7 @@ pub(super) fn evaluate(state: &mut State, event: &Event) -> Result<Decision, Str
         "history": state.turn.iter().map(Event::json).collect::<Vec<_>>(),
         "label": label.json(),
         "approved": state.approved,
+        "refused": state.refused,
     });
     state
         .engine
@@ -52,6 +53,11 @@ pub(super) fn evaluate(state: &mut State, event: &Event) -> Result<Decision, Str
         verdict: text("verdict")?,
         reasons,
         effect: text("effect")?,
+        consent: strings(&value, "consent")?,
+        remember: value
+            .get("remember")
+            .and_then(serde_json::Value::as_bool)
+            .ok_or_else(|| "policy decision has no remember flag".to_owned())?,
     })
 }
 

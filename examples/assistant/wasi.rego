@@ -8,11 +8,25 @@ package assistant
 default private_data_hosts := set()
 private_data_hosts := data.private_data_hosts
 
-default decision := {"verdict": "allow", "reasons": set(), "effect": ""}
+default decision := {"verdict": "allow", "reasons": set(), "effect": "", "consent": set(), "remember": false}
 
-decision := {"verdict": "deny", "reasons": deny, "effect": effect(input.event)} if count(deny) > 0
-else := {"verdict": "ask", "reasons": ask, "effect": effect(input.event)} if count(ask) > 0
-else := {"verdict": "allow", "reasons": set(), "effect": effect(input.event)} if true
+decision := {"verdict": "deny", "reasons": deny, "effect": effect(input.event), "consent": consent, "remember": remember(input.event)} if count(deny) > 0
+else := {"verdict": "ask", "reasons": pending_ask, "effect": effect(input.event), "consent": consent, "remember": remember(input.event)} if count(pending_ask) > 0
+else := {"verdict": "allow", "reasons": set(), "effect": effect(input.event), "consent": consent, "remember": remember(input.event)} if true
+
+consent contains consent_key(input.event, reason) if some reason in ask
+
+pending_ask contains reason if {
+	some reason in ask
+	key := consent_key(input.event, reason)
+	not key in input.approved
+	not key in input.refused
+}
+
+remember(event) := true if {
+	event.caller == "agent"
+	sending(event) == data.model_host
+} else := false
 
 turn_private contains path if {
 	some earlier in input.history
@@ -56,6 +70,8 @@ http_send(event) := {"host": event.arguments[3]} if {
 	event.function == "send"
 }
 
+request_url(event) := sprintf("%s://%s%s", [lower(event.arguments[2]), event.arguments[3], event.arguments[4]]) if http_send(event)
+
 reading(event) := call.path if {
 	call := open_at(event)
 	"read" in split(trim(call.flags, "{}"), ", ")
@@ -77,8 +93,11 @@ effect(event) := sprintf("read and write %s", [path]) if {
 	path := reading(event)
 } else := sprintf("write %s", [path]) if {
 	path := writing(event)
-} else := sprintf("send %s", [host]) if {
+} else := sprintf("make a request to %s", [host]) if {
+	event.caller == "agent"
 	host := sending(event)
+} else := sprintf("make a request to %s", [request_url(event)]) if {
+	sending(event)
 } else := sprintf("call %s.%s", [event.callee, event.function]) if {
 	event.caller != "host"
 	startswith(event.interface, "example:assistant/")

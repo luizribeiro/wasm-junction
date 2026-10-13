@@ -43,6 +43,7 @@ pub(super) struct State {
     turn: Vec<Event>,
     conversation: Vec<Label>,
     approved: BTreeSet<String>,
+    refused: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -55,6 +56,8 @@ pub(super) struct Decision {
     verdict: String,
     reasons: Vec<String>,
     effect: String,
+    consent: BTreeSet<String>,
+    remember: bool,
 }
 
 impl Policy {
@@ -88,6 +91,7 @@ impl Policy {
                 turn: Vec::new(),
                 conversation: Vec::new(),
                 approved: BTreeSet::new(),
+                refused: BTreeSet::new(),
             })),
             base: path.parent().unwrap_or_else(|| Path::new(".")).to_owned(),
         })
@@ -99,6 +103,8 @@ impl Policy {
             verdict: "deny".into(),
             reasons: vec![format!("policy evaluation failed: {reason}")],
             effect: "evaluate policy".into(),
+            consent: BTreeSet::new(),
+            remember: false,
         });
         let why = Why {
             effect: decision.effect,
@@ -121,14 +127,24 @@ impl Policy {
     pub(crate) fn approve(&self, event: &Event) -> Result<(), String> {
         let mut state = self.inner.lock().map_err(|error| error.to_string())?;
         let decision = evaluate(&mut state, event)?;
-        state.approved.extend(decision.reasons);
+        if decision.remember {
+            state.approved.extend(decision.consent);
+        }
         state.turn.push(event.clone());
+        Ok(())
+    }
+
+    pub(crate) fn reject(&self, event: &Event) -> Result<(), String> {
+        let mut state = self.inner.lock().map_err(|error| error.to_string())?;
+        let decision = evaluate(&mut state, event)?;
+        state.refused.extend(decision.consent);
         Ok(())
     }
 
     pub(crate) fn begin_turn(&self) -> Result<(), String> {
         let mut state = self.inner.lock().map_err(|error| error.to_string())?;
         state.turn.clear();
+        state.refused.clear();
         Ok(())
     }
 
@@ -139,6 +155,7 @@ impl Policy {
             state.conversation.push(label);
         }
         state.turn.clear();
+        state.refused.clear();
         Ok(())
     }
 }

@@ -128,7 +128,7 @@ fn allowed_hosts_deny_by_default() {
             .decide(&http_send("weather-tools", "collector.example"))
             .unwrap(),
         Verdict::Deny(Why {
-            effect: "send collector.example".into(),
+            effect: "make a request to https://collector.example/".into(),
             reasons: vec!["weather-tools may not send to collector.example".into()],
         })
     );
@@ -152,17 +152,26 @@ fn allowed_hosts_deny_by_default() {
 fn private_data_hosts_cover_any_allowed_request() {
     let private = open_at("private/diary.md", &["read"]);
     let model = http_send("agent", "model.example");
-    let reason = "send to model.example with private/diary.md in the conversation";
+    let reason = "conversation includes private/diary.md";
 
     let policy = load_policy(&[]);
     assert!(matches!(policy.decide(&private), Ok(Verdict::Allow(_))));
     assert_eq!(
         policy.decide(&model).unwrap(),
         Verdict::Ask(Why {
-            effect: "send model.example".into(),
+            effect: "make a request to model.example".into(),
             reasons: vec![reason.into()],
         })
     );
+    policy.approve(&model).unwrap();
+    assert_eq!(
+        policy.decide(&model).unwrap(),
+        Verdict::Allow("make a request to model.example".into())
+    );
+    assert!(matches!(
+        policy.decide(&http_send("web-tools", "example.com")),
+        Ok(Verdict::Ask(_))
+    ));
 
     let cleared = load_policy(&["model.example"]);
     assert!(matches!(cleared.decide(&private), Ok(Verdict::Allow(_))));
@@ -170,9 +179,8 @@ fn private_data_hosts_cover_any_allowed_request() {
         cleared
             .decide(&http_send("agent", "model.example"))
             .unwrap(),
-        Verdict::Allow("send model.example".into())
+        Verdict::Allow("make a request to model.example".into())
     );
-
     assert!(matches!(
         cleared.decide(&http_send("web-tools", "model.example")),
         Ok(Verdict::Allow(_))
@@ -184,33 +192,42 @@ fn private_data_hosts_cover_any_allowed_request() {
 }
 
 #[test]
-fn writes_ask_only_after_web_fetches() {
+fn write_approvals_are_not_remembered() {
     let write = open_at("drafts/summary.md", &["write"]);
 
     let fetched = load_policy(&[]);
+    fetched.begin_turn().unwrap();
     assert!(matches!(
         fetched.decide(&http_send("web-tools", "news.example")),
         Ok(Verdict::Allow(_))
     ));
+    fetched.end_turn(true).unwrap();
+    fetched.begin_turn().unwrap();
     assert_eq!(
         fetched.decide(&write).unwrap(),
         Verdict::Ask(Why {
             effect: "write drafts/summary.md".into(),
-            reasons: vec![
-                "write drafts/summary.md with content from news.example in the conversation".into(),
-            ],
+            reasons: vec!["conversation includes content from news.example".into()],
         })
     );
+    fetched.approve(&write).unwrap();
+    fetched.end_turn(true).unwrap();
+    fetched.begin_turn().unwrap();
+    assert!(matches!(fetched.decide(&write), Ok(Verdict::Ask(_))));
+}
 
-    let model = load_policy(&[]);
-    assert!(matches!(
-        model.decide(&http_send("agent", "model.example")),
-        Ok(Verdict::Allow(_))
-    ));
-    assert_eq!(
-        model.decide(&write).unwrap(),
-        Verdict::Allow("write drafts/summary.md".into())
-    );
+#[test]
+fn refusal_is_forgotten_after_the_turn() {
+    let policy = private_conversation();
+    policy.begin_turn().unwrap();
+    let fetch = http_send("web-tools", "example.com");
+    assert!(matches!(policy.decide(&fetch), Ok(Verdict::Ask(_))));
+    policy.reject(&fetch).unwrap();
+    assert!(matches!(policy.decide(&fetch), Ok(Verdict::Deny(_))));
+
+    policy.end_turn(true).unwrap();
+    policy.begin_turn().unwrap();
+    assert!(matches!(policy.decide(&fetch), Ok(Verdict::Ask(_))));
 }
 
 #[test]
@@ -232,25 +249,63 @@ fn dropped_turn_drops_its_private_label() {
         policy
             .decide(&http_send("web-tools", "example.com"))
             .unwrap(),
-        Verdict::Allow("send example.com".into())
+        Verdict::Allow("make a request to https://example.com/".into())
     );
 }
 
 #[test]
 fn kept_turn_carries_its_private_label() {
+    let policy = private_conversation();
+
+    policy.begin_turn().unwrap();
+    let call = http_call_to("web-tools", "example.com", "/search?q=private");
+    let fetch = Event::from_call(&call, std::path::Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap();
+    assert_eq!(
+        policy.decide(&fetch).unwrap(),
+        Verdict::Ask(Why {
+            effect: "make a request to https://example.com/search?q=private".into(),
+            reasons: vec!["conversation includes private/diary.md".into()],
+        })
+    );
+}
+
+#[test]
+fn weather_output_makes_a_later_write_ask() {
     let policy = load_policy(&[]);
     policy.begin_turn().unwrap();
     policy
-        .decide(&open_at("private/diary.md", &["read"]))
+        .decide(&http_send("weather-tools", "api.open-meteo.com"))
         .unwrap();
+    policy.end_turn(true).unwrap();
+
+    policy.begin_turn().unwrap();
+    assert_eq!(
+        policy
+            .decide(&open_at("drafts/weather.md", &["write"]))
+            .unwrap(),
+        Verdict::Ask(Why {
+            effect: "write drafts/weather.md".into(),
+            reasons: vec!["conversation includes content from weather-tools".into()],
+        })
+    );
+}
+
+#[test]
+fn reading_a_draft_marks_both_kinds_of_sensitive_content() {
+    let policy = load_policy(&[]);
+    policy.begin_turn().unwrap();
     policy
-        .approve(&http_send("agent", "model.example"))
+        .decide(&open_at("drafts/timing.md", &["read"]))
         .unwrap();
     policy.end_turn(true).unwrap();
 
     policy.begin_turn().unwrap();
     assert!(matches!(
-        policy.decide(&http_send("web-tools", "example.com")),
+        policy.decide(&http_send("agent", "model.example")),
+        Ok(Verdict::Ask(_))
+    ));
+    assert!(matches!(
+        policy.decide(&open_at("drafts/other.md", &["write"])),
         Ok(Verdict::Ask(_))
     ));
 }
@@ -266,6 +321,19 @@ fn load_policy(private_data_hosts: &[&str]) -> Policy {
             .collect::<Vec<_>>(),
     )
     .unwrap()
+}
+
+fn private_conversation() -> Policy {
+    let policy = load_policy(&[]);
+    policy.begin_turn().unwrap();
+    policy
+        .decide(&open_at("private/diary.md", &["read"]))
+        .unwrap();
+    policy
+        .approve(&http_send("agent", "model.example"))
+        .unwrap();
+    policy.end_turn(true).unwrap();
+    policy
 }
 
 fn open_at(path: &str, flags: &[&str]) -> Event {
@@ -337,6 +405,10 @@ fn filesystem_call(caller: &str, path: &str, flags: &[&str]) -> Call {
 }
 
 fn http_call(caller: &str, host: &str) -> Call {
+    http_call_to(caller, host, "/")
+}
+
+fn http_call_to(caller: &str, host: &str, path: &str) -> Call {
     Call::new(
         Caller::Component(caller.into()),
         "wasi:http/client@0.3.0",
@@ -349,10 +421,12 @@ fn http_call(caller: &str, host: &str) -> Call {
                 value: None,
             },
             Val::Option(Some(Box::new(Val::Variant {
-                case: "HTTP".into(),
+                case: "HTTPS".into(),
                 value: None,
             }))),
             Val::Option(Some(Box::new(Val::String(host.into())))),
+            Val::Option(Some(Box::new(Val::String(path.into())))),
+            Val::List(Vec::new()),
         ],
     )
 }

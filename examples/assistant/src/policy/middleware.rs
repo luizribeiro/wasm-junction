@@ -92,7 +92,8 @@ impl PolicyMiddleware {
                     .await
                     .map_err(|_| CallError::trap("consent prompt closed"))?;
                 if !allowed {
-                    return Err(CallError::refused(why.reasons.join("; ")));
+                    self.policy.reject(&event).map_err(CallError::trap)?;
+                    return self.refuse(&why, "denied");
                 }
                 self.policy.approve(&event).map_err(CallError::trap)?;
                 next(call).await
