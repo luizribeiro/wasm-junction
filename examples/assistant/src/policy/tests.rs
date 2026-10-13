@@ -88,6 +88,17 @@ fn real_call_shapes_reach_the_expected_rules() {
 }
 
 #[test]
+fn matches_filesystem_flags_exactly() {
+    let policy = load_policy(&[]);
+    assert_eq!(
+        policy
+            .decide(&open_at("notes/draft.md", &["requested-write-sync"]))
+            .unwrap(),
+        Verdict::Allow(String::new())
+    );
+}
+
+#[test]
 fn private_send_exceptions_use_history_trust_and_approval() {
     let private = open_at("private/diary.md", &["read"]);
     let outside = http_send("agent", "outside.example");

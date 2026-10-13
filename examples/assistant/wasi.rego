@@ -38,12 +38,12 @@ http_send(event) := {"host": event.arguments[3]} if {
 
 reading(event) := call.path if {
 	call := open_at(event)
-	contains(call.flags, "read")
+	"read" in split(trim(call.flags, "{}"), ", ")
 }
 
 writing(event) := call.path if {
 	call := open_at(event)
-	contains(call.flags, "write")
+	"write" in split(trim(call.flags, "{}"), ", ")
 }
 
 sending(event) := call.host if {
