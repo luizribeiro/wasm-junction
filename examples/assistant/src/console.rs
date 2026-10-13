@@ -1,4 +1,3 @@
-#[cfg(test)]
 use std::future::Future;
 use std::io::{BufRead, Write};
 use std::sync::{Arc, Mutex};
@@ -47,7 +46,6 @@ impl Console {
         self.print(&format!("{text}\n"))
     }
 
-    #[cfg(test)]
     pub(crate) async fn wait<T>(
         &self,
         future: impl Future<Output = T>,
@@ -62,7 +60,6 @@ impl Console {
         }
     }
 
-    #[cfg(test)]
     async fn answer(&self, request: ConsentRequest) -> std::io::Result<()> {
         self.print(&format!(
             "Allow {}? {} [y/N] ",
@@ -74,10 +71,8 @@ impl Console {
         Ok(())
     }
 }
-#[cfg(test)]
 use tokio::sync::{mpsc, oneshot};
 
-#[cfg(test)]
 pub(crate) struct ConsentRequest {
     pub(crate) effect: String,
     pub(crate) reason: String,

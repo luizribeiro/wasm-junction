@@ -9,6 +9,7 @@ pub(crate) struct Settings {
     path_prefix: String,
     api_key: String,
     model: String,
+    pub(crate) private_data_hosts: Vec<String>,
 }
 
 impl Settings {
@@ -27,6 +28,9 @@ impl Settings {
             path_prefix,
             api_key,
             model,
+            private_data_hosts: parse_private_data_hosts(
+                &std::env::var("PRIVATE_DATA_HOSTS").unwrap_or_default(),
+            ),
         }))
     }
 
@@ -68,9 +72,18 @@ fn parse_base_url(url: &str) -> Result<(String, String, String), String> {
     ))
 }
 
+fn parse_private_data_hosts(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|host| !host.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_base_url;
+    use super::{parse_base_url, parse_private_data_hosts};
 
     #[test]
     fn parses_base_urls() {
@@ -81,5 +94,13 @@ mod tests {
         assert!(parse_base_url("ftp://example.test").is_err());
         assert!(parse_base_url("https:///v1").is_err());
         assert!(parse_base_url("example.test/v1").is_err());
+    }
+
+    #[test]
+    fn parses_private_data_hosts() {
+        assert_eq!(
+            parse_private_data_hosts(" local.test:8000,api.test,, "),
+            ["local.test:8000", "api.test"]
+        );
     }
 }

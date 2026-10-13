@@ -5,11 +5,9 @@
 
 mod bindings;
 mod console;
-#[cfg(test)]
 mod path;
-#[cfg(test)]
 mod policy;
-pub mod server;
+mod server;
 mod settings;
 
 use std::error::Error;
@@ -18,8 +16,10 @@ use std::path::Path;
 
 use bindings::agent::{Agent, Message, Role};
 use console::Console;
+use policy::Policy;
 use server::Server;
 use settings::Settings;
+use tokio::sync::mpsc;
 use wasm_junction::{Access, AppBuilder, Component, WasiSettings, wasi};
 
 const AGENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/agent.wasm"));
@@ -49,10 +49,18 @@ async fn repl(
     console: Console,
     configure: impl FnOnce(AppBuilder) -> AppBuilder,
 ) -> Result<(), Box<dyn Error>> {
+    let (consent, mut requests) = mpsc::unbounded_channel();
+    let policy = Policy::load(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("policy.rego"),
+        &settings.private_data_hosts,
+    )
+    .map_err(std::io::Error::other)?
+    .with_consent(consent);
     let app = configure(
         AppBuilder::default()
             .provide(wasi::provider())
-            .provide(wasi::http::provider()),
+            .provide(wasi::http::provider())
+            .middleware(policy.clone()),
     )
     .build()?;
     app.configure("agent", settings.wasi())?;
@@ -61,7 +69,7 @@ async fn repl(
         WasiSettings::new().preopen(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("notes"),
             "/notes",
-            Access::ReadOnly,
+            Access::ReadWrite,
         ),
     )?;
     app.configure("web-tools", WasiSettings::new().network(true))?;
@@ -87,15 +95,25 @@ async fn repl(
             role: Role::User,
             content: line.trim().to_owned(),
         });
-        let reply = agent
-            .answer(&conversation)
-            .await?
-            .map_err(std::io::Error::other)?;
-        console.line(&format!("assistant> {reply}"))?;
-        conversation.push(Message {
-            role: Role::Assistant,
-            content: reply,
-        });
+        let reply = console
+            .wait(
+                agent.with(policy.clone()).answer(&conversation),
+                &mut requests,
+            )
+            .await??;
+        match reply {
+            Ok(reply) => {
+                console.line(&format!("assistant> {reply}"))?;
+                conversation.push(Message {
+                    role: Role::Assistant,
+                    content: reply,
+                });
+            }
+            Err(error) => console.line(&format!("assistant error> {error}"))?,
+        }
+        for effect in policy.take_trace().map_err(std::io::Error::other)? {
+            console.line(&format!("trace> {effect}"))?;
+        }
     }
     Ok(())
 }
