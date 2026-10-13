@@ -12,6 +12,7 @@ members = [
   "examples/clock",
   "examples/files",
   "examples/http",
+  "examples/assistant",
   "examples/translate",
   "examples/audit",
   "examples/reload",
