@@ -45,9 +45,14 @@ host_allowed(caller, host) if {
 	host in allowed_hosts[caller]
 }
 
+private_data_host(event) if {
+	host := sending(event)
+	host in private_data_hosts
+}
+
 ask contains reason if {
 	host := sending(input.event)
-	not host in trusted_hosts
+	not private_data_host(input.event)
 	some path in input.label.private
 	reason := sprintf("send to %s with %s in the conversation", [host, path])
 	not reason in input.approved

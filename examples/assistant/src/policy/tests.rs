@@ -149,39 +149,38 @@ fn allowed_hosts_deny_by_default() {
 }
 
 #[test]
-fn private_send_exceptions_use_history_trust_and_approval() {
+fn private_data_hosts_cover_any_allowed_request() {
     let private = open_at("private/diary.md", &["read"]);
-    let outside = http_send("agent", "model.example");
+    let model = http_send("agent", "model.example");
     let reason = "send to model.example with private/diary.md in the conversation";
 
     let policy = load_policy(&[]);
     assert!(matches!(policy.decide(&private), Ok(Verdict::Allow(_))));
     assert_eq!(
-        policy.decide(&outside).unwrap(),
+        policy.decide(&model).unwrap(),
         Verdict::Ask(Why {
             effect: "send model.example".into(),
             reasons: vec![reason.into()],
         })
     );
-    policy.approve(&outside).unwrap();
-    assert_eq!(
-        policy.decide(&outside).unwrap(),
-        Verdict::Allow("send model.example".into())
-    );
 
-    let trusted = load_policy(&["model.example"]);
-    assert!(matches!(trusted.decide(&private), Ok(Verdict::Allow(_))));
+    let cleared = load_policy(&["model.example"]);
+    assert!(matches!(cleared.decide(&private), Ok(Verdict::Allow(_))));
     assert_eq!(
-        trusted
+        cleared
             .decide(&http_send("agent", "model.example"))
             .unwrap(),
         Verdict::Allow("send model.example".into())
     );
 
-    assert_eq!(
-        load_policy(&[]).decide(&outside).unwrap(),
-        Verdict::Allow("send model.example".into())
-    );
+    assert!(matches!(
+        cleared.decide(&http_send("web-tools", "model.example")),
+        Ok(Verdict::Allow(_))
+    ));
+    assert!(matches!(
+        cleared.decide(&http_send("web-tools", "example.com")),
+        Ok(Verdict::Ask(_))
+    ));
 }
 
 #[test]
@@ -256,12 +255,12 @@ fn kept_turn_carries_its_private_label() {
     ));
 }
 
-fn load_policy(trusted_hosts: &[&str]) -> Policy {
+fn load_policy(private_data_hosts: &[&str]) -> Policy {
     let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     Policy::load(
         &directory.join("policy.rego"),
         "model.example",
-        &trusted_hosts
+        &private_data_hosts
             .iter()
             .map(|host| (*host).to_owned())
             .collect::<Vec<_>>(),
