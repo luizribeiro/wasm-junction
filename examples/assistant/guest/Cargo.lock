@@ -301,6 +301,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "web-tools-guest"
+version = "0.0.0"
+dependencies = [
+ "wasip3",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "wit-bindgen"
 version = "0.62.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
