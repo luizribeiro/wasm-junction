@@ -8,5 +8,6 @@ publish.workspace = true
 crate-type = ["cdylib"]
 
 [dependencies]
+http-error = { path = "../http-error" }
 wasip3.workspace = true
 wit-bindgen.workspace = true
