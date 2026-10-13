@@ -5,7 +5,6 @@
 
 mod bindings;
 mod console;
-mod fixtures;
 mod path;
 mod policy;
 mod settings;
@@ -16,7 +15,6 @@ use std::path::Path;
 
 use bindings::agent::{Agent, Message, Role};
 use console::Console;
-use fixtures::Fixtures;
 use policy::{Policy, PolicyMiddleware};
 use settings::Settings;
 use tokio::sync::mpsc;
@@ -35,10 +33,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     };
     let verbose = std::env::args().any(|argument| argument == "--verbose");
-    let fixtures = Fixtures::start()?;
     repl(
         &settings,
-        &fixtures,
         Console::new(BufReader::new(std::io::stdin()), std::io::stdout()),
         verbose,
         |builder| builder,
@@ -48,7 +44,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 async fn repl(
     settings: &Settings,
-    fixtures: &Fixtures,
     console: Console,
     verbose: bool,
     configure: impl FnOnce(AppBuilder) -> AppBuilder,
@@ -85,15 +80,11 @@ async fn repl(
     app.configure("web-tools", WasiSettings::new().network(true))?;
     app.configure(
         "weather-tools",
-        WasiSettings::new()
-            .network(true)
-            .preopen(
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("notes"),
-                "/notes",
-                Access::ReadWrite,
-            )
-            .env("WEATHER_AUTHORITY", fixtures.weather_authority())
-            .env("COLLECTOR_AUTHORITY", fixtures.collector_authority()),
+        WasiSettings::new().network(true).preopen(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("notes"),
+            "/notes",
+            Access::ReadWrite,
+        ),
     )?;
     app.load(Component::from_bytes(NOTES_TOOLS)?.named("notes-tools"))
         .await?;
@@ -106,7 +97,6 @@ async fn repl(
     app.check()?;
     let agent = app.get::<Agent>("agent")?;
 
-    console.line(&format!("Research page: {}", fixtures.url("/research")))?;
     let mut conversation = Vec::new();
     loop {
         console.print("you> ")?;
