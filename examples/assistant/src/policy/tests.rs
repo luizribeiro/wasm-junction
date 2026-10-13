@@ -1,6 +1,4 @@
 use std::fs;
-
-use tokio::sync::mpsc;
 use wasm_junction::{Call, Caller, Val};
 
 use super::event::value_text;
@@ -31,13 +29,6 @@ fn builds_generic_events_with_fixed_structured_text() {
     let policy = Policy::load(&directory.join("policy.rego"), &[]).unwrap();
     assert!(matches!(policy.decide(&event), Ok(Verdict::Allow(_))));
     policy.approve(&event).unwrap();
-}
-
-#[test]
-fn accepts_a_consent_channel() {
-    let (sender, _requests) = mpsc::unbounded_channel();
-    let policy = load_policy(&[]).with_consent(sender);
-    assert!(policy.take_trace().unwrap().is_empty());
 }
 
 #[test]
@@ -96,6 +87,52 @@ fn matches_filesystem_flags_exactly() {
             .unwrap(),
         Verdict::Allow(String::new())
     );
+}
+
+#[test]
+fn weather_tools_cannot_write_notes() {
+    let call = filesystem_call("weather-tools", "notes/weather.md", &["write"]);
+    let event = Event::from_call(&call, std::path::Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap();
+    assert!(matches!(
+        load_policy(&[]).decide(&event).unwrap(),
+        Verdict::Deny(Why { reasons, .. })
+            if reasons.contains(&"weather-tools may not write notes".to_owned())
+    ));
+}
+
+#[test]
+fn confines_files_and_hosts_to_their_declared_tools() {
+    let policy = load_policy(&[]);
+    assert_eq!(
+        policy
+            .decide(&open_at_from(
+                "weather-tools",
+                "private/diary.md",
+                &["read"]
+            ))
+            .unwrap(),
+        Verdict::Deny(Why {
+            effect: "read private/diary.md".into(),
+            reasons: vec!["weather-tools may not read notes".into()],
+        })
+    );
+    assert!(matches!(
+        policy.decide(&http_send("weather-tools", "api.open-meteo.com")),
+        Ok(Verdict::Allow(_))
+    ));
+    assert_eq!(
+        policy
+            .decide(&http_send("weather-tools", "collector.example"))
+            .unwrap(),
+        Verdict::Deny(Why {
+            effect: "send collector.example".into(),
+            reasons: vec!["weather-tools may not send to collector.example".into()],
+        })
+    );
+    assert!(matches!(
+        policy.decide(&http_send("web-tools", "anywhere.test")),
+        Ok(Verdict::Allow(_))
+    ));
 }
 
 #[test]
@@ -175,8 +212,17 @@ fn load_policy(trusted_hosts: &[&str]) -> Policy {
 }
 
 fn open_at(path: &str, flags: &[&str]) -> Event {
-    let call = Call::new(
-        Caller::Component("notes-tools".into()),
+    open_at_from("notes-tools", path, flags)
+}
+
+fn open_at_from(caller: &str, path: &str, flags: &[&str]) -> Event {
+    let call = filesystem_call(caller, path, flags);
+    Event::from_call(&call, std::path::Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap()
+}
+
+fn filesystem_call(caller: &str, path: &str, flags: &[&str]) -> Call {
+    Call::new(
+        Caller::Component(caller.into()),
         "wasi:filesystem/types@0.3.0",
         "wasi:filesystem/types@0.3.0",
         "[method]descriptor.open-at",
@@ -188,12 +234,11 @@ fn open_at(path: &str, flags: &[&str]) -> Event {
             Val::Flags(flags.iter().map(|flag| (*flag).to_owned()).collect()),
             Val::String("/notes".into()),
         ],
-    );
-    Event::from_call(&call, std::path::Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap()
+    )
 }
 
-fn http_send(caller: &str, host: &str) -> Event {
-    let call = Call::new(
+fn http_call(caller: &str, host: &str) -> Call {
+    Call::new(
         Caller::Component(caller.into()),
         "wasi:http/client@0.3.0",
         "wasi:http/client@0.3.0",
@@ -210,6 +255,10 @@ fn http_send(caller: &str, host: &str) -> Event {
             }))),
             Val::Option(Some(Box::new(Val::String(host.into())))),
         ],
-    );
+    )
+}
+
+fn http_send(caller: &str, host: &str) -> Event {
+    let call = http_call(caller, host);
     Event::from_call(&call, std::path::Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap()
 }

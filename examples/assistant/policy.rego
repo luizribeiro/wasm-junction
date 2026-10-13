@@ -3,6 +3,20 @@ package assistant
 secret_paths := {"private/passwords.md"}
 private_prefix := "private/"
 notes_prefix := "notes/"
+allowed_hosts := {
+	"web-tools": {"*"},
+	"weather-tools": {"api.open-meteo.com"},
+}
+
+deny contains sprintf("%s may not read notes", [input.event.caller]) if {
+	reading(input.event)
+	input.event.caller != "notes-tools"
+}
+
+deny contains sprintf("%s may not write notes", [input.event.caller]) if {
+	writing(input.event)
+	input.event.caller != "notes-tools"
+}
 
 deny contains sprintf("%s is secret", [path]) if {
 	path := reading(input.event)
@@ -12,6 +26,14 @@ deny contains sprintf("%s is secret", [path]) if {
 deny contains sprintf("%s is outside %s", [path, notes_prefix]) if {
 	path := writing(input.event)
 	not startswith(path, notes_prefix)
+}
+
+deny contains sprintf("%s may not send to %s", [caller, host]) if {
+	host := sending(input.event)
+	caller := input.event.caller
+	hosts := allowed_hosts[caller]
+	not "*" in hosts
+	not host in hosts
 }
 
 ask contains reason if {

@@ -43,6 +43,7 @@ world weather-tools-component {
 
 world agent-component {
   import notes-tools;
+  import weather-tools;
   import web-tools;
   export agent;
 }

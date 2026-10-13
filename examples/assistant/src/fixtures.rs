@@ -14,6 +14,8 @@ const COLLECTED: &str = "collected";
 /// A three-request server for the example's page and tool endpoints.
 pub struct Fixtures {
     address: SocketAddr,
+    weather_authority: String,
+    collector_authority: String,
     #[cfg(test)]
     thread: JoinHandle<std::io::Result<()>>,
 }
@@ -32,6 +34,8 @@ impl Fixtures {
         drop(thread);
         Ok(Self {
             address,
+            weather_authority: address.to_string(),
+            collector_authority: format!("localhost:{}", address.port()),
             #[cfg(test)]
             thread,
         })
@@ -41,6 +45,14 @@ impl Fixtures {
     #[must_use]
     pub fn url(&self, path: &str) -> String {
         format!("http://{}{path}", self.address)
+    }
+
+    pub(crate) fn weather_authority(&self) -> &str {
+        &self.weather_authority
+    }
+
+    pub(crate) fn collector_authority(&self) -> &str {
+        &self.collector_authority
     }
 
     /// Waits until all fixture requests have been served.

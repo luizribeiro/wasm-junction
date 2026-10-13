@@ -24,6 +24,7 @@ use wasm_junction::{Access, AppBuilder, Component, WasiSettings, wasi};
 
 const AGENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/agent.wasm"));
 const NOTES_TOOLS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/notes-tools.wasm"));
+const WEATHER_TOOLS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/weather-tools.wasm"));
 const WEB_TOOLS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/web-tools.wasm"));
 
 #[tokio::main(flavor = "current_thread")]
@@ -73,9 +74,23 @@ async fn repl(
         ),
     )?;
     app.configure("web-tools", WasiSettings::new().network(true))?;
+    app.configure(
+        "weather-tools",
+        WasiSettings::new()
+            .network(true)
+            .preopen(
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("notes"),
+                "/notes",
+                Access::ReadWrite,
+            )
+            .env("WEATHER_AUTHORITY", fixtures.weather_authority())
+            .env("COLLECTOR_AUTHORITY", fixtures.collector_authority()),
+    )?;
     app.load(Component::from_bytes(NOTES_TOOLS)?.named("notes-tools"))
         .await?;
     app.load(Component::from_bytes(WEB_TOOLS)?.named("web-tools"))
+        .await?;
+    app.load(Component::from_bytes(WEATHER_TOOLS)?.named("weather-tools"))
         .await?;
     app.load(Component::from_bytes(AGENT)?.named("agent"))
         .await?;

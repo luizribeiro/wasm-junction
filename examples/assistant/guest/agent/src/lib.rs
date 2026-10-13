@@ -7,7 +7,7 @@ mod chat;
 mod http;
 
 use chat::{Reply, ToolCall};
-use example::assistant::{notes_tools, web_tools};
+use example::assistant::{notes_tools, weather_tools, web_tools};
 use exports::example::assistant::agent::{Message, Role};
 use serde_json::{Value, json};
 
@@ -88,7 +88,9 @@ fn message(message: Message) -> Value {
 
 async fn run_tool(call: ToolCall) -> String {
     let result = match call.name.as_str() {
-        "list_notes" => notes_tools::list_notes().await.map(|notes| notes.join("\n")),
+        "list_notes" => notes_tools::list_notes()
+            .await
+            .map(|notes| notes.join("\n")),
         "read_note" => match argument(&call.arguments, "path") {
             Ok(path) => notes_tools::read_note(path).await,
             Err(error) => Err(error),
@@ -104,6 +106,10 @@ async fn run_tool(call: ToolCall) -> String {
         },
         "fetch" => match argument(&call.arguments, "url") {
             Ok(url) => web_tools::fetch(url).await,
+            Err(error) => Err(error),
+        },
+        "get_weather" => match argument(&call.arguments, "city") {
+            Ok(city) => weather_tools::get_weather(city).await,
             Err(error) => Err(error),
         },
         name => Err(format!("unknown tool {name}")),

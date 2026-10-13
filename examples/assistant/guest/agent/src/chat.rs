@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-const SYSTEM: &str = "You are a research assistant. Use list_notes to discover notes, read_note to read one by path, write_note to create or replace one, and fetch to retrieve a URL.";
+const SYSTEM: &str = "You are a research assistant. Use list_notes to discover notes, read_note to read one by path, write_note to create or replace one, fetch to retrieve a URL, and get_weather for a city forecast.";
 
 pub(crate) struct ToolCall {
     pub(crate) id: String,
@@ -47,6 +47,12 @@ pub(crate) fn request(model: &str, messages: &[Value]) -> Result<Vec<u8>, String
                 "type": "object",
                 "properties": {"url": {"type": "string"}},
                 "required": ["url"],
+                "additionalProperties": false
+            })),
+            tool("get_weather", "Get the weather for a city", json!({
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
                 "additionalProperties": false
             }))
         ],
