@@ -14,5 +14,7 @@ workspace = true
 
 [dependencies]
 dotenvy = "0.15.7"
+regorus = { version = "=0.12.0", default-features = false, features = ["arc"] }
+serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt"] }
 wasm-junction = { path = "../../crates/wasm-junction", version = "=0.0.0", features = ["wasi-http", "wasi-p3"] }
