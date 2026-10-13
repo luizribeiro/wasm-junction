@@ -2,8 +2,8 @@ use std::fs;
 
 use wasm_junction::{Call, Caller, Val};
 
-use super::Event;
 use super::event::value_text;
+use super::{Event, Policy, Verdict};
 
 #[test]
 fn builds_generic_events_with_fixed_structured_text() {
@@ -25,6 +25,11 @@ fn builds_generic_events_with_fixed_structured_text() {
         value_text(&Val::Option(Some(Box::new("host.test".into())))),
         "host.test"
     );
+
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let policy = Policy::load(&directory.join("policy.rego"), &[]).unwrap();
+    assert!(matches!(policy.decide(&event), Ok(Verdict::Allow(_))));
+    policy.approve(&event).unwrap();
 }
 
 #[test]

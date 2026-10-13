@@ -24,6 +24,16 @@ impl Event {
             arguments,
         })
     }
+
+    pub(super) fn json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "caller": self.caller,
+            "callee": self.callee,
+            "interface": self.interface,
+            "function": self.function,
+            "arguments": self.arguments,
+        })
+    }
 }
 
 fn string_arg<'a>(value: Option<&'a Val>, name: &str) -> Result<&'a str, String> {
