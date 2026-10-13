@@ -2,4 +2,5 @@
 /.direnv
 /.typescript
 /result
+/examples/assistant/.env
 /.pre-commit-config.yaml

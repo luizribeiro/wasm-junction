@@ -68,6 +68,7 @@ impl Settings {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn Error>> {
+    load_dotenv()?;
     let Some(settings) = Settings::read().map_err(std::io::Error::other)? else {
         println!("Set OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL.");
         return Ok(());
@@ -81,6 +82,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         |builder| builder,
     )
     .await
+}
+
+fn load_dotenv() -> Result<(), dotenvy::Error> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(".env");
+    match dotenvy::from_path(path) {
+        Ok(()) => Ok(()),
+        Err(dotenvy::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 async fn repl(
