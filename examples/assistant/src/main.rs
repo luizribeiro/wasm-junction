@@ -117,3 +117,6 @@ async fn repl(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;
