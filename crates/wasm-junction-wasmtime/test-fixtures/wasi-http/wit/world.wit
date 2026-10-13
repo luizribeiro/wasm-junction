@@ -2,6 +2,15 @@ package test:wasi-http@0.1.0;
 
 interface probe {
   request: async func(authority: string, path: string) -> string;
+  empty-request: async func(
+    authority: string,
+    path: string,
+    timeout-nanoseconds: option<u64>,
+  ) -> string;
+  drop-response: async func(authority: string, path: string) -> string;
+  leak-response: async func(authority: string, path: string) -> string;
+  hold-response: async func(authority: string, path: string) -> string;
+  large-request: async func(authority: string, path: string) -> string;
   coverage: async func() -> string;
 }
 

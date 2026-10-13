@@ -16,10 +16,20 @@ default = ["parallel-compilation", "wasi"]
 parallel-compilation = ["wasmtime/parallel-compilation"]
 wasi = ["dep:tokio", "dep:wasmtime-wasi"]
 wasi-p3 = ["wasi", "wasmtime-wasi/p3", "wasmtime-wasi-http?/p3"]
-wasi-http = ["wasi", "dep:wasmtime-wasi-http", "wasm-junction/wasi-http"]
+wasi-http = [
+  "wasi",
+  "dep:http",
+  "dep:http-body",
+  "dep:http-body-util",
+  "dep:wasmtime-wasi-http",
+  "wasm-junction/wasi-http",
+]
 
 [dependencies]
 wasm-junction-core = { path = "../wasm-junction-core", version = "=0.0.0" }
+http = { version = "1", optional = true }
+http-body = { version = "1", optional = true }
+http-body-util = { version = "0.1", optional = true }
 tokio = { version = "1", features = ["macros", "sync"], optional = true }
 wasmtime = { version = "=49.0.2", default-features = false, features = ["component-model-async", "cranelift", "runtime", "std"] }
 wasmtime-wasi = { version = "=49.0.2", default-features = false, features = ["p2"], optional = true }

@@ -9,7 +9,12 @@ use wasmtime_wasi_http::WasiHttpCtx;
 use crate::engine::StoreData;
 
 mod gates;
+#[cfg(feature = "wasi-http")]
+mod http_hooks;
 mod trampoline;
+
+#[cfg(feature = "wasi-http")]
+use http_hooks::HttpHooks;
 
 pub(crate) const STATIC_STREAM_INTERFACES: &[&str] = gates::STATIC_STREAM_INTERFACES;
 
@@ -26,6 +31,8 @@ pub(crate) struct WasiState {
     pub(crate) table: ResourceTable,
     #[cfg(feature = "wasi-http")]
     pub(crate) http: WasiHttpCtx,
+    #[cfg(feature = "wasi-http")]
+    pub(crate) http_hooks: HttpHooks,
     channels: HashSet<u32>,
     descriptor_preopens: HashMap<u32, String>,
     directory_stream_preopens: HashMap<u32, String>,
@@ -40,6 +47,8 @@ impl WasiState {
             table: ResourceTable::new(),
             #[cfg(feature = "wasi-http")]
             http: WasiHttpCtx::new(),
+            #[cfg(feature = "wasi-http")]
+            http_hooks: HttpHooks,
             channels: HashSet::new(),
             descriptor_preopens: HashMap::new(),
             directory_stream_preopens: HashMap::new(),

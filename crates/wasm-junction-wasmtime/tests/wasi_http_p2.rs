@@ -127,6 +127,34 @@ fn request_context_is_visible_and_header_rewrites_reach_the_wire() {
 }
 
 #[test]
+#[ignore = "Wasmtime Preview 2 aborts uploads when an unread response body is dropped"]
+fn early_response_does_not_silently_truncate_request_body() {
+    const BODY_SIZE: usize = 512 * 1024;
+
+    let server = HttpServer::respond_before_request_body();
+    let app = load(
+        Policy {
+            deny: false,
+            seen: Arc::new(Mutex::new(None)),
+        },
+        true,
+    );
+
+    let result = block_on(app.call(
+        "http-p2",
+        EXPORT,
+        "large-request",
+        vec![Val::from(server.authority()), Val::from("/large")],
+    ))
+    .unwrap();
+    let request = server.finish();
+    let body = request.split_once("\r\n\r\n").unwrap().1.as_bytes();
+
+    assert_eq!(result, [Val::from("sent")]);
+    assert_eq!(body, vec![b'x'; BODY_SIZE]);
+}
+
+#[test]
 fn refusal_and_disabled_network_return_http_request_denied() {
     let denied = load(
         Policy {

@@ -2,6 +2,7 @@ package test:wasi-http-p2@0.1.0;
 
 interface probe {
   request: func(authority: string, path: string) -> string;
+  large-request: func(authority: string, path: string) -> string;
 }
 
 world fixture {

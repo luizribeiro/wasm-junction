@@ -1953,6 +1953,9 @@ dependencies = [
 name = "wasm-junction-wasmtime"
 version = "0.0.0"
 dependencies = [
+ "http",
+ "http-body",
+ "http-body-util",
  "serde_json",
  "tokio",
  "wasm-junction",

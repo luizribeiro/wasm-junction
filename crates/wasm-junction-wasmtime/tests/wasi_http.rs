@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use support::HttpServer;
 use wasm_junction::{
@@ -20,11 +21,24 @@ const COMPONENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wasi-http-tes
 const EXPORT: &str = "test:wasi-http/probe@0.1.0";
 
 fn block_on<F: Future>(future: F) -> F::Output {
+    runtime().block_on(future)
+}
+
+fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap()
-        .block_on(future)
+}
+
+async fn connection_closes(server: &HttpServer) -> bool {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !server.connection_closed() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .is_ok()
 }
 
 fn load(middleware: impl Middleware + 'static, network: bool) -> App {
@@ -39,6 +53,34 @@ fn load(middleware: impl Middleware + 'static, network: bool) -> App {
         .unwrap();
     block_on(app.load(Component::from_bytes(COMPONENT).unwrap().named("http"))).unwrap();
     app
+}
+
+fn empty_request(
+    app: &App,
+    authority: String,
+    timeout: Option<Duration>,
+) -> Result<Vals, tokio::time::error::Elapsed> {
+    block_on(async {
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            app.call(
+                "http",
+                EXPORT,
+                "empty-request",
+                vec![
+                    Val::from(authority),
+                    Val::from("/empty"),
+                    timeout.map_or(Val::Option(None), |timeout| {
+                        Val::Option(Some(Box::new(Val::from(
+                            u64::try_from(timeout.as_nanos()).unwrap(),
+                        ))))
+                    }),
+                ],
+            ),
+        )
+        .await
+    })
+    .map(|result| result.unwrap())
 }
 
 struct RewriteHeader(Arc<Mutex<Option<Vals>>>);
@@ -98,6 +140,129 @@ fn send_exposes_policy_context_and_applies_header_rewrites() {
             Val::from(b"visible".to_vec()),
         ])])
     );
+}
+
+#[test]
+fn empty_get_completes() {
+    let server = HttpServer::start(b"empty-body-response");
+    let app = load(SendPolicy { deny: false }, true);
+
+    let result = empty_request(&app, server.authority(), None).expect("empty GET did not complete");
+
+    assert_eq!(result, [Val::from("200:empty-body-response")]);
+    assert!(server.finish().starts_with("GET /empty HTTP/1.1\r\n"));
+}
+
+#[test]
+fn empty_get_observes_response_body_timeout() {
+    let server = HttpServer::stall_after_headers();
+    let app = load(SendPolicy { deny: false }, true);
+
+    let result = empty_request(&app, server.authority(), Some(Duration::from_millis(500)))
+        .expect("empty GET hung before observing its response-body timeout");
+
+    assert!(matches!(
+        &result[..],
+        [Val::String(message)] if message.contains("ConnectionReadTimeout")
+    ));
+    assert!(server.finish().starts_with("GET /empty HTTP/1.1\r\n"));
+}
+
+#[test]
+fn early_response_does_not_silently_truncate_request_body() {
+    const BODY_SIZE: usize = 512 * 1024;
+
+    let server = HttpServer::respond_before_request_body();
+    let app = load(SendPolicy { deny: false }, true);
+
+    let result = block_on(app.call(
+        "http",
+        EXPORT,
+        "large-request",
+        vec![Val::from(server.authority()), Val::from("/large")],
+    ))
+    .unwrap();
+    let request = server.finish();
+    let body = request.split_once("\r\n\r\n").unwrap().1.as_bytes();
+
+    assert!(
+        result == [Val::from("sent")] && body == vec![b'x'; BODY_SIZE]
+            || matches!(&result[..], [Val::String(message)] if message.contains("ConnectionTerminated"))
+    );
+}
+
+#[test]
+fn dropping_response_closes_its_connection() {
+    let server = HttpServer::stall_after_headers();
+    let app = load(SendPolicy { deny: false }, true);
+    let runtime = runtime();
+
+    let result = runtime
+        .block_on(app.call(
+            "http",
+            EXPORT,
+            "drop-response",
+            vec![Val::from(server.authority()), Val::from("/drop")],
+        ))
+        .unwrap();
+
+    assert_eq!(result, [Val::from("dropped")]);
+    assert!(runtime.block_on(connection_closes(&server)));
+    assert!(server.finish().starts_with("GET /drop HTTP/1.1\r\n"));
+}
+
+#[test]
+fn dropping_store_closes_an_in_flight_response() {
+    let server = HttpServer::stall_after_headers();
+    let app = load(SendPolicy { deny: false }, true);
+    let runtime = runtime();
+
+    let result = runtime
+        .block_on(app.call(
+            "http",
+            EXPORT,
+            "leak-response",
+            vec![Val::from(server.authority()), Val::from("/leak")],
+        ))
+        .unwrap();
+
+    assert_eq!(result, [Val::from("leaked")]);
+    assert!(runtime.block_on(connection_closes(&server)));
+    assert!(server.finish().starts_with("GET /leak HTTP/1.1\r\n"));
+}
+
+#[test]
+fn cancelling_call_closes_its_connection() {
+    let server = HttpServer::stall_after_headers();
+    let app = load(SendPolicy { deny: false }, true);
+
+    let runtime = runtime();
+    runtime.block_on(async {
+        let mut call = Box::pin(app.call(
+            "http",
+            EXPORT,
+            "hold-response",
+            vec![Val::from(server.authority()), Val::from("/hold")],
+        ));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !server.has_sent_headers() {
+                tokio::select! {
+                    result = &mut call => panic!("call completed while waiting for headers: {result:?}"),
+                    () = tokio::time::sleep(Duration::from_millis(10)) => {}
+                }
+            }
+            tokio::select! {
+                result = &mut call => panic!("call completed while holding the response: {result:?}"),
+                () = tokio::time::sleep(Duration::from_millis(500)) => {}
+            }
+        })
+        .await
+        .expect("guest did not receive the response headers");
+        drop(call);
+        assert!(connection_closes(&server).await);
+    });
+
+    assert!(server.finish().starts_with("GET /hold HTTP/1.1\r\n"));
 }
 
 fn variant(case: &str) -> Val {
