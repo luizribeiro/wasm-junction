@@ -1,0 +1,15 @@
+[workspace]
+resolver = "3"
+members = ["notes-tools"]
+
+[workspace.package]
+edition = "2024"
+version = "0.0.0"
+publish = false
+
+[workspace.dependencies]
+wasip3 = "=0.9.0"
+wit-bindgen = { version = "=0.62.0", default-features = false, features = ["async", "async-spawn", "macros", "realloc"] }
+
+[profile.release]
+panic = "abort"

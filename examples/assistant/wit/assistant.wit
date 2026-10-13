@@ -1,0 +1,40 @@
+package example:assistant@0.1.0;
+
+interface notes-tools {
+  list-notes: async func() -> result<list<string>, string>;
+  read-note: async func(path: string) -> result<string, string>;
+  write-note: async func(path: string, text: string) -> result<_, string>;
+}
+
+interface web-tools {
+  fetch: async func(url: string) -> result<string, string>;
+}
+
+interface agent {
+  enum role {
+    system,
+    user,
+    assistant,
+  }
+
+  record message {
+    role: role,
+    content: string,
+  }
+
+  answer: async func(conversation: list<message>) -> result<string, string>;
+}
+
+world notes-tools-component {
+  export notes-tools;
+}
+
+world web-tools-component {
+  export web-tools;
+}
+
+world agent-component {
+  import notes-tools;
+  import web-tools;
+  export agent;
+}
