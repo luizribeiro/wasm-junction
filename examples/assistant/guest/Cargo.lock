@@ -318,6 +318,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "weather-tools-guest"
+version = "0.0.0"
+dependencies = [
+ "http-error",
+ "wasip3",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "web-tools-guest"
 version = "0.0.0"
 dependencies = [

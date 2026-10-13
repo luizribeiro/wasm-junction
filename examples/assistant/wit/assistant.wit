@@ -10,6 +10,10 @@ interface web-tools {
   fetch: async func(url: string) -> result<string, string>;
 }
 
+interface weather-tools {
+  get-weather: async func(city: string) -> result<string, string>;
+}
+
 interface agent {
   enum role {
     system,
@@ -31,6 +35,10 @@ world notes-tools-component {
 
 world web-tools-component {
   export web-tools;
+}
+
+world weather-tools-component {
+  export weather-tools;
 }
 
 world agent-component {

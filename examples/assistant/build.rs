@@ -8,9 +8,10 @@ use std::path::PathBuf;
 use std::process::Command;
 
 const TARGET: &str = "wasm32-unknown-unknown";
-const COMPONENTS: [(&str, &str); 3] = [
+const COMPONENTS: [(&str, &str); 4] = [
     ("agent_guest.wasm", "agent.wasm"),
     ("notes_tools_guest.wasm", "notes-tools.wasm"),
+    ("weather_tools_guest.wasm", "weather-tools.wasm"),
     ("web_tools_guest.wasm", "web-tools.wasm"),
 ];
 
