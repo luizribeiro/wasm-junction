@@ -51,6 +51,7 @@ async fn repl(
     let (consent, mut requests) = mpsc::unbounded_channel();
     let policy = Policy::load(
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("policy.rego"),
+        settings.model_host(),
         &settings.private_data_hosts,
     )
     .map_err(std::io::Error::other)?;

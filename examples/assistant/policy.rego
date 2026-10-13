@@ -4,8 +4,10 @@ secret_paths := {"private/passwords.md"}
 private_prefix := "private/"
 drafts_prefix := "drafts/"
 allowed_hosts := {
+	"agent": {data.model_host},
 	"web-tools": {"*"},
 	"weather-tools": {"api.open-meteo.com"},
+	"notes-tools": set(),
 }
 
 deny contains sprintf("%s may not read notes", [input.event.caller]) if {
@@ -31,9 +33,16 @@ deny contains sprintf("%s is outside %s", [path, drafts_prefix]) if {
 deny contains sprintf("%s may not send to %s", [caller, host]) if {
 	host := sending(input.event)
 	caller := input.event.caller
+	not host_allowed(caller, host)
+}
+
+host_allowed(caller, host) if {
 	hosts := allowed_hosts[caller]
-	not "*" in hosts
-	not host in hosts
+	"*" in hosts
+}
+
+host_allowed(caller, host) if {
+	host in allowed_hosts[caller]
 }
 
 ask contains reason if {

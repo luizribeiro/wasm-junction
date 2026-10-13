@@ -29,7 +29,7 @@ fn builds_generic_events_with_fixed_structured_text() {
     );
 
     let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let policy = Policy::load(&directory.join("policy.rego"), &[]).unwrap();
+    let policy = Policy::load(&directory.join("policy.rego"), "model.example", &[]).unwrap();
     assert!(matches!(policy.decide(&event), Ok(Verdict::Allow(_))));
     policy.approve(&event).unwrap();
 }
@@ -104,7 +104,7 @@ fn weather_tools_cannot_write_notes() {
 }
 
 #[test]
-fn confines_files_and_hosts_to_their_declared_tools() {
+fn allowed_hosts_deny_by_default() {
     let policy = load_policy(&[]);
     assert_eq!(
         policy
@@ -136,27 +136,37 @@ fn confines_files_and_hosts_to_their_declared_tools() {
         policy.decide(&http_send("web-tools", "anywhere.test")),
         Ok(Verdict::Allow(_))
     ));
+    for caller in ["notes-tools", "unknown-tools"] {
+        assert!(matches!(
+            policy.decide(&http_send(caller, "anywhere.test")),
+            Ok(Verdict::Deny(_))
+        ));
+    }
+    assert!(matches!(
+        policy.decide(&http_send("agent", "outside.example")),
+        Ok(Verdict::Deny(_))
+    ));
 }
 
 #[test]
 fn private_send_exceptions_use_history_trust_and_approval() {
     let private = open_at("private/diary.md", &["read"]);
-    let outside = http_send("agent", "outside.example");
-    let reason = "send to outside.example with private/diary.md in the conversation";
+    let outside = http_send("agent", "model.example");
+    let reason = "send to model.example with private/diary.md in the conversation";
 
     let policy = load_policy(&[]);
     assert!(matches!(policy.decide(&private), Ok(Verdict::Allow(_))));
     assert_eq!(
         policy.decide(&outside).unwrap(),
         Verdict::Ask(Why {
-            effect: "send outside.example".into(),
+            effect: "send model.example".into(),
             reasons: vec![reason.into()],
         })
     );
     policy.approve(&outside).unwrap();
     assert_eq!(
         policy.decide(&outside).unwrap(),
-        Verdict::Allow("send outside.example".into())
+        Verdict::Allow("send model.example".into())
     );
 
     let trusted = load_policy(&["model.example"]);
@@ -170,7 +180,7 @@ fn private_send_exceptions_use_history_trust_and_approval() {
 
     assert_eq!(
         load_policy(&[]).decide(&outside).unwrap(),
-        Verdict::Allow("send outside.example".into())
+        Verdict::Allow("send model.example".into())
     );
 }
 
@@ -250,6 +260,7 @@ fn load_policy(trusted_hosts: &[&str]) -> Policy {
     let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     Policy::load(
         &directory.join("policy.rego"),
+        "model.example",
         &trusted_hosts
             .iter()
             .map(|host| (*host).to_owned())
@@ -281,7 +292,8 @@ async fn middleware_owns_policy_and_handles_consent() {
 async fn consent_result(answer: Option<bool>) -> Result<Vec<Val>, wasm_junction::CallError> {
     let (sender, mut requests) = mpsc::unbounded_channel();
     let console = Console::new(Cursor::new(Vec::<u8>::new()), std::io::sink());
-    let middleware = PolicyMiddleware::new(load_policy(&[]), console, "model.test".into(), false);
+    let middleware =
+        PolicyMiddleware::new(load_policy(&[]), console, "model.example".into(), false);
     let middleware = if answer.is_some() {
         middleware.with_consent(sender)
     } else {
@@ -293,7 +305,7 @@ async fn consent_result(answer: Option<bool>) -> Result<Vec<Val>, wasm_junction:
             stub_next,
         )
         .await?;
-    let send = middleware.enforce(http_call("agent", "outside.test"), stub_next);
+    let send = middleware.enforce(http_call("agent", "model.example"), stub_next);
     if let Some(answer) = answer {
         let reply = async move {
             requests.recv().await.unwrap().answer.send(answer).unwrap();

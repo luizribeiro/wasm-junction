@@ -58,7 +58,11 @@ pub(super) struct Decision {
 }
 
 impl Policy {
-    pub(crate) fn load(path: &Path, private_data_hosts: &[String]) -> Result<Self, String> {
+    pub(crate) fn load(
+        path: &Path,
+        model_host: &str,
+        private_data_hosts: &[String],
+    ) -> Result<Self, String> {
         let mut engine = Engine::new();
         for policy in [path.to_owned(), path.with_file_name("wasi.rego")] {
             let source = std::fs::read_to_string(&policy).map_err(|error| error.to_string())?;
@@ -69,7 +73,11 @@ impl Policy {
         engine
             .add_data(
                 Value::from_json_str(
-                    &serde_json::json!({"private_data_hosts": private_data_hosts}).to_string(),
+                    &serde_json::json!({
+                        "model_host": model_host,
+                        "private_data_hosts": private_data_hosts,
+                    })
+                    .to_string(),
                 )
                 .map_err(|error| error.to_string())?,
             )
