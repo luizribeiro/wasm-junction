@@ -7,7 +7,7 @@ mod support;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Barrier, Mutex};
 
 use support::HttpServer;
 use wasm_junction::{Access, App, Call, CallError, Component, Middleware, Next, Val, Vals};
@@ -42,7 +42,10 @@ struct CallFact {
     context: Option<String>,
 }
 
-struct Policy;
+#[derive(Default)]
+struct Policy {
+    rendezvous: Option<Arc<Barrier>>,
+}
 
 impl Middleware for Policy {
     async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
@@ -56,10 +59,11 @@ impl Middleware for Policy {
                 context: policy_context(&call),
             });
         }
-        if call.interface.as_ref() == HTTP
-            && call.function.as_ref() == "handle"
-            && facts.as_ref().is_some_and(private_note_was_read)
-        {
+        let outgoing = call.interface.as_ref() == HTTP && call.function.as_ref() == "handle";
+        if outgoing && let Some(rendezvous) = &self.rendezvous {
+            rendezvous.wait();
+        }
+        if outgoing && facts.as_ref().is_some_and(private_note_was_read) {
             let reason = "tainted by `/notes/private/diary.md`".to_owned();
             facts.unwrap().0.lock().unwrap().refusal = Some(reason.clone());
             return Err(CallError::refused(reason));
@@ -165,7 +169,7 @@ fn block_on<F: Future>(future: F) -> F::Output {
 #[test]
 fn facts_span_routed_component_and_wasi_calls() {
     let notes = NotesDirectory::new();
-    let (_app, agent) = loaded(&notes, Policy);
+    let (_app, agent) = loaded(&notes, Policy::default());
     let facts = Facts::default();
     let server = HttpServer::start(b"ignored");
     let authority = server.authority();
@@ -207,11 +211,11 @@ fn facts_span_routed_component_and_wasi_calls() {
 #[test]
 fn facts_from_a_routed_read_refuse_a_later_http_call() {
     let notes = NotesDirectory::new();
-    let (_app, assistant) = loaded(&notes, Policy);
+    let (_app, agent) = loaded(&notes, Policy::default());
     let facts = Facts::default();
 
     let result = block_on(
-        assistant
+        agent
             .with(facts.clone())
             .run("/notes/private/diary.md", "private.example"),
     )
@@ -223,7 +227,56 @@ fn facts_from_a_routed_read_refuse_a_later_http_call() {
     );
 
     let server = HttpServer::start(b"ignored");
-    let result = block_on(assistant.run("/notes/private/diary.md", &server.authority())).unwrap();
+    let result = block_on(agent.run("/notes/private/diary.md", &server.authority())).unwrap();
     assert_eq!(result, "private note|sent");
     assert!(server.finish().starts_with("GET /research HTTP/1.1\r\n"));
+}
+
+#[test]
+fn concurrent_requests_keep_fact_stores_isolated() {
+    let notes = NotesDirectory::new();
+    let policy = Policy {
+        rendezvous: Some(Arc::new(Barrier::new(2))),
+    };
+    let (_app, agent) = loaded(&notes, policy);
+    let private_facts = Facts::default();
+    let public_facts = Facts::default();
+    let private = agent.with(private_facts.clone());
+    let public = agent.with(public_facts.clone());
+    let server = HttpServer::start(b"ignored");
+    let public_authority = server.authority();
+
+    let (private_result, public_result) = std::thread::scope(|scope| {
+        let private = scope
+            .spawn(|| block_on(private.run("/notes/private/diary.md", "private.example")).unwrap());
+        let public = scope
+            .spawn(|| block_on(public.run("/notes/public/brief.md", &public_authority)).unwrap());
+        (private.join().unwrap(), public.join().unwrap())
+    });
+
+    assert_eq!(private_result, "private note|denied");
+    assert_eq!(public_result, "public note|sent");
+    assert!(server.finish().starts_with("GET /research HTTP/1.1\r\n"));
+    assert!(private_note_was_read(&private_facts));
+    assert!(!private_note_was_read(&public_facts));
+    let private = private_facts.0.lock().unwrap();
+    let public = public_facts.0.lock().unwrap();
+    assert_eq!(
+        private.refusal.as_deref(),
+        Some("tainted by `/notes/private/diary.md`")
+    );
+    assert_eq!(public.refusal, None);
+    assert!(private.calls.iter().any(|fact| {
+        fact.interface == HTTP && fact.context.as_deref() == Some("private.example")
+    }));
+    assert!(public.calls.iter().any(|fact| {
+        fact.interface == FILESYSTEM && fact.context.as_deref() == Some("/notes/public/brief.md")
+    }));
+    assert!(public.calls.iter().any(|fact| {
+        fact.interface == HTTP && fact.context.as_deref() == Some(&public_authority)
+    }));
+    assert!(!public.calls.iter().any(|fact| {
+        fact.context.as_deref() == Some("/notes/private/diary.md")
+            || fact.context.as_deref() == Some("private.example")
+    }));
 }
