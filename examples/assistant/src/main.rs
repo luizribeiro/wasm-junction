@@ -141,3 +141,66 @@ async fn repl(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use super::{Server, Settings, repl};
+    use crate::bindings::{notes_tools, web_tools};
+    use wasm_junction::{Call, CallError, Middleware, Next, Vals};
+
+    #[derive(Clone, Default)]
+    struct Reached {
+        notes_tools: Arc<AtomicBool>,
+        web_tools: Arc<AtomicBool>,
+    }
+
+    impl Middleware for Reached {
+        async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+            if call.interface.as_ref() == notes_tools::INTERFACE {
+                self.notes_tools.store(true, Ordering::Relaxed);
+            }
+            if call.interface.as_ref() == web_tools::INTERFACE {
+                self.web_tools.store(true, Ordering::Relaxed);
+            }
+            next.run(call).await
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn chats_with_configured_endpoint() {
+        if std::env::var_os("OPENAI_BASE_URL").is_none() {
+            eprintln!("skipped: set OPENAI_BASE_URL to run the assistant end-to-end test");
+            return;
+        }
+        let settings = Settings::read().unwrap().unwrap();
+        let server = Server::start().unwrap();
+        let input = format!(
+            "Use your tools to read research.md and fetch {}, then summarize both.\n\n",
+            server.url("/research")
+        );
+        let reached = Reached::default();
+        let observer = reached.clone();
+        let mut output = Vec::new();
+        repl(
+            &settings,
+            &server,
+            Cursor::new(input),
+            &mut output,
+            |builder| builder.middleware(observer),
+        )
+        .await
+        .unwrap();
+        let output = String::from_utf8(output).unwrap();
+        let reply = output
+            .split_once("assistant> ")
+            .and_then(|(_, reply)| reply.lines().next())
+            .unwrap();
+        assert!(!reply.trim().is_empty());
+        assert!(reached.notes_tools.load(Ordering::Relaxed));
+        assert!(reached.web_tools.load(Ordering::Relaxed));
+    }
+}
