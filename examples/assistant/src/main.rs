@@ -5,9 +5,9 @@
 
 mod bindings;
 mod console;
+mod fixtures;
 mod path;
 mod policy;
-mod server;
 mod settings;
 
 use std::error::Error;
@@ -16,8 +16,8 @@ use std::path::Path;
 
 use bindings::agent::{Agent, Message, Role};
 use console::Console;
+use fixtures::Fixtures;
 use policy::Policy;
-use server::Server;
 use settings::Settings;
 use tokio::sync::mpsc;
 use wasm_junction::{Access, AppBuilder, Component, WasiSettings, wasi};
@@ -33,10 +33,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         println!("Set OPENAI_BASE_URL, OPENAI_API_KEY, and OPENAI_MODEL.");
         return Ok(());
     };
-    let server = Server::start()?;
+    let fixtures = Fixtures::start()?;
     repl(
         &settings,
-        &server,
+        &fixtures,
         Console::new(BufReader::new(std::io::stdin()), std::io::stdout()),
         |builder| builder,
     )
@@ -45,7 +45,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 async fn repl(
     settings: &Settings,
-    server: &Server,
+    fixtures: &Fixtures,
     console: Console,
     configure: impl FnOnce(AppBuilder) -> AppBuilder,
 ) -> Result<(), Box<dyn Error>> {
@@ -82,8 +82,7 @@ async fn repl(
     app.check()?;
     let agent = app.get::<Agent>("agent")?;
 
-    console.line(&format!("Research page: {}", server.url("/research")))?;
-    console.line(&format!("Injected page: {}", server.url("/injected")))?;
+    console.line(&format!("Research page: {}", fixtures.url("/research")))?;
     let mut conversation = Vec::new();
     loop {
         console.print("you> ")?;

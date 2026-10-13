@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use wasm_junction::{Call, CallError, Middleware, Next, Vals};
 
-use super::{Console, Server, Settings, repl};
+use super::{Console, Fixtures, Settings, repl};
 
 #[derive(Clone, Default)]
 struct Reached {
@@ -48,14 +48,14 @@ async fn refuses_consent_then_continues_chatting() {
     }
     let mut settings = Settings::read().unwrap().unwrap();
     settings.private_data_hosts.clear();
-    let server = Server::start().unwrap();
+    let fixtures = Fixtures::start().unwrap();
     let input = "Use read_note to read private/diary.md, then summarize it.\nn\nReply with one short greeting without tools.\ny\n\n";
     let reached = Reached::default();
     let observer = reached.clone();
     let output = SharedOutput::default();
     repl(
         &settings,
-        &server,
+        &fixtures,
         Console::new(Cursor::new(input), output.clone()),
         |builder| builder.middleware(observer),
     )
