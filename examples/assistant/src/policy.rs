@@ -1,11 +1,15 @@
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use regorus::{Engine, Value};
+use tokio::sync::mpsc;
+
+use crate::console::ConsentRequest;
 
 mod decision;
 mod event;
+mod middleware;
 
 use decision::evaluate;
 
@@ -34,12 +38,15 @@ pub(crate) struct Why {
 #[derive(Clone)]
 pub(crate) struct Policy {
     inner: Arc<Mutex<State>>,
+    consent: Option<mpsc::UnboundedSender<ConsentRequest>>,
+    base: PathBuf,
 }
 
 pub(super) struct State {
     engine: Engine,
     history: Vec<Event>,
     approved: BTreeSet<String>,
+    trace: Vec<String>,
 }
 
 pub(super) struct Decision {
@@ -70,8 +77,16 @@ impl Policy {
                 engine,
                 history: Vec::new(),
                 approved: BTreeSet::new(),
+                trace: Vec::new(),
             })),
+            consent: None,
+            base: path.parent().unwrap_or_else(|| Path::new(".")).to_owned(),
         })
+    }
+
+    pub(crate) fn with_consent(mut self, consent: mpsc::UnboundedSender<ConsentRequest>) -> Self {
+        self.consent = Some(consent);
+        self
     }
 
     pub(crate) fn decide(&self, event: &Event) -> Result<Verdict, String> {
@@ -105,6 +120,11 @@ impl Policy {
         state.approved.extend(decision.reasons);
         state.history.push(event.clone());
         Ok(())
+    }
+
+    pub(crate) fn take_trace(&self) -> Result<Vec<String>, String> {
+        let mut state = self.inner.lock().map_err(|error| error.to_string())?;
+        Ok(std::mem::take(&mut state.trace))
     }
 }
 

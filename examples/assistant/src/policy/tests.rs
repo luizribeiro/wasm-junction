@@ -1,5 +1,6 @@
 use std::fs;
 
+use tokio::sync::mpsc;
 use wasm_junction::{Call, Caller, Val};
 
 use super::event::value_text;
@@ -30,6 +31,13 @@ fn builds_generic_events_with_fixed_structured_text() {
     let policy = Policy::load(&directory.join("policy.rego"), &[]).unwrap();
     assert!(matches!(policy.decide(&event), Ok(Verdict::Allow(_))));
     policy.approve(&event).unwrap();
+}
+
+#[test]
+fn accepts_a_consent_channel() {
+    let (sender, _requests) = mpsc::unbounded_channel();
+    let policy = load_policy(&[]).with_consent(sender);
+    assert!(policy.take_trace().unwrap().is_empty());
 }
 
 #[test]

@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::future::Future;
 use std::io::{BufRead, Write};
 use std::sync::{Arc, Mutex};
 
@@ -43,5 +45,65 @@ impl Console {
 
     pub(crate) fn line(&self, text: &str) -> std::io::Result<()> {
         self.print(&format!("{text}\n"))
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn wait<T>(
+        &self,
+        future: impl Future<Output = T>,
+        requests: &mut mpsc::UnboundedReceiver<ConsentRequest>,
+    ) -> std::io::Result<T> {
+        tokio::pin!(future);
+        loop {
+            tokio::select! {
+                result = &mut future => return Ok(result),
+                Some(request) = requests.recv() => self.answer(request).await?,
+            }
+        }
+    }
+
+    #[cfg(test)]
+    async fn answer(&self, request: ConsentRequest) -> std::io::Result<()> {
+        self.print(&format!(
+            "Allow {}? {} [y/N] ",
+            request.effect, request.reason
+        ))?;
+        let answer = self.read_line().await?;
+        let allowed = matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes");
+        let _ = request.answer.send(allowed);
+        Ok(())
+    }
+}
+#[cfg(test)]
+use tokio::sync::{mpsc, oneshot};
+
+#[cfg(test)]
+pub(crate) struct ConsentRequest {
+    pub(crate) effect: String,
+    pub(crate) reason: String,
+    pub(crate) answer: oneshot::Sender<bool>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ConsentRequest, Console};
+    use std::io::Cursor;
+    use tokio::sync::{mpsc, oneshot};
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn waits_and_answers_consent() {
+        let console = Console::new(Cursor::new("y\n"), std::io::sink());
+        let (_sender, mut requests) = mpsc::unbounded_channel();
+        assert_eq!(console.wait(async { 7 }, &mut requests).await.unwrap(), 7);
+        let (answer, reply) = oneshot::channel();
+        console
+            .answer(ConsentRequest {
+                effect: "write note".into(),
+                reason: "after fetch".into(),
+                answer,
+            })
+            .await
+            .unwrap();
+        assert!(reply.await.unwrap());
     }
 }
