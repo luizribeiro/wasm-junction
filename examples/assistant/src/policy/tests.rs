@@ -76,7 +76,7 @@ fn real_call_shapes_reach_the_expected_rules() {
         policy.decide(&outside).unwrap(),
         Verdict::Deny(Why {
             effect: "write private/output.md".into(),
-            reasons: vec!["private/output.md is outside notes/".into()],
+            reasons: vec!["private/output.md is outside drafts/".into()],
         })
     );
 }
@@ -86,7 +86,7 @@ fn matches_filesystem_flags_exactly() {
     let policy = load_policy(&[]);
     assert_eq!(
         policy
-            .decide(&open_at("notes/draft.md", &["requested-write-sync"]))
+            .decide(&open_at("drafts/draft.md", &["requested-write-sync"]))
             .unwrap(),
         Verdict::Allow(String::new())
     );
@@ -176,7 +176,7 @@ fn private_send_exceptions_use_history_trust_and_approval() {
 
 #[test]
 fn writes_ask_only_after_web_fetches() {
-    let write = open_at("notes/summary.md", &["write"]);
+    let write = open_at("drafts/summary.md", &["write"]);
 
     let fetched = load_policy(&[]);
     assert!(matches!(
@@ -186,8 +186,8 @@ fn writes_ask_only_after_web_fetches() {
     assert_eq!(
         fetched.decide(&write).unwrap(),
         Verdict::Ask(Why {
-            effect: "write notes/summary.md".into(),
-            reasons: vec!["write notes/summary.md after fetching from news.example".into()],
+            effect: "write drafts/summary.md".into(),
+            reasons: vec!["write drafts/summary.md after fetching from news.example".into()],
         })
     );
 
@@ -198,7 +198,7 @@ fn writes_ask_only_after_web_fetches() {
     ));
     assert_eq!(
         model.decide(&write).unwrap(),
-        Verdict::Allow("write notes/summary.md".into())
+        Verdict::Allow("write drafts/summary.md".into())
     );
 }
 

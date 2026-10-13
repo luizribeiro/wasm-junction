@@ -2,7 +2,7 @@ package assistant
 
 secret_paths := {"private/passwords.md"}
 private_prefix := "private/"
-notes_prefix := "notes/"
+drafts_prefix := "drafts/"
 allowed_hosts := {
 	"web-tools": {"*"},
 	"weather-tools": {"api.open-meteo.com"},
@@ -23,9 +23,9 @@ deny contains sprintf("%s is secret", [path]) if {
 	path in secret_paths
 }
 
-deny contains sprintf("%s is outside %s", [path, notes_prefix]) if {
+deny contains sprintf("%s is outside %s", [path, drafts_prefix]) if {
 	path := writing(input.event)
-	not startswith(path, notes_prefix)
+	not startswith(path, drafts_prefix)
 }
 
 deny contains sprintf("%s may not send to %s", [caller, host]) if {
