@@ -328,9 +328,21 @@ fn discarded_request(port: u16, request: &'static [u8]) -> std::thread::JoinHand
     client
         .set_read_timeout(Some(std::time::Duration::from_secs(3)))
         .unwrap();
-    client.write_all(request).unwrap();
-    client.shutdown(Shutdown::Write).unwrap();
     std::thread::spawn(move || {
+        let refused = |error: &std::io::Error| {
+            matches!(
+                error.kind(),
+                std::io::ErrorKind::NotConnected
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::BrokenPipe
+            )
+        };
+        if let Err(error) = client.write_all(request) {
+            return refused(&error);
+        }
+        if let Err(error) = client.shutdown(Shutdown::Write) {
+            return refused(&error);
+        }
         let mut response = Vec::new();
         match client.read_to_end(&mut response) {
             Ok(_) => response.is_empty(),
