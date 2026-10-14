@@ -16,9 +16,12 @@ call, ask you first, or deny it.
 
 The policy is [`policy.rego`](policy.rego). It works from what the components actually do, not
 from what the model or a tool says it will do. The host remembers which private paths and
-untrusted sources contributed content to the conversation. A second file,
-[`wasi.rego`](wasi.rego), translates raw WASI calls into the words the policy uses (`reading`,
-`writing`, `sending`) and records what each turn added to the conversation.
+untrusted sources contributed content to the conversation. Those choices live in
+[`policy.rego`](policy.rego); [`wasi.rego`](wasi.rego) contains the mechanics that turn each raw
+call into one request with an action such as `fs.read`, `fs.write`, `fs.list`, `http.request` or
+`tool.call`. An `allow` names the exact file, host or tool access available to a component. A
+matching `deny` wins first. An `ask` can add consent only to a call that is otherwise allowed,
+and every call without an `allow` is denied.
 
 Below, we run the agent and go through four kinds of problem the policy deals with: privacy,
 prompt injection, access control and a malicious component.
@@ -72,18 +75,18 @@ This is the rule that asked:
 
 ```rego
 ask contains reason if {
-	sending(input.event)
-	not private_data_host(input.event)
+	request.action == "http.request"
+	not private_data_host(request)
 	some path in input.label.private
 	reason := sprintf("conversation includes %s", [path])
 }
 ```
 
 In words: before any component sends while the conversation holds private content, ask first.
-`PRIVATE_DATA_HOSTS` lists hosts that may receive private notes from any component without asking;
-the component must still be permitted to contact the host by `allowed_hosts`. A yes for the
-agent's model request is remembered for the session. A yes for a tool request or write authorizes
-only that call.
+`PRIVATE_DATA_HOSTS` applies to any component's request to a listed host, without asking; the
+component must still be permitted to contact that host by `allowed_hosts`. A yes for the agent's
+model request is remembered for the session. A yes for a tool request or write authorizes only
+that call, after the policy checks it again.
 
 ## Prompt injection
 
@@ -114,7 +117,7 @@ say no.
 
 ```rego
 ask contains reason if {
-	writing(input.event)
+	writing(request)
 	some source in input.label.untrusted
 	reason := sprintf("conversation includes content from %s", [source])
 }
@@ -137,18 +140,20 @@ you> Write "hello" to private/output.md.
 assistant> I wasn't able to write to `private/output.md` — the write was rejected with an access error, so that path is restricted for me. […]
 ```
 
-There's no question this time. These are `deny` rules, and a `deny` always wins over `ask` and
-over anything you approved earlier:
+There's no question this time. The passwords rule is an explicit `deny`, which always wins over
+`ask` and over anything you approved earlier. The other call falls through to denial because the
+only write `allow` is for `notes-tools` inside `drafts`:
 
 ```rego
-deny contains sprintf("%s is secret", [path]) if {
-	path := reading(input.event)
-	path in secret_paths
+deny contains sprintf("%s is secret", [request.path]) if {
+	reading(request)
+	request.path in secret_paths
 }
 
-deny contains sprintf("%s is outside %s", [path, drafts_prefix]) if {
-	path := writing(input.event)
-	not startswith(path, drafts_prefix)
+allow if {
+	request.action == "fs.write"
+	request.caller == "notes-tools"
+	under(request.path, drafts_dir)
 }
 ```
 
@@ -174,24 +179,24 @@ file the component opens and each host it contacts. The diary read and the hidde
 refused, and the real weather request goes through: the answer is the actual forecast.
 
 ```rego
-deny contains sprintf("%s may not read notes", [input.event.caller]) if {
-	reading(input.event)
-	input.event.caller != "notes-tools"
+allow if {
+	request.action == "fs.read"
+	request.caller == "notes-tools"
 }
 
-deny contains sprintf("%s may not send to %s", [caller, host]) if {
-	host := sending(input.event)
-	caller := input.event.caller
-	not host_allowed(caller, host)
+allow if {
+	request.action == "http.request"
+	host_allowed(allowed_hosts[request.caller], request.host)
 }
 ```
 
-The first rule says only `notes-tools` may read notes. The policy applies the same restriction to
-writes, with a denial that names the component that tried. The second rule denies network access
-unless the host appears for that component in `allowed_hosts`: the agent may contact only the
-configured model host, `web-tools` may contact any host, `weather-tools` only
-`api.open-meteo.com`, and `notes-tools` none. This answers which hosts a component may contact;
-`PRIVATE_DATA_HOSTS` separately answers which hosts may receive private data without asking.
+The first rule allows only `notes-tools` to read notes; the default denial names the component and
+path for every other attempt. Writes and directory listings have their own allow rules. The second
+rule allows network access only when the host appears for that component in `allowed_hosts`: the
+agent may contact only the configured model host, `web-tools` may contact any host,
+`weather-tools` only `api.open-meteo.com`, and `notes-tools` none. This answers which hosts a
+component may contact; `PRIVATE_DATA_HOSTS` separately answers whether any component's otherwise
+allowed request to a listed host may carry private data without asking.
 
 ## Try changing the policy
 
@@ -209,15 +214,23 @@ It keeps things simple on purpose:
 
 - **Sensitivity covers whole turns.** Parallel tool calls in one turn share what the policy knows;
   the example does not track individual values within a turn.
+- **Allowed destinations can still receive encoded data.** A tool may encode data into a request
+  to one of its allowed hosts while the conversation holds nothing marked private.
+- **Listings and metadata are not labelled.** Only opened file paths contribute sensitivity to
+  the conversation; directory entries and metadata do not.
 - **Untrusted sends ask.** A stricter policy would refuse model-chosen sends after untrusted
   content instead of asking the user.
 - **Sensitive history only accumulates.** The conversation cannot be made clean again except by
   restarting it.
+- **Model consent lasts for the session.** One approval for the agent's model request is remembered
+  until the process exits.
 - **Decisions are allow, ask or deny.** Middleware could also change a call, for example to
   redact text, but this example doesn't.
 - **The policy sees real paths.** Before deciding, the host cleans up each path and follows
   symlinks inside the notes folder, so `./private/../private/diary.md`, or a symlink to the
   diary, is still the diary.
+- **Subfolder handles lose context.** An open relative to a subfolder descriptor is judged from
+  the root reported by the WASI gate, a framework limitation tracked separately.
 
 ## Settings
 
@@ -225,11 +238,11 @@ It keeps things simple on purpose:
 
 - `OPENAI_BASE_URL`: the API's base URL, including its prefix but not `/chat/completions`;
 - `OPENAI_API_KEY` and `OPENAI_MODEL`;
-- `PRIVATE_DATA_HOSTS`: hosts that may receive private notes without asking, comma-separated
-  (with the port if the URL has one).
+- `PRIVATE_DATA_HOSTS`: hosts that may receive private notes from any component's request without
+  asking, comma-separated (with the port if the URL has one).
 
 The policy's `allowed_hosts` says which hosts each component may contact at all;
 `PRIVATE_DATA_HOSTS` is the separate deployment setting for which hosts may receive private data
-without asking.
+from any component's request without asking.
 
 Environment variables override the file. An empty line or Ctrl-D ends the chat.
