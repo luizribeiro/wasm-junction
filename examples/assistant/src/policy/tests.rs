@@ -224,10 +224,6 @@ fn denies_unlisted_filesystem_and_http_calls_by_name() {
             "[method]descriptor.rename-at",
         ),
         ("wasi:filesystem/types@0.3.0", "[method]descriptor.link-at"),
-        (
-            "wasi:filesystem/types@0.3.0",
-            "[method]descriptor.unlink-file-at",
-        ),
         ("example:unknown/interface@1.0.0", "surprise"),
     ] {
         let call = format!("{interface}.{function}");
@@ -239,6 +235,51 @@ fn denies_unlisted_filesystem_and_http_calls_by_name() {
             })
         );
     }
+}
+
+#[test]
+fn names_denied_filesystem_removals_and_creation() {
+    let policy = load_policy(&[]);
+    for (function, path, effect) in [
+        (
+            "[method]descriptor.unlink-file-at",
+            "private/diary.md",
+            "delete private/diary.md",
+        ),
+        (
+            "[method]descriptor.remove-directory-at",
+            "private",
+            "delete private",
+        ),
+        (
+            "[method]descriptor.create-directory-at",
+            "new",
+            "create directory new",
+        ),
+    ] {
+        let event = filesystem_event(
+            "notes-tools",
+            function,
+            vec!["descriptor".into(), path.into(), "/notes".into()],
+        );
+        assert_eq!(
+            policy.decide(&event).unwrap(),
+            Verdict::Deny(Why {
+                effect: effect.into(),
+                reasons: vec![format!("notes-tools may not {effect}")],
+            })
+        );
+    }
+}
+
+#[test]
+fn refuses_unresolved_removal_paths() {
+    let call = filesystem_call_for(
+        "notes-tools",
+        "[method]descriptor.unlink-file-at",
+        vec!["descriptor".into(), "../outside".into(), "/notes".into()],
+    );
+    assert!(Event::from_call(&call, std::path::Path::new(env!("CARGO_MANIFEST_DIR"))).is_err());
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -805,14 +846,18 @@ fn filesystem_call(caller: &str, path: &str, flags: &[&str]) -> Call {
 }
 
 fn filesystem_event(caller: &str, function: &str, arguments: Vec<Val>) -> Event {
-    let call = Call::new(
+    let call = filesystem_call_for(caller, function, arguments);
+    Event::from_call(&call, std::path::Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap()
+}
+
+fn filesystem_call_for(caller: &str, function: &str, arguments: Vec<Val>) -> Call {
+    Call::new(
         Caller::Component(caller.into()),
         "wasi:filesystem/types@0.3.0",
         "wasi:filesystem/types@0.3.0",
         function,
         arguments,
-    );
-    Event::from_call(&call, std::path::Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap()
+    )
 }
 
 fn stat_call_shapes() -> Vec<(&'static str, Vec<Val>, &'static str)> {

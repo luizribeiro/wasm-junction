@@ -14,7 +14,10 @@ impl Event {
                 "[method]descriptor.open-at"
                 | "[method]descriptor.stat-at"
                 | "[method]descriptor.metadata-hash-at" => Some(2),
-                "[method]descriptor.readlink-at" => Some(1),
+                "[method]descriptor.readlink-at"
+                | "[method]descriptor.create-directory-at"
+                | "[method]descriptor.remove-directory-at"
+                | "[method]descriptor.unlink-file-at" => Some(1),
                 _ => None,
             };
             if let Some(path_position) = path_position {

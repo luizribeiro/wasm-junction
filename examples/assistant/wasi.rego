@@ -52,6 +52,8 @@ normalize(event) := {"caller": event.caller, "action": "fs.write", "path": event
 } else := {"caller": event.caller, "action": "fs.read", "path": event.arguments[2]} if open_at(event)
 else := {"caller": event.caller, "action": "fs.list", "path": event.arguments[1]} if read_directory(event)
 else := {"caller": event.caller, "action": "fs.stat", "path": stat_path(event)} if filesystem_stat(event)
+else := {"caller": event.caller, "action": "fs.delete", "path": event.arguments[1]} if delete_at(event)
+else := {"caller": event.caller, "action": "fs.mkdir", "path": event.arguments[1]} if create_directory_at(event)
 else := {"caller": event.caller, "action": "http.request", "host": event.arguments[3], "url": sprintf("%s://%s%s", [lower(event.arguments[2]), event.arguments[3], event.arguments[4]])} if http_send(event)
 else := {"caller": event.caller, "action": "env.read"} if get_environment(event)
 else := {"caller": event.caller, "action": "tool.call", "tool": sprintf("%s.%s", [event.callee, event.function])} if startswith(event.interface, "example:assistant/")
@@ -86,6 +88,19 @@ stat_path(event) := event.arguments[2] if event.function in {
 	"[method]descriptor.is-same-object",
 }
 else := event.arguments[1]
+
+delete_at(event) if {
+	event.interface == "wasi:filesystem/types@0.3.0"
+	event.function in {
+		"[method]descriptor.unlink-file-at",
+		"[method]descriptor.remove-directory-at",
+	}
+}
+
+create_directory_at(event) if {
+	event.interface == "wasi:filesystem/types@0.3.0"
+	event.function == "[method]descriptor.create-directory-at"
+}
 
 mutating_open(event) if "write" in flag_set(event.arguments[4])
 mutating_open(event) if "create" in flag_set(event.arguments[3])
@@ -149,6 +164,8 @@ effect(item) := sprintf("write %s", [item.path]) if writing(item)
 else := sprintf("read %s", [item.path]) if reading(item)
 else := sprintf("list %s", [item.path]) if item.action == "fs.list"
 else := sprintf("inspect %s", [item.path]) if item.action == "fs.stat"
+else := sprintf("delete %s", [item.path]) if item.action == "fs.delete"
+else := sprintf("create directory %s", [item.path]) if item.action == "fs.mkdir"
 else := sprintf("make a request to %s", [item.host]) if {
 	item.action == "http.request"
 	item.caller == "agent"
@@ -165,6 +182,8 @@ default_reason(item) := sprintf("%s may not read %s", [item.caller, item.path]) 
 else := sprintf("%s may not write %s", [item.caller, item.path]) if item.action == "fs.write"
 else := sprintf("%s may not list %s", [item.caller, item.path]) if item.action == "fs.list"
 else := sprintf("%s may not inspect %s", [item.caller, item.path]) if item.action == "fs.stat"
+else := sprintf("%s may not delete %s", [item.caller, item.path]) if item.action == "fs.delete"
+else := sprintf("%s may not create directory %s", [item.caller, item.path]) if item.action == "fs.mkdir"
 else := sprintf("%s may not send to %s", [item.caller, item.host]) if item.action == "http.request"
 else := sprintf("%s may not read its environment", [item.caller]) if item.action == "env.read"
 else := sprintf("%s may not call %s", [item.caller, item.tool]) if item.action == "tool.call"
