@@ -5,9 +5,6 @@ package assistant
 # value or none, results use ok(value) or error(value), and handles use <resource>,
 # <stream>, or <future>. Filesystem paths are resolved before the policy sees them.
 
-default private_data_hosts := set()
-private_data_hosts := data.private_data_hosts
-
 request := normalize(input.event)
 history_requests := [normalize(event) | some event in input.history]
 
@@ -25,48 +22,6 @@ pending_ask contains reason if {
 	not key in input.approved
 	not key in input.refused
 }
-
-remember(item) := true if {
-	item.caller == "agent"
-	item.action == "http.request"
-	item.host == data.model_host
-} else := false
-
-turn_private contains path if {
-	some earlier in history_requests
-	reading(earlier)
-	path := earlier.path
-	starts_with_private(path)
-}
-
-turn_private contains path if {
-	some earlier in history_requests
-	reading(earlier)
-	path := earlier.path
-	starts_with_drafts(path)
-}
-
-turn_untrusted contains source if {
-	some earlier in history_requests
-	reading(earlier)
-	starts_with_drafts(earlier.path)
-	source := earlier.path
-}
-
-turn_untrusted contains host if {
-	some earlier in history_requests
-	earlier.action == "http.request"
-	earlier.caller == "web-tools"
-	host := earlier.host
-}
-
-turn_untrusted contains "weather-tools" if {
-	some earlier in history_requests
-	earlier.action == "http.request"
-	earlier.caller == "weather-tools"
-}
-
-turn_label := {"private": turn_private, "untrusted": turn_untrusted}
 
 normalize(event) := {"caller": event.caller, "action": "fs.write", "path": event.arguments[2]} if {
 	open_at(event)
@@ -99,9 +54,6 @@ call_name(event) := sprintf("%s.%s", [event.interface, event.function])
 
 reading(item) if item.action in {"fs.read", "fs.write"}
 writing(item) if item.action == "fs.write"
-starts_with_private(path) if path == trim_suffix(private_prefix, "/")
-starts_with_private(path) if startswith(path, private_prefix)
-starts_with_drafts(path) if startswith(path, drafts_prefix)
 
 effect(item) := sprintf("write %s", [item.path]) if writing(item)
 else := sprintf("read %s", [item.path]) if reading(item)
