@@ -18,9 +18,10 @@ The policy is [`policy.rego`](policy.rego). It works from what the components ac
 from what the model or a tool says it will do. The host remembers which private paths and
 untrusted sources contributed content to the conversation. Those choices live in
 [`policy.rego`](policy.rego); [`wasi.rego`](wasi.rego) contains the mechanics that turn each raw
-call into one request with an action such as `fs.read`, `fs.write`, `fs.list`, `http.request` or
-`tool.call`. An `allow` names the exact file, host or tool access available to a component. A
-matching `deny` wins first. An `ask` can add consent only to a call that is otherwise allowed,
+call into a request: `env.read`; `fs.read`, `fs.write`, `fs.list`, `fs.stat`, `fs.delete`,
+`fs.rename`, `fs.link` or `fs.mkdir`; `http.request` with its method, host and URL; `tool.call`;
+or named plumbing. An `allow` names the exact file, host or tool access available to a component.
+A matching `deny` wins first. An `ask` can add consent only to a call that is otherwise allowed,
 and every call without an `allow` is denied.
 
 Below, we run the agent and go through four kinds of problem the policy deals with: privacy,
@@ -224,6 +225,9 @@ It keeps things simple on purpose:
   restarting it.
 - **Model consent lasts for the session.** One approval for the agent's model request is remembered
   until the process exits.
+- **The agent holds its API key.** The `environment` table gives the key only to `agent`, which
+  needs it for its model requests. The model never sees it, but the `agent` component itself is
+  trusted not to send it elsewhere.
 - **Decisions are allow, ask or deny.** Middleware could also change a call, for example to
   redact text, but this example doesn't.
 - **The policy sees real paths.** Before deciding, the host cleans up each path and follows
@@ -244,5 +248,16 @@ It keeps things simple on purpose:
 The policy's `allowed_hosts` says which hosts each component may contact at all;
 `PRIVATE_DATA_HOSTS` is the separate deployment setting for which hosts may receive private data
 from any component's request without asking.
+
+The `environment` table in [`policy.rego`](policy.rego) decides which settings each component
+receives. The host refuses to load a component if its policy entry names a variable for which no
+setting exists.
+
+| Component | Environment variables |
+| --- | --- |
+| `agent` | `OPENAI_SCHEME`, `OPENAI_AUTHORITY`, `OPENAI_PATH_PREFIX`, `OPENAI_API_KEY`, `OPENAI_MODEL` |
+| `notes-tools` | None |
+| `web-tools` | None |
+| `weather-tools` | None |
 
 Environment variables override the file. An empty line or Ctrl-D ends the chat.
