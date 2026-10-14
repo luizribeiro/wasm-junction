@@ -2,9 +2,9 @@ use std::io::{Cursor, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use wasm_junction::{Call, CallError, Middleware, Next, Vals};
+use wasm_junction::{Access, Call, CallError, Middleware, Next, Vals};
 
-use super::{Console, Settings, repl};
+use super::{Console, Settings, repl, weather_wasi};
 
 #[derive(Clone, Default)]
 struct Reached {
@@ -38,6 +38,13 @@ impl Middleware for Reached {
         }
         next.run(call).await
     }
+}
+
+#[test]
+fn weather_can_attempt_reads_but_cannot_write_notes() {
+    let settings = weather_wasi();
+    let (_, guest, access) = settings.preopens().next().unwrap();
+    assert_eq!((guest, access), ("/notes", Access::ReadOnly));
 }
 
 #[tokio::test(flavor = "current_thread")]

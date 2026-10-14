@@ -79,14 +79,7 @@ async fn repl(
         ),
     )?;
     app.configure("web-tools", WasiSettings::new().network(true))?;
-    app.configure(
-        "weather-tools",
-        WasiSettings::new().network(true).preopen(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("notes"),
-            "/notes",
-            Access::ReadWrite,
-        ),
-    )?;
+    app.configure("weather-tools", weather_wasi())?;
     app.load(Component::from_bytes(NOTES_TOOLS)?.named("notes-tools"))
         .await?;
     app.load(Component::from_bytes(WEB_TOOLS)?.named("web-tools"))
@@ -138,6 +131,14 @@ async fn repl(
         }
     }
     Ok(())
+}
+
+fn weather_wasi() -> WasiSettings {
+    WasiSettings::new().network(true).preopen(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("notes"),
+        "/notes",
+        Access::ReadOnly,
+    )
 }
 
 #[cfg(test)]
