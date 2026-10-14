@@ -124,14 +124,36 @@ fn is_format(character: char) -> bool {
 fn prompt(request: &ConsentRequest) -> String {
     format!(
         "  ? This {}. Let it {}? [y/N] ",
-        request.reason, request.effect,
+        reason(&request.reasons),
+        request.effect,
     )
+}
+
+fn reason(reasons: &[String]) -> String {
+    let mut included = reasons
+        .iter()
+        .map(|reason| reason.strip_prefix("conversation includes "))
+        .collect::<Option<Vec<_>>>();
+    let Some(ref mut included) = included else {
+        return reasons.join("; ");
+    };
+    included.sort_by_key(|item| item.starts_with("content from "));
+    format!("conversation includes {}", joined(included))
+}
+
+fn joined(items: &[&str]) -> String {
+    match items {
+        [] => String::new(),
+        [item] => (*item).to_owned(),
+        [first, second] => format!("{first} and {second}"),
+        [head @ .., last] => format!("{}, and {last}", head.join(", ")),
+    }
 }
 use tokio::sync::{mpsc, oneshot};
 
 pub(crate) struct ConsentRequest {
     pub(crate) effect: String,
-    pub(crate) reason: String,
+    pub(crate) reasons: Vec<String>,
     pub(crate) answer: oneshot::Sender<bool>,
 }
 
@@ -151,7 +173,7 @@ mod tests {
         console
             .answer(ConsentRequest {
                 effect: "write note".into(),
-                reason: "after fetch".into(),
+                reasons: vec!["after fetch".into()],
                 answer,
             })
             .await
@@ -164,7 +186,7 @@ mod tests {
         let (answer, _reply) = oneshot::channel();
         let request = ConsentRequest {
             effect: "make a request to https://example.com/".into(),
-            reason: "conversation includes private/diary.md".into(),
+            reasons: vec!["conversation includes private/diary.md".into()],
             answer,
         };
         assert_eq!(
@@ -174,12 +196,39 @@ mod tests {
         let (answer, _reply) = oneshot::channel();
         let request = ConsentRequest {
             effect: "write drafts/timing.md".into(),
-            reason: "conversation includes content from example.com".into(),
+            reasons: vec!["conversation includes content from example.com".into()],
             answer,
         };
         assert_eq!(
             prompt(&request),
             "  ? This conversation includes content from example.com. Let it write drafts/timing.md? [y/N] "
+        );
+        let (answer, _reply) = oneshot::channel();
+        let request = ConsentRequest {
+            effect: "make a request to model.example".into(),
+            reasons: vec![
+                "conversation includes content from example.com".into(),
+                "conversation includes private/diary.md".into(),
+            ],
+            answer,
+        };
+        assert_eq!(
+            prompt(&request),
+            "  ? This conversation includes private/diary.md and content from example.com. Let it make a request to model.example? [y/N] "
+        );
+        let (answer, _reply) = oneshot::channel();
+        let request = ConsentRequest {
+            effect: "write drafts/summary.md".into(),
+            reasons: vec![
+                "conversation includes content from example.com".into(),
+                "conversation includes private/diary.md".into(),
+                "conversation includes private/passwords.md".into(),
+            ],
+            answer,
+        };
+        assert_eq!(
+            prompt(&request),
+            "  ? This conversation includes private/diary.md, private/passwords.md, and content from example.com. Let it write drafts/summary.md? [y/N] "
         );
     }
 
@@ -188,7 +237,7 @@ mod tests {
         let (answer, _reply) = oneshot::channel();
         let request = ConsentRequest {
             effect: "make a request to https://example.com/\rforged".into(),
-            reason: "conversation includes private/diary.md".into(),
+            reasons: vec!["conversation includes private/diary.md".into()],
             answer,
         };
         assert_eq!(

@@ -86,7 +86,7 @@ impl PolicyMiddleware {
                 consent
                     .send(ConsentRequest {
                         effect: why.effect.clone(),
-                        reason: why.reasons.join("; "),
+                        reasons: why.reasons.clone(),
                         answer,
                     })
                     .map_err(|_| CallError::trap("consent prompt is unavailable"))?;
