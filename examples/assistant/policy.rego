@@ -9,6 +9,16 @@ allowed_hosts := {
 	"weather-tools": {"api.open-meteo.com"},
 	"notes-tools": set(),
 }
+tool_calls := {
+	"host": {"agent.answer"},
+	"agent": {
+		"notes-tools.list-notes",
+		"notes-tools.read-note",
+		"notes-tools.write-note",
+		"web-tools.fetch",
+		"weather-tools.get-weather",
+	},
+}
 
 default private_data_hosts := set()
 private_data_hosts := data.private_data_hosts
@@ -36,6 +46,15 @@ deny contains sprintf("%s is outside %s/", [request.path, drafts_dir]) if {
 deny contains sprintf("%s may not send to %s", [request.caller, request.host]) if {
 	request.action == "http.request"
 	not host_allowed(request.caller, request.host)
+}
+
+deny contains sprintf("%s may not call %s", [request.caller, request.tool]) if {
+	request.action == "tool.call"
+	not request.tool in tool_calls[request.caller]
+}
+
+deny contains sprintf("%s is not allowed by the policy", [request.call]) if {
+	request.action == "other"
 }
 
 host_allowed(caller, host) if "*" in allowed_hosts[caller]

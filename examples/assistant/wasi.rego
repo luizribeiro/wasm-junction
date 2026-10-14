@@ -46,7 +46,43 @@ http_send(event) if {
 	event.function == "send"
 }
 
-plumbing(event) if false
+plumbing(event) if call_name(event) in plumbing_calls
+
+plumbing_calls := {
+	"wasi:cli/environment@0.3.0.get-environment",
+	"wasi:clocks/monotonic-clock@0.3.0.get-resolution",
+	"wasi:clocks/monotonic-clock@0.3.0.now",
+	"wasi:clocks/monotonic-clock@0.3.0.wait-for",
+	"wasi:clocks/monotonic-clock@0.3.0.wait-until",
+	"wasi:clocks/system-clock@0.3.0.get-resolution",
+	"wasi:clocks/system-clock@0.3.0.now",
+	"wasi:filesystem/preopens@0.3.0.get-directories",
+	"wasi:filesystem/types@0.3.0.[drop]descriptor",
+	"wasi:filesystem/types@0.3.0.[method]descriptor.read-via-stream",
+	"wasi:filesystem/types@0.3.0.[method]descriptor.write-via-stream",
+	"wasi:http/types@0.3.0.[constructor]fields",
+	"wasi:http/types@0.3.0.[constructor]request-options",
+	"wasi:http/types@0.3.0.[drop]fields",
+	"wasi:http/types@0.3.0.[drop]request",
+	"wasi:http/types@0.3.0.[drop]request-options",
+	"wasi:http/types@0.3.0.[drop]response",
+	"wasi:http/types@0.3.0.[method]fields.append",
+	"wasi:http/types@0.3.0.[method]request-options.set-between-bytes-timeout",
+	"wasi:http/types@0.3.0.[method]request-options.set-connect-timeout",
+	"wasi:http/types@0.3.0.[method]request-options.set-first-byte-timeout",
+	"wasi:http/types@0.3.0.[method]request.set-authority",
+	"wasi:http/types@0.3.0.[method]request.set-method",
+	"wasi:http/types@0.3.0.[method]request.set-path-with-query",
+	"wasi:http/types@0.3.0.[method]request.set-scheme",
+	"wasi:http/types@0.3.0.[method]response.get-status-code",
+	"wasi:http/types@0.3.0.[static]request.new",
+	"wasi:http/types@0.3.0.[static]response.consume-body",
+	"wasi:random/insecure-seed@0.3.0.get-insecure-seed",
+	"wasi:random/insecure@0.3.0.get-insecure-random-bytes",
+	"wasi:random/insecure@0.3.0.get-insecure-random-u64",
+	"wasi:random/random@0.3.0.get-random-bytes",
+	"wasi:random/random@0.3.0.get-random-u64",
+}
 
 flag_set(flags) := {flag | some flag in split(trim(flags, "{}"), ", "); flag != ""}
 

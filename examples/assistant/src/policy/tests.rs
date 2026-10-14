@@ -13,7 +13,7 @@ fn builds_generic_events_with_fixed_structured_text() {
         Caller::Component("agent".into()),
         "notes-tools",
         "example:assistant/notes-tools@0.1.0",
-        "inspect",
+        "list-notes",
         vec![
             Val::Flags(vec!["read".into(), "write".into()]),
             Val::Record(vec![("name".into(), Val::String("note".into()))]),
@@ -102,6 +102,40 @@ fn every_open_is_a_read_and_mutating_flags_make_it_a_write() {
             reasons: vec!["draft.md is outside drafts/".into()],
         })
     );
+}
+
+#[test]
+fn allows_only_declared_tool_calls() {
+    let policy = load_policy(&[]);
+    assert!(matches!(
+        policy.decide(&tool_call("agent", "notes-tools", "read-note")),
+        Ok(Verdict::Allow(_))
+    ));
+    for event in [
+        tool_call("weather-tools", "notes-tools", "read-note"),
+        tool_call("notes-tools", "agent", "answer"),
+    ] {
+        assert!(matches!(policy.decide(&event), Ok(Verdict::Deny(_))));
+    }
+}
+
+#[test]
+fn denies_unlisted_calls_by_name() {
+    let policy = load_policy(&[]);
+    for (interface, function) in [
+        ("wasi:filesystem/types@0.2.12", "[method]descriptor.open-at"),
+        ("wasi:http/outgoing-handler@0.2.12", "handle"),
+        ("example:unknown/interface@1.0.0", "surprise"),
+    ] {
+        let call = format!("{interface}.{function}");
+        assert_eq!(
+            policy.decide(&raw_event(interface, function)).unwrap(),
+            Verdict::Deny(Why {
+                effect: format!("call {call}"),
+                reasons: vec![format!("{call} is not allowed by the policy")],
+            })
+        );
+    }
 }
 
 #[test]
@@ -368,6 +402,26 @@ fn private_conversation() -> Policy {
 
 fn open_at(path: &str, flags: &[&str]) -> Event {
     open_at_from("notes-tools", path, flags)
+}
+
+fn raw_event(interface: &str, function: &str) -> Event {
+    Event {
+        caller: "agent".into(),
+        callee: interface.into(),
+        interface: interface.into(),
+        function: function.into(),
+        arguments: Vec::new(),
+    }
+}
+
+fn tool_call(source: &str, target: &str, function: &str) -> Event {
+    Event {
+        caller: source.into(),
+        callee: target.into(),
+        interface: format!("example:assistant/{target}@0.1.0"),
+        function: function.into(),
+        arguments: Vec::new(),
+    }
 }
 
 fn open_at_from(caller: &str, path: &str, flags: &[&str]) -> Event {
