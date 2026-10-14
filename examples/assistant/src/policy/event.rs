@@ -24,13 +24,13 @@ impl Event {
                 "[method]descriptor.link-at" => &[(2, 2), (4, 1)],
                 _ => &[],
             };
-            for &(path_position, root_offset) in paths {
+            for &(path_position, directory_offset) in paths {
                 resolve_path(
                     &mut arguments,
                     call,
                     base,
                     path_position,
-                    from_end(call, root_offset)?,
+                    from_end(call, directory_offset)?,
                 )?;
             }
             if matches!(
@@ -64,7 +64,7 @@ fn from_end(call: &Call, offset: usize) -> Result<usize, String> {
     call.args
         .len()
         .checked_sub(offset)
-        .ok_or_else(|| "filesystem preopen is missing".to_owned())
+        .ok_or_else(|| "filesystem guest path is missing".to_owned())
 }
 
 fn resolve_path(
@@ -72,14 +72,17 @@ fn resolve_path(
     call: &Call,
     base: &Path,
     path_position: usize,
-    root_position: usize,
+    directory_position: usize,
 ) -> Result<(), String> {
     let path = string_arg(call.args.get(path_position), "filesystem path")?;
-    let root = string_arg(call.args.get(root_position), "filesystem preopen")?;
+    let directory = string_arg(
+        call.args.get(directory_position),
+        "filesystem guest directory",
+    )?;
     let argument = arguments
         .get_mut(path_position)
         .ok_or_else(|| "filesystem path is missing".to_owned())?;
-    *argument = crate::path::resolve(base, root, path)?;
+    *argument = crate::path::resolve(base, directory, path)?;
     Ok(())
 }
 

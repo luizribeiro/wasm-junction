@@ -236,8 +236,6 @@ It keeps things simple on purpose:
 - **The policy sees real paths.** Before deciding, the host cleans up each path and follows
   symlinks inside the notes folder, so `./private/../private/diary.md`, or a symlink to the
   diary, is still the diary.
-- **Subfolder handles lose context.** An open relative to a subfolder descriptor is judged from
-  the root reported by the WASI gate, a framework limitation tracked separately.
 
 ## Settings
 

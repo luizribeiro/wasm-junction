@@ -5,16 +5,16 @@ use std::os::unix::fs::MetadataExt;
 use std::os::windows::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
-pub(crate) fn resolve(base: &Path, root: &str, requested: &str) -> Result<String, String> {
-    let relative = lexical(requested)?;
-    let mounted = base.join(root.trim_start_matches('/'));
+pub(crate) fn resolve(base: &Path, directory: &str, requested: &str) -> Result<String, String> {
+    let (preopen, relative) = lexical(directory, requested)?;
+    let mounted = base.join(&preopen);
     let mounted = mounted
         .canonicalize()
-        .map_err(|error| format!("cannot resolve preopen {root}: {error}"))?;
-    let resolved = resolve_existing_ancestor(&mounted.join(relative))?;
+        .map_err(|error| format!("cannot resolve preopen {}: {error}", preopen.display()))?;
+    let resolved = resolve_existing_ancestor(&base.join(relative))?;
     let relative = resolved
         .strip_prefix(&mounted)
-        .map_err(|_| format!("path {requested} leaves preopen {root}"))?;
+        .map_err(|_| format!("path {requested} leaves preopen {}", preopen.display()))?;
     Ok(relative
         .components()
         .map(|part| part.as_os_str().to_string_lossy())
@@ -22,19 +22,36 @@ pub(crate) fn resolve(base: &Path, root: &str, requested: &str) -> Result<String
         .join("/"))
 }
 
-fn lexical(path: &str) -> Result<PathBuf, String> {
+fn lexical(directory: &str, requested: &str) -> Result<(PathBuf, PathBuf), String> {
     let mut clean = PathBuf::new();
-    for component in Path::new(path).components() {
+    for component in Path::new(directory).components() {
         match component {
             Component::Normal(part) => clean.push(part),
-            Component::CurDir => {}
+            Component::RootDir | Component::CurDir => {}
             Component::ParentDir if clean.pop() => {}
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                return Err(format!("path {path} leaves its preopen"));
+            Component::ParentDir | Component::Prefix(_) => {
+                return Err(format!("directory {directory} leaves its preopen"));
             }
         }
     }
-    Ok(clean)
+    let preopen = clean
+        .components()
+        .next()
+        .map(|component| PathBuf::from(component.as_os_str()))
+        .ok_or_else(|| format!("directory {directory} has no preopen"))?;
+    for component in Path::new(requested).components() {
+        match component {
+            Component::Normal(part) => clean.push(part),
+            Component::CurDir => {}
+            Component::ParentDir if clean != preopen => {
+                let _ = clean.pop();
+            }
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(format!("path {requested} leaves its preopen"));
+            }
+        }
+    }
+    Ok((preopen, clean))
 }
 
 fn resolve_existing_ancestor(path: &Path) -> Result<PathBuf, String> {
@@ -110,6 +127,10 @@ mod tests {
             "private/diary.md"
         );
         assert!(resolve(&base, "/notes", "../../outside.md").is_err());
+        assert_eq!(
+            resolve(&base, "/notes/private", "diary.md").unwrap(),
+            "private/diary.md"
+        );
         fs::remove_dir_all(base).unwrap();
     }
 

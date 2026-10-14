@@ -60,6 +60,52 @@ fn builds_filesystem_events_with_resolved_paths() {
 }
 
 #[test]
+fn subfolder_handle_paths_reach_secret_and_label_rules() {
+    let private = open_at_with("private", &["directory"], &["read"]);
+
+    let secret_policy = load_policy(&[]);
+    assert!(matches!(
+        secret_policy.decide(&private),
+        Ok(Verdict::Allow(_))
+    ));
+    assert_eq!(
+        secret_policy
+            .decide(&open_at_in(
+                "/notes/private",
+                "passwords.md",
+                &[],
+                &["read"],
+            ))
+            .unwrap(),
+        Verdict::Deny(Why {
+            effect: "read private/passwords.md".into(),
+            reasons: vec!["private/passwords.md is secret".into()],
+        })
+    );
+
+    let private_policy = load_policy(&[]);
+    private_policy.begin_turn().unwrap();
+    assert!(matches!(
+        private_policy.decide(&private),
+        Ok(Verdict::Allow(_))
+    ));
+    assert!(matches!(
+        private_policy.decide(&open_at_in("/notes/private", "diary.md", &[], &["read"],)),
+        Ok(Verdict::Allow(_))
+    ));
+    assert_eq!(
+        private_policy
+            .decide(&http_send("agent", "model.example"))
+            .unwrap(),
+        ask(
+            "agent",
+            "make a request to model.example",
+            &["conversation includes private/diary.md"],
+        )
+    );
+}
+
+#[test]
 fn real_call_shapes_reach_the_expected_rules() {
     let policy = load_policy(&[]);
     let secret = open_at("private/passwords.md", &["read"]);
@@ -1066,12 +1112,37 @@ fn timestamp() -> Val {
 }
 
 fn open_at_with(path: &str, open_flags: &[&str], descriptor_flags: &[&str]) -> Event {
-    let call = filesystem_call_with("notes-tools", path, open_flags, descriptor_flags);
+    open_at_in("/notes", path, open_flags, descriptor_flags)
+}
+
+fn open_at_in(
+    directory: &str,
+    path: &str,
+    open_flags: &[&str],
+    descriptor_flags: &[&str],
+) -> Event {
+    let call = filesystem_call_with_directory(
+        "notes-tools",
+        directory,
+        path,
+        open_flags,
+        descriptor_flags,
+    );
     Event::from_call(&call, std::path::Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap()
 }
 
 fn filesystem_call_with(
     caller: &str,
+    path: &str,
+    open_flags: &[&str],
+    descriptor_flags: &[&str],
+) -> Call {
+    filesystem_call_with_directory(caller, "/notes", path, open_flags, descriptor_flags)
+}
+
+fn filesystem_call_with_directory(
+    caller: &str,
+    directory: &str,
     path: &str,
     open_flags: &[&str],
     descriptor_flags: &[&str],
@@ -1092,7 +1163,7 @@ fn filesystem_call_with(
                     .map(|flag| (*flag).to_owned())
                     .collect(),
             ),
-            Val::String("/notes".into()),
+            Val::String(directory.into()),
         ],
     )
 }
