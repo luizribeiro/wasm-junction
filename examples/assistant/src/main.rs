@@ -71,17 +71,28 @@ async fn repl(
             .middleware(middleware),
     )
     .build()?;
-    app.configure("agent", settings.wasi())?;
+    app.configure(
+        "agent",
+        settings.wasi(policy.environment("agent"))?.network(true),
+    )?;
     app.configure(
         "notes-tools",
-        WasiSettings::new().preopen(
+        settings.wasi(policy.environment("notes-tools"))?.preopen(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("notes"),
             "/notes",
             Access::ReadWrite,
         ),
     )?;
-    app.configure("web-tools", WasiSettings::new().network(true))?;
-    app.configure("weather-tools", weather_wasi())?;
+    app.configure(
+        "web-tools",
+        settings
+            .wasi(policy.environment("web-tools"))?
+            .network(true),
+    )?;
+    app.configure(
+        "weather-tools",
+        weather_wasi(settings.wasi(policy.environment("weather-tools"))?),
+    )?;
     app.load(Component::from_bytes(NOTES_TOOLS)?.named("notes-tools"))
         .await?;
     app.load(Component::from_bytes(WEB_TOOLS)?.named("web-tools"))
@@ -135,8 +146,8 @@ async fn repl(
     Ok(())
 }
 
-fn weather_wasi() -> WasiSettings {
-    WasiSettings::new().network(true).preopen(
+fn weather_wasi(settings: WasiSettings) -> WasiSettings {
+    settings.network(true).preopen(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("notes"),
         "/notes",
         Access::ReadOnly,

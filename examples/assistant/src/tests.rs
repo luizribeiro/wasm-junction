@@ -23,7 +23,7 @@ impl Middleware for Reached {
 
 #[test]
 fn weather_can_attempt_reads_but_cannot_write_notes() {
-    let settings = weather_wasi();
+    let settings = weather_wasi(wasm_junction::WasiSettings::new());
     let (_, guest, access) = settings.preopens().next().unwrap();
     assert_eq!((guest, access), ("/notes", Access::ReadOnly));
 }

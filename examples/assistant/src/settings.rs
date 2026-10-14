@@ -1,14 +1,12 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use wasm_junction::WasiSettings;
 
 #[derive(Clone)]
 pub(crate) struct Settings {
-    scheme: String,
     authority: String,
-    path_prefix: String,
-    api_key: String,
-    model: String,
+    environment: BTreeMap<String, String>,
     pub(crate) private_data_hosts: Vec<String>,
 }
 
@@ -22,26 +20,37 @@ impl Settings {
             return Ok(None);
         };
         let (scheme, authority, path_prefix) = parse_base_url(&base_url)?;
+        let environment = [
+            ("OPENAI_SCHEME", scheme),
+            ("OPENAI_AUTHORITY", authority.clone()),
+            ("OPENAI_PATH_PREFIX", path_prefix),
+            ("OPENAI_API_KEY", api_key),
+            ("OPENAI_MODEL", model),
+        ]
+        .into_iter()
+        .map(|(name, value)| (name.to_owned(), value))
+        .collect();
         Ok(Some(Self {
-            scheme,
             authority,
-            path_prefix,
-            api_key,
-            model,
+            environment,
             private_data_hosts: parse_private_data_hosts(
                 &std::env::var("PRIVATE_DATA_HOSTS").unwrap_or_default(),
             ),
         }))
     }
 
-    pub(crate) fn wasi(&self) -> WasiSettings {
-        WasiSettings::new()
-            .network(true)
-            .env("OPENAI_SCHEME", &self.scheme)
-            .env("OPENAI_AUTHORITY", &self.authority)
-            .env("OPENAI_PATH_PREFIX", &self.path_prefix)
-            .env("OPENAI_API_KEY", &self.api_key)
-            .env("OPENAI_MODEL", &self.model)
+    pub(crate) fn wasi(&self, names: Option<&BTreeSet<String>>) -> Result<WasiSettings, String> {
+        names
+            .into_iter()
+            .flatten()
+            .try_fold(WasiSettings::new(), |wasi, name| {
+                match self.environment.get(name) {
+                    Some(value) => Ok(wasi.env(name, value)),
+                    None => Err(format!(
+                        "policy requests unknown environment variable {name}"
+                    )),
+                }
+            })
     }
 
     pub(crate) fn model_host(&self) -> &str {
@@ -87,7 +96,8 @@ fn parse_private_data_hosts(value: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_base_url, parse_private_data_hosts};
+    use super::{Settings, parse_base_url, parse_private_data_hosts};
+    use std::collections::{BTreeMap, BTreeSet};
 
     #[test]
     fn parses_base_urls() {
@@ -105,6 +115,32 @@ mod tests {
         assert_eq!(
             parse_private_data_hosts(" local.test:8000,api.test,, "),
             ["local.test:8000", "api.test"]
+        );
+    }
+
+    #[test]
+    fn builds_only_the_requested_environment() {
+        let settings = Settings {
+            authority: "model.example".into(),
+            environment: BTreeMap::from([
+                ("OPENAI_API_KEY".into(), "secret".into()),
+                ("OPENAI_MODEL".into(), "model".into()),
+            ]),
+            private_data_hosts: Vec::new(),
+        };
+        let names = BTreeSet::from(["OPENAI_MODEL".into()]);
+        assert_eq!(
+            settings
+                .wasi(Some(&names))
+                .unwrap()
+                .environment()
+                .collect::<Vec<_>>(),
+            [("OPENAI_MODEL", "model")]
+        );
+        let unknown = BTreeSet::from(["MISSING".into()]);
+        assert_eq!(
+            settings.wasi(Some(&unknown)).unwrap_err(),
+            "policy requests unknown environment variable MISSING"
         );
     }
 }

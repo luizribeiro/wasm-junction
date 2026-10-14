@@ -143,6 +143,18 @@ fn allows_only_declared_tool_calls() {
 #[test]
 fn allows_only_declared_components_to_read_their_environment() {
     let policy = load_policy(&[]);
+    assert_eq!(
+        policy.environment("agent").unwrap(),
+        &[
+            "OPENAI_API_KEY".to_owned(),
+            "OPENAI_AUTHORITY".to_owned(),
+            "OPENAI_MODEL".to_owned(),
+            "OPENAI_PATH_PREFIX".to_owned(),
+            "OPENAI_SCHEME".to_owned(),
+        ]
+        .into_iter()
+        .collect()
+    );
     assert!(matches!(
         policy.decide(&environment_call("agent")),
         Ok(Verdict::Allow(_))

@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -36,6 +36,7 @@ pub(crate) struct Why {
 pub(crate) struct Policy {
     inner: Arc<Mutex<State>>,
     base: PathBuf,
+    environment: BTreeMap<String, BTreeSet<String>>,
 }
 
 pub(super) struct State {
@@ -85,6 +86,15 @@ impl Policy {
                 .map_err(|error| error.to_string())?,
             )
             .map_err(|error| error.to_string())?;
+        let environment = engine
+            .eval_rule("data.assistant.environment".into())
+            .map_err(|error| error.to_string())?;
+        let environment = serde_json::from_str(
+            &environment
+                .to_json_str()
+                .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| format!("policy environment is invalid: {error}"))?;
         Ok(Self {
             inner: Arc::new(Mutex::new(State {
                 engine,
@@ -94,7 +104,12 @@ impl Policy {
                 refused: BTreeSet::new(),
             })),
             base: path.parent().unwrap_or_else(|| Path::new(".")).to_owned(),
+            environment,
         })
+    }
+
+    pub(crate) fn environment(&self, component: &str) -> Option<&BTreeSet<String>> {
+        self.environment.get(component)
     }
 
     pub(crate) fn decide(&self, event: &Event) -> Result<Verdict, String> {
