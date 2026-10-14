@@ -14,6 +14,7 @@ impl Event {
                 "[method]descriptor.open-at"
                 | "[method]descriptor.stat-at"
                 | "[method]descriptor.metadata-hash-at"
+                | "[method]descriptor.set-times-at"
                 | "[method]descriptor.symlink-at" => &[(2, 1)],
                 "[method]descriptor.readlink-at"
                 | "[method]descriptor.create-directory-at"
@@ -31,6 +32,12 @@ impl Event {
                     path_position,
                     from_end(call, root_offset)?,
                 )?;
+            }
+            if matches!(
+                call.function.as_ref(),
+                "[method]descriptor.set-size" | "[method]descriptor.set-times"
+            ) {
+                string_arg(call.args.last(), "filesystem preopen")?;
             }
         }
         Ok(Self {

@@ -248,6 +248,66 @@ fn names_denied_filesystem_links_and_renames() {
 }
 
 #[test]
+fn treats_metadata_changes_as_writes() {
+    let policy = load_policy(&[]);
+    for (function, arguments, effect) in [
+        (
+            "[method]descriptor.set-size",
+            vec!["descriptor".into(), Val::U64(1), "/notes".into()],
+            "resize an open file",
+        ),
+        (
+            "[method]descriptor.set-times",
+            vec![
+                "descriptor".into(),
+                timestamp(),
+                timestamp(),
+                "/notes".into(),
+            ],
+            "change timestamps on an open file",
+        ),
+        (
+            "[method]descriptor.set-times-at",
+            vec![
+                "descriptor".into(),
+                Val::Flags(Vec::new()),
+                "private/diary.md".into(),
+                timestamp(),
+                timestamp(),
+                "/notes".into(),
+            ],
+            "write private/diary.md",
+        ),
+    ] {
+        let event = filesystem_event("notes-tools", function, arguments);
+        assert_eq!(
+            policy.decide(&event).unwrap(),
+            Verdict::Deny(Why {
+                effect: effect.into(),
+                reasons: vec![format!("notes-tools may not {effect}")],
+            })
+        );
+    }
+}
+
+#[test]
+fn refuses_handle_writes_without_preopen_context() {
+    for (function, arguments) in [
+        (
+            "[method]descriptor.set-size",
+            vec!["descriptor".into(), Val::U64(1)],
+        ),
+        (
+            "[method]descriptor.set-times",
+            vec!["descriptor".into(), timestamp(), timestamp()],
+        ),
+    ] {
+        let call = filesystem_call_for("notes-tools", function, arguments);
+        assert!(Event::from_call(&call, std::path::Path::new(env!("CARGO_MANIFEST_DIR"))).is_err());
+    }
+}
+
+#[test]
 fn refuses_unresolved_link_destinations() {
     let call = filesystem_call_for(
         "notes-tools",
@@ -979,6 +1039,13 @@ fn link_call_shapes() -> Vec<(&'static str, Vec<Val>, &'static str)> {
             "link ../shared.md to drafts/linked.md",
         ),
     ]
+}
+
+fn timestamp() -> Val {
+    Val::Variant {
+        case: "now".into(),
+        value: None,
+    }
 }
 
 fn open_at_with(path: &str, open_flags: &[&str], descriptor_flags: &[&str]) -> Event {

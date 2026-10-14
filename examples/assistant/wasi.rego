@@ -46,7 +46,11 @@ host_allowed(hosts, host) if host in hosts
 normalize(event) := {"caller": event.caller, "action": "fs.write", "path": event.arguments[2]} if {
 	open_at(event)
 	mutating_open(event)
-} else := {"caller": event.caller, "action": "fs.list", "path": event.arguments[2]} if {
+} else := {"caller": event.caller, "action": "fs.write", "operation": operation} if {
+	operation := handle_write(event)
+}
+else := {"caller": event.caller, "action": "fs.write", "path": event.arguments[2]} if set_times_at(event)
+else := {"caller": event.caller, "action": "fs.list", "path": event.arguments[2]} if {
 	open_at(event)
 	directory_open(event)
 } else := {"caller": event.caller, "action": "fs.read", "path": event.arguments[2]} if open_at(event)
@@ -103,6 +107,19 @@ delete_at(event) if {
 create_directory_at(event) if {
 	event.interface == "wasi:filesystem/types@0.3.0"
 	event.function == "[method]descriptor.create-directory-at"
+}
+
+handle_write(event) := "resize an open file" if {
+	event.interface == "wasi:filesystem/types@0.3.0"
+	event.function == "[method]descriptor.set-size"
+} else := "change timestamps on an open file" if {
+	event.interface == "wasi:filesystem/types@0.3.0"
+	event.function == "[method]descriptor.set-times"
+}
+
+set_times_at(event) if {
+	event.interface == "wasi:filesystem/types@0.3.0"
+	event.function == "[method]descriptor.set-times-at"
 }
 
 rename_at(event) if {
@@ -178,7 +195,11 @@ writing(item) if item.action == "fs.write"
 
 consent_key(item, reason) := sprintf("%s|%s|%s", [item.caller, effect(item), reason])
 
-effect(item) := sprintf("write %s", [item.path]) if writing(item)
+effect(item) := operation if {
+	item.action == "fs.write"
+	operation := item.operation
+}
+else := sprintf("write %s", [item.path]) if writing(item)
 else := sprintf("read %s", [item.path]) if reading(item)
 else := sprintf("list %s", [item.path]) if item.action == "fs.list"
 else := sprintf("inspect %s", [item.path]) if item.action == "fs.stat"
@@ -198,7 +219,11 @@ else := sprintf("call %s", [item.tool]) if {
 else := sprintf("call %s", [item.call]) if item.action == "other"
 else := ""
 
-default_reason(item) := sprintf("%s may not read %s", [item.caller, item.path]) if item.action == "fs.read"
+default_reason(item) := sprintf("%s may not %s", [item.caller, item.operation]) if {
+	item.action == "fs.write"
+	item.operation
+}
+else := sprintf("%s may not read %s", [item.caller, item.path]) if item.action == "fs.read"
 else := sprintf("%s may not write %s", [item.caller, item.path]) if item.action == "fs.write"
 else := sprintf("%s may not list %s", [item.caller, item.path]) if item.action == "fs.list"
 else := sprintf("%s may not inspect %s", [item.caller, item.path]) if item.action == "fs.stat"
