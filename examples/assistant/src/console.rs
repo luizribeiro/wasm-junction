@@ -34,16 +34,27 @@ impl Console {
     }
 
     pub(crate) fn print(&self, text: &str) -> std::io::Result<()> {
+        self.write(text, false, false)
+    }
+
+    pub(crate) fn line(&self, text: &str) -> std::io::Result<()> {
+        self.write(text, true, false)
+    }
+
+    pub(crate) fn reply(&self, text: &str) -> std::io::Result<()> {
+        self.write(text, true, true)
+    }
+
+    fn write(&self, text: &str, newline: bool, keep_line_breaks: bool) -> std::io::Result<()> {
         let mut output = self
             .output
             .lock()
             .map_err(|_| std::io::Error::other("console output lock poisoned"))?;
-        output.write_all(text.as_bytes())?;
+        output.write_all(escaped(text, keep_line_breaks).as_bytes())?;
+        if newline {
+            output.write_all(b"\n")?;
+        }
         output.flush()
-    }
-
-    pub(crate) fn line(&self, text: &str) -> std::io::Result<()> {
-        self.print(&format!("{text}\n"))
     }
 
     pub(crate) async fn wait<T>(
@@ -69,6 +80,47 @@ impl Console {
     }
 }
 
+fn escaped(text: &str, keep_line_breaks: bool) -> String {
+    let mut output = String::with_capacity(text.len());
+    for character in text.chars() {
+        if keep_line_breaks && character == '\n' {
+            output.push(character);
+        } else if character.is_control() || is_format(character) {
+            output.extend(character.escape_default());
+        } else {
+            output.push(character);
+        }
+    }
+    output
+}
+
+fn is_format(character: char) -> bool {
+    matches!(
+        character,
+        '\u{00ad}'
+            | '\u{0600}'..='\u{0605}'
+            | '\u{061c}'
+            | '\u{06dd}'
+            | '\u{070f}'
+            | '\u{0890}'..='\u{0891}'
+            | '\u{08e2}'
+            | '\u{180e}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206f}'
+            | '\u{feff}'
+            | '\u{fff9}'..='\u{fffb}'
+            | '\u{110bd}'
+            | '\u{110cd}'
+            | '\u{13430}'..='\u{13440}'
+            | '\u{1bca0}'..='\u{1bca3}'
+            | '\u{1d173}'..='\u{1d17a}'
+            | '\u{e0001}'
+            | '\u{e0020}'..='\u{e007f}'
+    )
+}
+
 fn prompt(request: &ConsentRequest) -> String {
     format!(
         "  ? This {}. Let it {}? [y/N] ",
@@ -85,7 +137,8 @@ pub(crate) struct ConsentRequest {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConsentRequest, Console, prompt};
+    use super::{ConsentRequest, Console, escaped, prompt};
+    use crate::test_support::SharedOutput;
     use std::io::Cursor;
     use tokio::sync::{mpsc, oneshot};
 
@@ -128,5 +181,35 @@ mod tests {
             prompt(&request),
             "  ? This conversation includes content from example.com. Let it write drafts/timing.md? [y/N] "
         );
+    }
+
+    #[test]
+    fn escapes_control_characters_in_prompts() {
+        let (answer, _reply) = oneshot::channel();
+        let request = ConsentRequest {
+            effect: "make a request to https://example.com/\rforged".into(),
+            reason: "conversation includes private/diary.md".into(),
+            answer,
+        };
+        assert_eq!(
+            escaped(&prompt(&request), false),
+            "  ? This conversation includes private/diary.md. Let it make a request to https://example.com/\\rforged? [y/N] "
+        );
+    }
+
+    #[test]
+    fn escapes_invisible_format_characters() {
+        assert_eq!(
+            escaped("private/\u{200b}note\u{202e}dm", false),
+            "private/\\u{200b}note\\u{202e}dm"
+        );
+    }
+
+    #[test]
+    fn keeps_reply_line_breaks_readable() {
+        let output = SharedOutput::default();
+        let console = Console::new(Cursor::new(Vec::<u8>::new()), output.clone());
+        console.reply("assistant> first\nsecond\u{202e}").unwrap();
+        assert_eq!(output.text(), "assistant> first\nsecond\\u{202e}\n");
     }
 }

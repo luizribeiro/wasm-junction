@@ -6,6 +6,7 @@ use wasm_junction::{Call, CallErrorKind, Caller, Val};
 use super::event::value_text;
 use super::{Event, Policy, PolicyMiddleware, Verdict, Why};
 use crate::console::Console;
+use crate::test_support::SharedOutput;
 
 #[test]
 fn builds_generic_events_with_fixed_structured_text() {
@@ -169,6 +170,54 @@ fn denies_unlisted_filesystem_and_http_calls_by_name() {
             })
         );
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn traces_a_denied_unknown_call_by_name() {
+    let output = SharedOutput::default();
+    let console = Console::new(Cursor::new(Vec::<u8>::new()), output.clone());
+    let middleware =
+        PolicyMiddleware::new(load_policy(&[]), console, "model.example".into(), false);
+    let call = Call::new(
+        Caller::Component("agent".into()),
+        "unknown",
+        "example:unknown/interface@1.0.0",
+        "surprise",
+        Vec::new(),
+    );
+    assert_eq!(
+        middleware
+            .enforce(call, stub_next)
+            .await
+            .unwrap_err()
+            .kind(),
+        CallErrorKind::Refused
+    );
+    assert_eq!(
+        output.text(),
+        "  ✗ call example:unknown/interface@1.0.0.surprise denied — example:unknown/interface@1.0.0.surprise is not allowed by the policy\n"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn escapes_a_bidi_override_in_a_denied_path() {
+    let output = SharedOutput::default();
+    let console = Console::new(Cursor::new(Vec::<u8>::new()), output.clone());
+    let middleware =
+        PolicyMiddleware::new(load_policy(&[]), console, "model.example".into(), false);
+    let call = filesystem_call("weather-tools", "private/\u{202e}txt.md", &["read"]);
+    assert_eq!(
+        middleware
+            .enforce(call, stub_next)
+            .await
+            .unwrap_err()
+            .kind(),
+        CallErrorKind::Refused
+    );
+    assert_eq!(
+        output.text(),
+        "  ✗ read private/\\u{202e}txt.md denied — weather-tools may not read private/\\u{202e}txt.md\n"
+    );
 }
 
 #[test]

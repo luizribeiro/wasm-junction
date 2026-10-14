@@ -1,34 +1,15 @@
-use std::io::{Cursor, Write};
+use std::io::Cursor;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 
 use wasm_junction::{Access, Call, CallError, Middleware, Next, Vals};
 
 use super::{Console, Settings, repl, weather_wasi};
+use crate::test_support::SharedOutput;
 
 #[derive(Clone, Default)]
 struct Reached {
     notes_tools: Arc<AtomicBool>,
-}
-
-#[derive(Clone, Default)]
-struct SharedOutput(Arc<Mutex<Vec<u8>>>);
-
-impl SharedOutput {
-    fn text(&self) -> String {
-        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
-    }
-}
-
-impl Write for SharedOutput {
-    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(buffer);
-        Ok(buffer.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
 }
 
 impl Middleware for Reached {

@@ -8,6 +8,8 @@ mod console;
 mod path;
 mod policy;
 mod settings;
+#[cfg(test)]
+mod test_support;
 
 use std::error::Error;
 use std::io::BufReader;
@@ -117,7 +119,7 @@ async fn repl(
         match reply {
             Ok(reply) => {
                 policy.end_turn(true).map_err(std::io::Error::other)?;
-                console.line(&format!("assistant> {reply}"))?;
+                console.reply(&format!("assistant> {reply}"))?;
                 conversation.push(Message {
                     role: Role::Assistant,
                     content: reply,
