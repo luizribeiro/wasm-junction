@@ -10,20 +10,27 @@ impl Event {
     pub(super) fn from_call(call: &Call, base: &Path) -> Result<Self, String> {
         let mut arguments = call.args.iter().map(value_text).collect::<Vec<_>>();
         if call.interface.as_ref() == FILESYSTEM {
-            let path_position = match call.function.as_ref() {
+            let paths: &[(usize, usize)] = match call.function.as_ref() {
                 "[method]descriptor.open-at"
                 | "[method]descriptor.stat-at"
-                | "[method]descriptor.metadata-hash-at" => Some(2),
+                | "[method]descriptor.metadata-hash-at"
+                | "[method]descriptor.symlink-at" => &[(2, 1)],
                 "[method]descriptor.readlink-at"
                 | "[method]descriptor.create-directory-at"
                 | "[method]descriptor.remove-directory-at"
-                | "[method]descriptor.unlink-file-at" => Some(1),
-                _ => None,
+                | "[method]descriptor.unlink-file-at" => &[(1, 1)],
+                "[method]descriptor.rename-at" => &[(1, 2), (3, 1)],
+                "[method]descriptor.link-at" => &[(2, 2), (4, 1)],
+                _ => &[],
             };
-            if let Some(path_position) = path_position {
-                let path = string_arg(call.args.get(path_position), "filesystem path")?;
-                let root = string_arg(call.args.last(), "filesystem preopen")?;
-                arguments[path_position] = crate::path::resolve(base, root, path)?;
+            for &(path_position, root_offset) in paths {
+                resolve_path(
+                    &mut arguments,
+                    call,
+                    base,
+                    path_position,
+                    from_end(call, root_offset)?,
+                )?;
             }
         }
         Ok(Self {
@@ -44,6 +51,29 @@ impl Event {
             "arguments": self.arguments,
         })
     }
+}
+
+fn from_end(call: &Call, offset: usize) -> Result<usize, String> {
+    call.args
+        .len()
+        .checked_sub(offset)
+        .ok_or_else(|| "filesystem preopen is missing".to_owned())
+}
+
+fn resolve_path(
+    arguments: &mut [String],
+    call: &Call,
+    base: &Path,
+    path_position: usize,
+    root_position: usize,
+) -> Result<(), String> {
+    let path = string_arg(call.args.get(path_position), "filesystem path")?;
+    let root = string_arg(call.args.get(root_position), "filesystem preopen")?;
+    let argument = arguments
+        .get_mut(path_position)
+        .ok_or_else(|| "filesystem path is missing".to_owned())?;
+    *argument = crate::path::resolve(base, root, path)?;
+    Ok(())
 }
 
 fn string_arg<'a>(value: Option<&'a Val>, name: &str) -> Result<&'a str, String> {

@@ -219,11 +219,6 @@ fn denies_unlisted_filesystem_and_http_calls_by_name() {
     for (interface, function) in [
         ("wasi:filesystem/types@0.2.12", "[method]descriptor.open-at"),
         ("wasi:http/outgoing-handler@0.2.12", "handle"),
-        (
-            "wasi:filesystem/types@0.3.0",
-            "[method]descriptor.rename-at",
-        ),
-        ("wasi:filesystem/types@0.3.0", "[method]descriptor.link-at"),
         ("example:unknown/interface@1.0.0", "surprise"),
     ] {
         let call = format!("{interface}.{function}");
@@ -235,6 +230,38 @@ fn denies_unlisted_filesystem_and_http_calls_by_name() {
             })
         );
     }
+}
+
+#[test]
+fn names_denied_filesystem_links_and_renames() {
+    let policy = load_policy(&[]);
+    for (function, arguments, effect) in link_call_shapes() {
+        let event = filesystem_event("notes-tools", function, arguments);
+        assert_eq!(
+            policy.decide(&event).unwrap(),
+            Verdict::Deny(Why {
+                effect: effect.into(),
+                reasons: vec![format!("notes-tools may not {effect}")],
+            })
+        );
+    }
+}
+
+#[test]
+fn refuses_unresolved_link_destinations() {
+    let call = filesystem_call_for(
+        "notes-tools",
+        "[method]descriptor.rename-at",
+        vec![
+            "descriptor".into(),
+            "private/diary.md".into(),
+            "other".into(),
+            "../outside".into(),
+            "/notes".into(),
+            "/notes".into(),
+        ],
+    );
+    assert!(Event::from_call(&call, std::path::Path::new(env!("CARGO_MANIFEST_DIR"))).is_err());
 }
 
 #[test]
@@ -910,6 +937,46 @@ fn stat_call_shapes() -> Vec<(&'static str, Vec<Val>, &'static str)> {
                 "/notes".into(),
             ],
             "/notes",
+        ),
+    ]
+}
+
+fn link_call_shapes() -> Vec<(&'static str, Vec<Val>, &'static str)> {
+    vec![
+        (
+            "[method]descriptor.rename-at",
+            vec![
+                "descriptor".into(),
+                "private/diary.md".into(),
+                "other".into(),
+                "drafts/moved.md".into(),
+                "/notes".into(),
+                "/notes".into(),
+            ],
+            "rename private/diary.md to drafts/moved.md",
+        ),
+        (
+            "[method]descriptor.link-at",
+            vec![
+                "descriptor".into(),
+                Val::Flags(Vec::new()),
+                "private/diary.md".into(),
+                "other".into(),
+                "drafts/linked.md".into(),
+                "/notes".into(),
+                "/notes".into(),
+            ],
+            "link private/diary.md to drafts/linked.md",
+        ),
+        (
+            "[method]descriptor.symlink-at",
+            vec![
+                "descriptor".into(),
+                "../shared.md".into(),
+                "drafts/linked.md".into(),
+                "/notes".into(),
+            ],
+            "link ../shared.md to drafts/linked.md",
         ),
     ]
 }

@@ -53,6 +53,9 @@ normalize(event) := {"caller": event.caller, "action": "fs.write", "path": event
 else := {"caller": event.caller, "action": "fs.list", "path": event.arguments[1]} if read_directory(event)
 else := {"caller": event.caller, "action": "fs.stat", "path": stat_path(event)} if filesystem_stat(event)
 else := {"caller": event.caller, "action": "fs.delete", "path": event.arguments[1]} if delete_at(event)
+else := {"caller": event.caller, "action": "fs.rename", "path": event.arguments[1], "to": event.arguments[3]} if rename_at(event)
+else := {"caller": event.caller, "action": "fs.link", "path": event.arguments[2], "to": event.arguments[4]} if link_at(event)
+else := {"caller": event.caller, "action": "fs.link", "path": event.arguments[1], "to": event.arguments[2]} if symlink_at(event)
 else := {"caller": event.caller, "action": "fs.mkdir", "path": event.arguments[1]} if create_directory_at(event)
 else := {"caller": event.caller, "action": "http.request", "host": event.arguments[3], "url": sprintf("%s://%s%s", [lower(event.arguments[2]), event.arguments[3], event.arguments[4]])} if http_send(event)
 else := {"caller": event.caller, "action": "env.read"} if get_environment(event)
@@ -100,6 +103,21 @@ delete_at(event) if {
 create_directory_at(event) if {
 	event.interface == "wasi:filesystem/types@0.3.0"
 	event.function == "[method]descriptor.create-directory-at"
+}
+
+rename_at(event) if {
+	event.interface == "wasi:filesystem/types@0.3.0"
+	event.function == "[method]descriptor.rename-at"
+}
+
+link_at(event) if {
+	event.interface == "wasi:filesystem/types@0.3.0"
+	event.function == "[method]descriptor.link-at"
+}
+
+symlink_at(event) if {
+	event.interface == "wasi:filesystem/types@0.3.0"
+	event.function == "[method]descriptor.symlink-at"
 }
 
 mutating_open(event) if "write" in flag_set(event.arguments[4])
@@ -165,6 +183,8 @@ else := sprintf("read %s", [item.path]) if reading(item)
 else := sprintf("list %s", [item.path]) if item.action == "fs.list"
 else := sprintf("inspect %s", [item.path]) if item.action == "fs.stat"
 else := sprintf("delete %s", [item.path]) if item.action == "fs.delete"
+else := sprintf("rename %s to %s", [item.path, item.to]) if item.action == "fs.rename"
+else := sprintf("link %s to %s", [item.path, item.to]) if item.action == "fs.link"
 else := sprintf("create directory %s", [item.path]) if item.action == "fs.mkdir"
 else := sprintf("make a request to %s", [item.host]) if {
 	item.action == "http.request"
@@ -183,6 +203,8 @@ else := sprintf("%s may not write %s", [item.caller, item.path]) if item.action 
 else := sprintf("%s may not list %s", [item.caller, item.path]) if item.action == "fs.list"
 else := sprintf("%s may not inspect %s", [item.caller, item.path]) if item.action == "fs.stat"
 else := sprintf("%s may not delete %s", [item.caller, item.path]) if item.action == "fs.delete"
+else := sprintf("%s may not rename %s to %s", [item.caller, item.path, item.to]) if item.action == "fs.rename"
+else := sprintf("%s may not link %s to %s", [item.caller, item.path, item.to]) if item.action == "fs.link"
 else := sprintf("%s may not create directory %s", [item.caller, item.path]) if item.action == "fs.mkdir"
 else := sprintf("%s may not send to %s", [item.caller, item.host]) if item.action == "http.request"
 else := sprintf("%s may not read its environment", [item.caller]) if item.action == "env.read"
