@@ -13,7 +13,9 @@ use super::{
     shape, trampoline,
 };
 use crate::engine::StoreData;
-use crate::wasi::gates::filesystem::gate::{add_context_for, validate_context_for};
+use crate::wasi::gates::filesystem::gate::{
+    add_context_for, join_guest_path, validate_context_for,
+};
 
 fn add_context(
     args: &mut Vals,
@@ -134,15 +136,16 @@ pub(super) async fn open_at(
     open_flags: OpenFlags,
     flags: DescriptorFlags,
 ) -> FilesystemResult<Resource<Descriptor>> {
-    let preopen = accessor
+    let parent_path = accessor
         .with(|mut access| {
             access
                 .as_context_mut()
                 .data()
-                .descriptor_preopen(descriptor.rep())
+                .descriptor_guest_path(descriptor.rep())
                 .map(str::to_owned)
         })
         .ok_or(ErrorCode::Access)?;
+    let guest_path = join_guest_path(&parent_path, &path).ok_or(ErrorCode::Access)?;
     let opened =
         HostDescriptorWithStore::open_at(accessor, descriptor, path_flags, path, open_flags, flags)
             .await?;
@@ -150,7 +153,7 @@ pub(super) async fn open_at(
         access
             .as_context_mut()
             .data_mut()
-            .set_descriptor_preopen(opened.rep(), preopen);
+            .set_descriptor_guest_path(opened.rep(), guest_path);
     });
     Ok(opened)
 }
@@ -272,7 +275,7 @@ mod tests {
     };
 
     #[tokio::test(flavor = "current_thread")]
-    async fn open_inherits_its_root_and_rename_carries_both_roots() {
+    async fn open_records_its_guest_path_and_rename_carries_both_paths() {
         let first = TestDirectory::new("p3-first-root");
         let second = TestDirectory::new("p3-second-root");
         std::fs::write(first.path().join("note.txt"), b"note").unwrap();
@@ -303,8 +306,8 @@ mod tests {
                 .unwrap();
                 accessor.with(|mut access| {
                     assert_eq!(
-                        access.get().descriptor_preopen(opened.rep()),
-                        Some("/first")
+                        access.get().descriptor_guest_path(opened.rep()),
+                        Some("/first/note.txt")
                     );
                     let invocation = access.get().context.invocation_id().unwrap();
                     let mut args = scope_values(
@@ -372,6 +375,17 @@ mod tests {
                         .unwrap_err();
                         assert_eq!(error.kind(), CallErrorKind::Refused);
                     }
+                    access.get().remove_descriptor_guest_path(descriptor);
+                    let resource = JunctionResource::__borrowed_for_invocation(
+                        INTERFACE, DESCRIPTOR, descriptor, invocation,
+                    );
+                    let error = validate_context(
+                        &[Val::Resource(resource), Val::String("/data".to_owned())],
+                        &[0],
+                        access.get(),
+                    )
+                    .unwrap_err();
+                    assert_eq!(error.kind(), CallErrorKind::Refused);
                 });
                 Ok(())
             })

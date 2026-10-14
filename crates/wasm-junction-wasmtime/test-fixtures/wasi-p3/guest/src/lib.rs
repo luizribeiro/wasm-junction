@@ -137,6 +137,54 @@ async fn filesystem_probe() -> String {
     format!("{}|{}", String::from_utf8(bytes).unwrap(), names.join(","))
 }
 
+async fn exercise_descriptor_paths() {
+    use wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
+
+    let root = filesystem_root();
+    let _ = root.stat().await.unwrap();
+    let private = root
+        .open_at(
+            PathFlags::empty(),
+            "private".to_owned(),
+            OpenFlags::DIRECTORY,
+            DescriptorFlags::READ,
+        )
+        .await
+        .unwrap();
+    let (entries, completion) = private.read_directory();
+    let _ = entries.collect().await;
+    completion.await.unwrap();
+    let passwords = private
+        .open_at(
+            PathFlags::empty(),
+            "passwords.md".to_owned(),
+            OpenFlags::empty(),
+            DescriptorFlags::READ,
+        )
+        .await
+        .unwrap();
+    let _ = passwords.stat().await.unwrap();
+    let nested = private
+        .open_at(
+            PathFlags::empty(),
+            "./nested".to_owned(),
+            OpenFlags::DIRECTORY,
+            DescriptorFlags::READ,
+        )
+        .await
+        .unwrap();
+    let diary = nested
+        .open_at(
+            PathFlags::empty(),
+            "diary.md".to_owned(),
+            OpenFlags::empty(),
+            DescriptorFlags::READ,
+        )
+        .await
+        .unwrap();
+    let _ = diary.stat().await.unwrap();
+}
+
 async fn cover_filesystem() {
     use wasi::filesystem::types::{Advice, DescriptorFlags, NewTimestamp, OpenFlags, PathFlags};
 
@@ -388,6 +436,10 @@ impl exports::test::wasi_p3::probe::Guest for Component {
 
     async fn filesystem() -> String {
         filesystem_probe().await
+    }
+
+    async fn descriptor_paths() {
+        exercise_descriptor_paths().await;
     }
 
     async fn list_directory() -> Result<Vec<String>, String> {

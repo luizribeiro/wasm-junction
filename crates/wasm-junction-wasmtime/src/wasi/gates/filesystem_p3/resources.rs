@@ -57,7 +57,7 @@ fn add_preopens(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         for (descriptor, path) in &directories {
                             store
                                 .data_mut()
-                                .set_descriptor_preopen(descriptor.rep(), path.clone());
+                                .set_descriptor_guest_path(descriptor.rep(), path.clone());
                         }
                         let invocation = store
                             .data()
@@ -93,19 +93,19 @@ fn add_drop(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ResourceType::host::<Descriptor>(),
         |accessor, id| {
             Box::pin(async move {
-                let (invocation, imports, preopen) = accessor.with(|mut access| {
+                let (invocation, imports, guest_path) = accessor.with(|mut access| {
                     let store = access.as_context_mut();
                     let store = store.data();
                     (
                         store.context.invocation_id(),
                         store.imports.clone(),
-                        store.descriptor_preopen(id).map(str::to_owned),
+                        store.descriptor_guest_path(id).map(str::to_owned),
                     )
                 });
                 let invocation = invocation
                     .ok_or_else(|| wasmtime::Error::msg("WASI drop has no invocation id"))?;
-                let preopen = preopen
-                    .ok_or_else(|| wasmtime::Error::msg("descriptor has no preopen root"))?;
+                let guest_path = guest_path
+                    .ok_or_else(|| wasmtime::Error::msg("descriptor has no guest path"))?;
                 let resource =
                     JunctionResource::__owned_for_invocation(INTERFACE, DESCRIPTOR, id, invocation);
                 imports.emit(EngineEvent::ResourceDrop {
@@ -125,9 +125,10 @@ fn add_drop(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                             validate_owned_resource::<Descriptor>(
                                 &resource, INTERFACE, DESCRIPTOR, store,
                             )?;
-                            if store.descriptor_preopen(resource.id()) != Some(context.as_str()) {
+                            if store.descriptor_guest_path(resource.id()) != Some(context.as_str())
+                            {
                                 return Err(CallError::refused(
-                                    "descriptor preopen context does not match",
+                                    "descriptor guest path context does not match",
                                 ));
                             }
                             types::HostDescriptor::drop(
@@ -143,7 +144,7 @@ fn add_drop(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     accessor,
                     INTERFACE,
                     "[drop]descriptor",
-                    vec![Val::Resource(resource), Val::String(preopen)],
+                    vec![Val::Resource(resource), Val::String(guest_path)],
                     real,
                 )
                 .await;
@@ -152,7 +153,7 @@ fn add_drop(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     access
                         .as_context_mut()
                         .data_mut()
-                        .remove_descriptor_preopen(id);
+                        .remove_descriptor_guest_path(id);
                 });
                 Ok(())
             })

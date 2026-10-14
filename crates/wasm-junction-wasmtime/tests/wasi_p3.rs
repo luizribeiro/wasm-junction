@@ -685,6 +685,74 @@ fn filesystem_streams_write_append_read_and_list() {
 }
 
 #[cfg(feature = "wasi-p3")]
+struct ObserveFilesystemPaths(Arc<Mutex<Vec<(String, Vals)>>>);
+
+#[cfg(feature = "wasi-p3")]
+impl Middleware for ObserveFilesystemPaths {
+    async fn call(&self, call: Call, next: Next) -> Result<Vals, CallError> {
+        if call.interface.as_ref() == "wasi:filesystem/types@0.3.0"
+            && matches!(
+                call.function.as_ref(),
+                "[method]descriptor.open-at"
+                    | "[method]descriptor.stat"
+                    | "[method]descriptor.read-directory"
+            )
+        {
+            self.0
+                .lock()
+                .unwrap()
+                .push((call.function.to_string(), call.args.clone()));
+        }
+        next.run(call).await
+    }
+}
+
+#[test]
+#[cfg(feature = "wasi-p3")]
+fn derived_p3_descriptors_carry_their_lexical_guest_paths() {
+    let directory = TestDirectory::new("descriptor-paths");
+    std::fs::create_dir_all(directory.0.join("private/nested")).unwrap();
+    std::fs::write(directory.0.join("private/passwords.md"), b"secret").unwrap();
+    std::fs::write(directory.0.join("private/nested/diary.md"), b"private").unwrap();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let app = filesystem_app(ObserveFilesystemPaths(seen.clone()), &directory);
+
+    block_on(app.call("p3", EXPORT, "descriptor-paths", Vec::new())).unwrap();
+
+    let seen = seen.lock().unwrap();
+    let open_context = |path: &str| {
+        seen.iter()
+            .find(|(function, args)| {
+                function == "[method]descriptor.open-at" && args.get(2) == Some(&Val::from(path))
+            })
+            .and_then(|(_, args)| args.last())
+    };
+    assert_eq!(open_context("private"), Some(&Val::from("/data")));
+    assert_eq!(
+        open_context("passwords.md"),
+        Some(&Val::from("/data/private"))
+    );
+    assert_eq!(open_context("./nested"), Some(&Val::from("/data/private")));
+    assert_eq!(
+        open_context("diary.md"),
+        Some(&Val::from("/data/private/nested"))
+    );
+    assert!(seen.iter().any(|(function, args)| {
+        function == "[method]descriptor.read-directory"
+            && args.last() == Some(&Val::from("/data/private"))
+    }));
+    for path in [
+        "/data",
+        "/data/private/passwords.md",
+        "/data/private/nested/diary.md",
+    ] {
+        assert!(seen.iter().any(|(function, args)| {
+            function == "[method]descriptor.stat" && args.last() == Some(&Val::from(path))
+        }));
+    }
+}
+
+#[cfg(feature = "wasi-p3")]
 struct HideEntry;
 
 #[cfg(feature = "wasi-p3")]

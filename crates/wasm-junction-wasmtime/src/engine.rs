@@ -135,21 +135,6 @@ impl StoreData {
         self.wasi.remove_descriptor_guest_path(id);
     }
 
-    #[cfg(feature = "wasi-p3")]
-    pub(crate) fn set_descriptor_preopen(&mut self, id: u32, guest_path: String) {
-        self.set_descriptor_guest_path(id, guest_path);
-    }
-
-    #[cfg(feature = "wasi-p3")]
-    pub(crate) fn descriptor_preopen(&self, id: u32) -> Option<&str> {
-        self.descriptor_guest_path(id)
-    }
-
-    #[cfg(feature = "wasi-p3")]
-    pub(crate) fn remove_descriptor_preopen(&mut self, id: u32) {
-        self.remove_descriptor_guest_path(id);
-    }
-
     pub(crate) fn set_directory_stream_guest_path(&mut self, id: u32, guest_path: String) {
         self.wasi.set_directory_stream_guest_path(id, guest_path);
     }

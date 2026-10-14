@@ -129,7 +129,7 @@ pub(super) fn preopens(accessor: &wasmtime::component::Accessor<StoreData>) -> V
             let store = access.get();
             let directories = preopens::Host::get_directories(&mut views::filesystem(store))?;
             for (descriptor, path) in &directories {
-                store.set_descriptor_preopen(descriptor.rep(), path.clone());
+                store.set_descriptor_guest_path(descriptor.rep(), path.clone());
             }
             Ok(directories
                 .into_iter()
