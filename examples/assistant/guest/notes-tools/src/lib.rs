@@ -18,7 +18,13 @@ impl exports::example::assistant::notes_tools::Guest for Component {
             match entry.type_ {
                 DescriptorType::RegularFile => notes.push(entry.name),
                 DescriptorType::Directory => {
-                    let directory = open(&root, &entry.name).await?;
+                    let directory = open(
+                        &root,
+                        &entry.name,
+                        OpenFlags::DIRECTORY,
+                        DescriptorFlags::READ,
+                    )
+                    .await?;
                     for child in entries(&directory).await? {
                         if matches!(child.type_, DescriptorType::RegularFile) {
                             notes.push(format!("{}/{}", entry.name, child.name));
@@ -33,7 +39,13 @@ impl exports::example::assistant::notes_tools::Guest for Component {
     }
 
     async fn read_note(path: String) -> Result<String, String> {
-        let file = open(&notes_directory()?, &path).await?;
+        let file = open(
+            &notes_directory()?,
+            &path,
+            OpenFlags::empty(),
+            DescriptorFlags::READ,
+        )
+        .await?;
         let (bytes, completion) = file.read_via_stream(0);
         let bytes = bytes.collect().await;
         completion.await.map_err(error)?;
@@ -41,15 +53,13 @@ impl exports::example::assistant::notes_tools::Guest for Component {
     }
 
     async fn write_note(path: String, text: String) -> Result<(), String> {
-        let file = notes_directory()?
-            .open_at(
-                PathFlags::empty(),
-                path,
-                OpenFlags::CREATE | OpenFlags::TRUNCATE,
-                DescriptorFlags::WRITE,
-            )
-            .await
-            .map_err(error)?;
+        let file = open(
+            &notes_directory()?,
+            &path,
+            OpenFlags::CREATE | OpenFlags::TRUNCATE,
+            DescriptorFlags::WRITE,
+        )
+        .await?;
         let (mut writer, reader) = wit_stream::new();
         wit_bindgen::spawn_local(async move {
             let _ = writer.write_all(text.into_bytes()).await;
@@ -75,13 +85,18 @@ async fn entries(
     Ok(entries)
 }
 
-async fn open(directory: &Descriptor, path: &str) -> Result<Descriptor, String> {
+async fn open(
+    directory: &Descriptor,
+    path: &str,
+    open_flags: OpenFlags,
+    descriptor_flags: DescriptorFlags,
+) -> Result<Descriptor, String> {
     directory
         .open_at(
             PathFlags::empty(),
             path.into(),
-            OpenFlags::empty(),
-            DescriptorFlags::READ,
+            open_flags,
+            descriptor_flags,
         )
         .await
         .map_err(error)

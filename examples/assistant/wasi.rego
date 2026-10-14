@@ -46,6 +46,9 @@ host_allowed(hosts, host) if host in hosts
 normalize(event) := {"caller": event.caller, "action": "fs.write", "path": event.arguments[2]} if {
 	open_at(event)
 	mutating_open(event)
+} else := {"caller": event.caller, "action": "fs.list", "path": event.arguments[2]} if {
+	open_at(event)
+	directory_open(event)
 } else := {"caller": event.caller, "action": "fs.read", "path": event.arguments[2]} if open_at(event)
 else := {"caller": event.caller, "action": "fs.list", "path": event.arguments[1]} if read_directory(event)
 else := {"caller": event.caller, "action": "http.request", "host": event.arguments[3], "url": sprintf("%s://%s%s", [lower(event.arguments[2]), event.arguments[3], event.arguments[4]])} if http_send(event)
@@ -66,6 +69,7 @@ read_directory(event) if {
 mutating_open(event) if "write" in flag_set(event.arguments[4])
 mutating_open(event) if "create" in flag_set(event.arguments[3])
 mutating_open(event) if "truncate" in flag_set(event.arguments[3])
+directory_open(event) if "directory" in flag_set(event.arguments[3])
 
 http_send(event) if {
 	event.interface == "wasi:http/client@0.3.0"

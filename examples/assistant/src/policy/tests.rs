@@ -111,6 +111,18 @@ fn every_open_is_a_read_and_mutating_flags_make_it_a_write() {
             reasons: vec!["notes-tools may not write draft.md".into()],
         })
     );
+    for event in [
+        open_at_with("private", &["directory", "create"], &["read"]),
+        open_at_with("private", &["directory"], &["read", "write"]),
+    ] {
+        assert_eq!(
+            policy.decide(&event).unwrap(),
+            Verdict::Deny(Why {
+                effect: "write private".into(),
+                reasons: vec!["notes-tools may not write private".into()],
+            })
+        );
+    }
 }
 
 #[test]
@@ -140,6 +152,15 @@ fn allows_only_notes_tools_to_list_the_notes_directory() {
         Verdict::Deny(Why {
             effect: "list /notes".into(),
             reasons: vec!["weather-tools may not list /notes".into()],
+        })
+    );
+    let call = filesystem_call_with("weather-tools", "private", &["directory"], &["read"]);
+    let event = Event::from_call(&call, std::path::Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap();
+    assert_eq!(
+        policy.decide(&event).unwrap(),
+        Verdict::Deny(Why {
+            effect: "list private".into(),
+            reasons: vec!["weather-tools may not list private".into()],
         })
     );
 }
@@ -411,21 +432,38 @@ fn dropped_turn_drops_its_private_label() {
 }
 
 #[test]
-fn opening_the_private_directory_marks_the_turn_private() {
+fn listing_notes_does_not_label_the_conversation() {
     let policy = load_policy(&[]);
     policy.begin_turn().unwrap();
     assert!(matches!(
-        policy.decide(&open_at("private", &[])),
+        policy.decide(&tool_call("agent", "notes-tools", "list-notes")),
         Ok(Verdict::Allow(_))
     ));
+    assert!(matches!(
+        policy.decide(&read_directory_at("notes-tools", "/notes")),
+        Ok(Verdict::Allow(_))
+    ));
+    for directory in ["private", "drafts"] {
+        assert_eq!(
+            policy
+                .decide(&open_at_with(directory, &["directory"], &["read"]))
+                .unwrap(),
+            Verdict::Allow(format!("list {directory}"))
+        );
+        assert_eq!(
+            policy
+                .decide(&read_directory_at("notes-tools", directory))
+                .unwrap(),
+            Verdict::Allow(format!("list {directory}"))
+        );
+    }
     policy.end_turn(true).unwrap();
 
     policy.begin_turn().unwrap();
-    assert!(matches!(
-        policy.decide(&http_send("agent", "model.example")),
-        Ok(Verdict::Ask(Why { reasons, .. }, _))
-            if reasons == ["conversation includes private".to_owned()]
-    ));
+    assert_eq!(
+        policy.decide(&http_send("agent", "model.example")).unwrap(),
+        Verdict::Allow("make a request to model.example".into())
+    );
 }
 
 #[test]
@@ -559,12 +597,16 @@ fn tool_call(source: &str, target: &str, function: &str) -> Event {
 }
 
 fn read_directory(caller: &str) -> Event {
+    read_directory_at(caller, "/notes")
+}
+
+fn read_directory_at(caller: &str, path: &str) -> Event {
     Event {
         caller: caller.into(),
         callee: "wasi:filesystem/types@0.3.0".into(),
         interface: "wasi:filesystem/types@0.3.0".into(),
         function: "[method]descriptor.read-directory".into(),
-        arguments: vec!["<resource>".into(), "/notes".into()],
+        arguments: vec!["<resource>".into(), path.into()],
     }
 }
 
