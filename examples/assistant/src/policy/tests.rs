@@ -519,6 +519,23 @@ fn allowed_hosts_deny_by_default() {
 }
 
 #[test]
+fn includes_the_http_method_in_requests() {
+    let policy = load_policy(&[]);
+    let event = http_send("web-tools", "example.com");
+    let mut state = policy.inner.lock().unwrap();
+    state.engine.set_input(
+        regorus::Value::from_json_str(&serde_json::json!({"event": event.json()}).to_string())
+            .unwrap(),
+    );
+    let request = state
+        .engine
+        .eval_rule("data.assistant.request".into())
+        .unwrap();
+    let request: serde_json::Value = serde_json::from_str(&request.to_json_str().unwrap()).unwrap();
+    assert_eq!(request["method"], "post");
+}
+
+#[test]
 fn does_not_ask_for_a_request_without_an_allow_rule() {
     let policy = private_conversation();
     policy.begin_turn().unwrap();
