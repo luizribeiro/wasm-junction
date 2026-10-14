@@ -9,12 +9,19 @@ const FILESYSTEM: &str = "wasi:filesystem/types@0.3.0";
 impl Event {
     pub(super) fn from_call(call: &Call, base: &Path) -> Result<Self, String> {
         let mut arguments = call.args.iter().map(value_text).collect::<Vec<_>>();
-        if call.interface.as_ref() == FILESYSTEM
-            && call.function.as_ref() == "[method]descriptor.open-at"
-        {
-            let path = string_arg(call.args.get(2), "filesystem path")?;
-            let root = string_arg(call.args.last(), "filesystem preopen")?;
-            arguments[2] = crate::path::resolve(base, root, path)?;
+        if call.interface.as_ref() == FILESYSTEM {
+            let path_position = match call.function.as_ref() {
+                "[method]descriptor.open-at"
+                | "[method]descriptor.stat-at"
+                | "[method]descriptor.metadata-hash-at" => Some(2),
+                "[method]descriptor.readlink-at" => Some(1),
+                _ => None,
+            };
+            if let Some(path_position) = path_position {
+                let path = string_arg(call.args.get(path_position), "filesystem path")?;
+                let root = string_arg(call.args.last(), "filesystem preopen")?;
+                arguments[path_position] = crate::path::resolve(base, root, path)?;
+            }
         }
         Ok(Self {
             caller: call.caller.to_string(),

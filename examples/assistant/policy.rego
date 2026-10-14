@@ -49,6 +49,11 @@ allow if {
 }
 
 allow if {
+	request.action == "fs.stat"
+	request.caller == "notes-tools"
+}
+
+allow if {
 	request.action == "http.request"
 	host_allowed(allowed_hosts[request.caller], request.host)
 }

@@ -194,6 +194,26 @@ fn allows_only_notes_tools_to_list_the_notes_directory() {
 }
 
 #[test]
+fn allows_only_notes_tools_to_inspect_filesystem_metadata() {
+    let policy = load_policy(&[]);
+    for (function, arguments, path) in stat_call_shapes() {
+        for (caller, expected) in [
+            ("notes-tools", Verdict::Allow(format!("inspect {path}"))),
+            (
+                "weather-tools",
+                Verdict::Deny(Why {
+                    effect: format!("inspect {path}"),
+                    reasons: vec![format!("weather-tools may not inspect {path}")],
+                }),
+            ),
+        ] {
+            let event = filesystem_event(caller, function, arguments.clone());
+            assert_eq!(policy.decide(&event).unwrap(), expected);
+        }
+    }
+}
+
+#[test]
 fn denies_unlisted_filesystem_and_http_calls_by_name() {
     let policy = load_policy(&[]);
     for (interface, function) in [
@@ -782,6 +802,71 @@ async fn stub_next(call: Call) -> Result<Vec<Val>, wasm_junction::CallError> {
 
 fn filesystem_call(caller: &str, path: &str, flags: &[&str]) -> Call {
     filesystem_call_with(caller, path, &[], flags)
+}
+
+fn filesystem_event(caller: &str, function: &str, arguments: Vec<Val>) -> Event {
+    let call = Call::new(
+        Caller::Component(caller.into()),
+        "wasi:filesystem/types@0.3.0",
+        "wasi:filesystem/types@0.3.0",
+        function,
+        arguments,
+    );
+    Event::from_call(&call, std::path::Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap()
+}
+
+fn stat_call_shapes() -> Vec<(&'static str, Vec<Val>, &'static str)> {
+    vec![
+        (
+            "[method]descriptor.stat",
+            vec!["descriptor".into(), "/notes".into()],
+            "/notes",
+        ),
+        (
+            "[method]descriptor.stat-at",
+            vec![
+                "descriptor".into(),
+                Val::Flags(Vec::new()),
+                "private/diary.md".into(),
+                "/notes".into(),
+            ],
+            "private/diary.md",
+        ),
+        (
+            "[method]descriptor.metadata-hash",
+            vec!["descriptor".into(), "/notes".into()],
+            "/notes",
+        ),
+        (
+            "[method]descriptor.metadata-hash-at",
+            vec![
+                "descriptor".into(),
+                Val::Flags(Vec::new()),
+                "private/diary.md".into(),
+                "/notes".into(),
+            ],
+            "private/diary.md",
+        ),
+        (
+            "[method]descriptor.readlink-at",
+            vec![
+                "descriptor".into(),
+                "private/diary.md".into(),
+                "/notes".into(),
+            ],
+            "private/diary.md",
+        ),
+        (
+            "[method]descriptor.is-same-object",
+            vec![
+                "descriptor".into(),
+                "other".into(),
+                "/notes".into(),
+                "/notes".into(),
+            ],
+            "/notes",
+        ),
+    ]
 }
 
 fn open_at_with(path: &str, open_flags: &[&str], descriptor_flags: &[&str]) -> Event {
