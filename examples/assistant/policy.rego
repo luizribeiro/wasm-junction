@@ -23,47 +23,34 @@ tool_calls := {
 default private_data_hosts := set()
 private_data_hosts := data.private_data_hosts
 
-deny contains sprintf("%s may not read notes", [request.caller]) if {
-	reading(request)
-	request.caller != "notes-tools"
+allow if {
+	request.action == "fs.read"
+	request.caller == "notes-tools"
 }
 
-deny contains sprintf("%s may not write notes", [request.caller]) if {
-	writing(request)
-	request.caller != "notes-tools"
+allow if {
+	request.action == "fs.write"
+	request.caller == "notes-tools"
+	under(request.path, drafts_dir)
 }
+
+allow if {
+	request.action == "fs.list"
+	request.caller == "notes-tools"
+}
+
+allow if {
+	request.action == "http.request"
+	host_allowed(allowed_hosts[request.caller], request.host)
+}
+
+allow if request.tool in tool_calls[request.caller]
+allow if request.action == "plumbing"
 
 deny contains sprintf("%s is secret", [request.path]) if {
 	reading(request)
 	request.path in secret_paths
 }
-
-deny contains sprintf("%s is outside %s/", [request.path, drafts_dir]) if {
-	writing(request)
-	not under(request.path, drafts_dir)
-}
-
-deny contains sprintf("%s may not send to %s", [request.caller, request.host]) if {
-	request.action == "http.request"
-	not host_allowed(request.caller, request.host)
-}
-
-deny contains sprintf("%s may not call %s", [request.caller, request.tool]) if {
-	request.action == "tool.call"
-	not request.tool in tool_calls[request.caller]
-}
-
-deny contains sprintf("%s may not list %s", [request.caller, request.path]) if {
-	request.action == "fs.list"
-	request.caller != "notes-tools"
-}
-
-deny contains sprintf("%s is not allowed by the policy", [request.call]) if {
-	request.action == "other"
-}
-
-host_allowed(caller, host) if "*" in allowed_hosts[caller]
-host_allowed(caller, host) if host in allowed_hosts[caller]
 
 private_data_host(item) if {
 	item.action == "http.request"
@@ -83,30 +70,23 @@ ask contains reason if {
 	reason := sprintf("conversation includes content from %s", [source])
 }
 
-consent_key(item, reason) := sprintf("%s|%s|%s", [item.caller, effect(item), reason])
-
-deny contains reason if {
-	some reason in ask
-	consent_key(request, reason) in input.refused
-}
-
 turn_private contains path if {
 	some earlier in history_requests
-	reading(earlier)
+	earlier.action == "fs.read"
 	path := earlier.path
 	under(path, private_dir)
 }
 
 turn_private contains path if {
 	some earlier in history_requests
-	reading(earlier)
+	earlier.action == "fs.read"
 	path := earlier.path
 	under(path, drafts_dir)
 }
 
 turn_untrusted contains source if {
 	some earlier in history_requests
-	reading(earlier)
+	earlier.action == "fs.read"
 	under(earlier.path, drafts_dir)
 	source := earlier.path
 }

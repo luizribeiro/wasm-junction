@@ -76,7 +76,7 @@ fn real_call_shapes_reach_the_expected_rules() {
         policy.decide(&outside).unwrap(),
         Verdict::Deny(Why {
             effect: "write private/output.md".into(),
-            reasons: vec!["private/output.md is outside drafts/".into()],
+            reasons: vec!["notes-tools may not write private/output.md".into()],
         })
     );
 }
@@ -90,7 +90,7 @@ fn every_open_is_a_read_and_mutating_flags_make_it_a_write() {
             .unwrap(),
         Verdict::Deny(Why {
             effect: "read research.md".into(),
-            reasons: vec!["weather-tools may not read notes".into()],
+            reasons: vec!["weather-tools may not read research.md".into()],
         })
     );
     assert_eq!(
@@ -99,7 +99,16 @@ fn every_open_is_a_read_and_mutating_flags_make_it_a_write() {
             .unwrap(),
         Verdict::Deny(Why {
             effect: "write draft.md".into(),
-            reasons: vec!["draft.md is outside drafts/".into()],
+            reasons: vec!["notes-tools may not write draft.md".into()],
+        })
+    );
+    assert_eq!(
+        policy
+            .decide(&open_at_with("draft.md", &["create"], &[]))
+            .unwrap(),
+        Verdict::Deny(Why {
+            effect: "write draft.md".into(),
+            reasons: vec!["notes-tools may not write draft.md".into()],
         })
     );
 }
@@ -136,11 +145,20 @@ fn allows_only_notes_tools_to_list_the_notes_directory() {
 }
 
 #[test]
-fn denies_unlisted_calls_by_name() {
+fn denies_unlisted_filesystem_and_http_calls_by_name() {
     let policy = load_policy(&[]);
     for (interface, function) in [
         ("wasi:filesystem/types@0.2.12", "[method]descriptor.open-at"),
         ("wasi:http/outgoing-handler@0.2.12", "handle"),
+        (
+            "wasi:filesystem/types@0.3.0",
+            "[method]descriptor.rename-at",
+        ),
+        ("wasi:filesystem/types@0.3.0", "[method]descriptor.link-at"),
+        (
+            "wasi:filesystem/types@0.3.0",
+            "[method]descriptor.unlink-file-at",
+        ),
         ("example:unknown/interface@1.0.0", "surprise"),
     ] {
         let call = format!("{interface}.{function}");
@@ -161,7 +179,7 @@ fn weather_tools_cannot_write_notes() {
     assert!(matches!(
         load_policy(&[]).decide(&event).unwrap(),
         Verdict::Deny(Why { reasons, .. })
-            if reasons.contains(&"weather-tools may not write notes".to_owned())
+            if reasons.contains(&"weather-tools may not write notes/weather.md".to_owned())
     ));
 }
 
@@ -178,7 +196,7 @@ fn allowed_hosts_deny_by_default() {
             .unwrap(),
         Verdict::Deny(Why {
             effect: "read private/diary.md".into(),
-            reasons: vec!["weather-tools may not read notes".into()],
+            reasons: vec!["weather-tools may not read private/diary.md".into()],
         })
     );
     assert!(matches!(
@@ -208,6 +226,21 @@ fn allowed_hosts_deny_by_default() {
         policy.decide(&http_send("agent", "outside.example")),
         Ok(Verdict::Deny(_))
     ));
+}
+
+#[test]
+fn does_not_ask_for_a_request_without_an_allow_rule() {
+    let policy = private_conversation();
+    policy.begin_turn().unwrap();
+    assert_eq!(
+        policy
+            .decide(&http_send("notes-tools", "model.example"))
+            .unwrap(),
+        Verdict::Deny(Why {
+            effect: "make a request to https://model.example/".into(),
+            reasons: vec!["notes-tools may not send to model.example".into()],
+        })
+    );
 }
 
 #[test]
@@ -387,6 +420,22 @@ fn reading_a_draft_marks_both_kinds_of_sensitive_content() {
     assert!(matches!(
         policy.decide(&open_at("drafts/other.md", &["write"])),
         Ok(Verdict::Ask(_))
+    ));
+}
+
+#[test]
+fn writing_a_draft_adds_nothing_to_the_conversation() {
+    let policy = load_policy(&[]);
+    policy.begin_turn().unwrap();
+    policy
+        .decide(&open_at("drafts/timing.md", &["write"]))
+        .unwrap();
+    policy.end_turn(true).unwrap();
+
+    policy.begin_turn().unwrap();
+    assert!(matches!(
+        policy.decide(&http_send("agent", "model.example")),
+        Ok(Verdict::Allow(..))
     ));
 }
 

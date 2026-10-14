@@ -8,13 +8,25 @@ package assistant
 request := normalize(input.event)
 history_requests := [normalize(event) | some event in input.history]
 
-default decision := {"verdict": "allow", "reasons": set(), "effect": "", "consent": set(), "remember": false}
+default decision := {"verdict": "deny", "reasons": {"policy has no decision"}, "effect": "evaluate policy", "consent": set(), "remember": false}
 
-decision := {"verdict": "deny", "reasons": deny, "effect": effect(request), "consent": consent, "remember": remember(request)} if count(deny) > 0
-else := {"verdict": "ask", "reasons": pending_ask, "effect": effect(request), "consent": consent, "remember": remember(request)} if count(pending_ask) > 0
-else := {"verdict": "allow", "reasons": set(), "effect": effect(request), "consent": consent, "remember": remember(request)} if true
+decision := verdict("deny", deny) if count(deny) > 0
+else := verdict("ask", pending_ask) if {
+	allow
+	count(pending_ask) > 0
+}
+else := verdict("allow", set()) if allow
+else := verdict("deny", {default_reason(request)}) if true
 
-consent contains consent_key(request, reason) if some reason in ask
+verdict(name, reasons) := {
+	"verdict": name,
+	"reasons": reasons,
+	"effect": effect(request),
+	"consent": consent,
+	"remember": remember(request),
+}
+
+consent contains consent_key(request, reason) if some reason in pending_ask
 
 pending_ask contains reason if {
 	some reason in ask
@@ -22,6 +34,14 @@ pending_ask contains reason if {
 	not key in input.approved
 	not key in input.refused
 }
+
+deny contains reason if {
+	some reason in ask
+	consent_key(request, reason) in input.refused
+}
+
+host_allowed(hosts, host) if "*" in hosts
+host_allowed(hosts, host) if host in hosts
 
 normalize(event) := {"caller": event.caller, "action": "fs.write", "path": event.arguments[2]} if {
 	open_at(event)
@@ -97,6 +117,8 @@ call_name(event) := sprintf("%s.%s", [event.interface, event.function])
 reading(item) if item.action in {"fs.read", "fs.write"}
 writing(item) if item.action == "fs.write"
 
+consent_key(item, reason) := sprintf("%s|%s|%s", [item.caller, effect(item), reason])
+
 effect(item) := sprintf("write %s", [item.path]) if writing(item)
 else := sprintf("read %s", [item.path]) if reading(item)
 else := sprintf("list %s", [item.path]) if item.action == "fs.list"
@@ -110,3 +132,11 @@ else := sprintf("call %s", [item.tool]) if {
 }
 else := sprintf("call %s", [item.call]) if item.action == "other"
 else := ""
+
+default_reason(item) := sprintf("%s may not read %s", [item.caller, item.path]) if item.action == "fs.read"
+else := sprintf("%s may not write %s", [item.caller, item.path]) if item.action == "fs.write"
+else := sprintf("%s may not list %s", [item.caller, item.path]) if item.action == "fs.list"
+else := sprintf("%s may not send to %s", [item.caller, item.host]) if item.action == "http.request"
+else := sprintf("%s may not call %s", [item.caller, item.tool]) if item.action == "tool.call"
+else := sprintf("%s is not allowed by the policy", [item.call]) if item.action == "other"
+else := sprintf("%s may not perform %s", [item.caller, item.action])
