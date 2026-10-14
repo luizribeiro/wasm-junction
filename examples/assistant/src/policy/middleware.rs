@@ -97,10 +97,14 @@ impl PolicyMiddleware {
                     self.policy.reject(&consent_keys).map_err(CallError::trap)?;
                     return self.refuse(&why, "denied");
                 }
-                self.policy
+                match self
+                    .policy
                     .approve(&event, &consent_keys)
-                    .map_err(CallError::trap)?;
-                next(call).await
+                    .map_err(CallError::trap)?
+                {
+                    Verdict::Allow(_) => next(call).await,
+                    Verdict::Ask(why, _) | Verdict::Deny(why) => self.refuse(&why, "denied"),
+                }
             }
         }
     }

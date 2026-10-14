@@ -109,14 +109,28 @@ impl Policy {
         Ok(apply(&mut state, event, decision))
     }
 
-    pub(crate) fn approve(&self, event: &Event, consent: &BTreeSet<String>) -> Result<(), String> {
+    pub(crate) fn approve(
+        &self,
+        event: &Event,
+        consent: &BTreeSet<String>,
+    ) -> Result<Verdict, String> {
         let mut state = self.inner.lock().map_err(|error| error.to_string())?;
-        let decision = evaluate(&mut state, event)?;
-        if decision.remember {
-            state.approved.extend(consent.iter().cloned());
+        let added = consent
+            .difference(&state.approved)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        state.approved.extend(added.iter().cloned());
+        let decision = match evaluate(&mut state, event) {
+            Ok(decision) => decision,
+            Err(error) => {
+                state.approved.retain(|key| !added.contains(key));
+                return Err(error);
+            }
+        };
+        if decision.verdict != "allow" || !decision.remember {
+            state.approved.retain(|key| !added.contains(key));
         }
-        state.turn.push(event.clone());
-        Ok(())
+        Ok(apply(&mut state, event, decision))
     }
 
     pub(crate) fn reject(&self, consent: &BTreeSet<String>) -> Result<(), String> {

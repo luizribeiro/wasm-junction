@@ -258,7 +258,10 @@ fn private_data_hosts_cover_any_allowed_request() {
     let Verdict::Ask(_, consent) = verdict else {
         unreachable!()
     };
-    policy.approve(&model, &consent).unwrap();
+    assert!(matches!(
+        policy.approve(&model, &consent),
+        Ok(Verdict::Allow(_))
+    ));
     assert_eq!(
         policy.decide(&model).unwrap(),
         Verdict::Allow("make a request to model.example".into())
@@ -310,7 +313,10 @@ fn write_approvals_are_not_remembered() {
     let Verdict::Ask(_, consent) = verdict else {
         unreachable!()
     };
-    fetched.approve(&write, &consent).unwrap();
+    assert!(matches!(
+        fetched.approve(&write, &consent),
+        Ok(Verdict::Allow(_))
+    ));
     fetched.end_turn(true).unwrap();
     fetched.begin_turn().unwrap();
     assert!(matches!(fetched.decide(&write), Ok(Verdict::Ask(..))));
@@ -471,7 +477,10 @@ fn private_conversation() -> Policy {
     let Verdict::Ask(_, consent) = policy.decide(&model).unwrap() else {
         unreachable!()
     };
-    policy.approve(&model, &consent).unwrap();
+    assert!(matches!(
+        policy.approve(&model, &consent),
+        Ok(Verdict::Allow(_))
+    ));
     policy.end_turn(true).unwrap();
     policy
 }
@@ -537,6 +546,28 @@ async fn middleware_owns_policy_and_handles_consent() {
             CallErrorKind::Refused
         );
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn consent_is_rechecked_before_the_call_runs() {
+    let policy = load_policy(&[]);
+    policy
+        .decide(&open_at("private/diary.md", &["read"]))
+        .unwrap();
+    let (sender, mut requests) = mpsc::unbounded_channel();
+    let console = Console::new(Cursor::new(Vec::<u8>::new()), std::io::sink());
+    let middleware = PolicyMiddleware::new(policy.clone(), console, "model.example".into(), false)
+        .with_consent(sender);
+    let send = middleware.enforce(http_call("web-tools", "example.com"), stub_next);
+    let change_policy = async {
+        let request = requests.recv().await.unwrap();
+        policy
+            .decide(&open_at("private/second.md", &["read"]))
+            .unwrap();
+        request.answer.send(true).unwrap();
+    };
+    let (result, ()) = tokio::join!(send, change_policy);
+    assert_eq!(result.unwrap_err().kind(), CallErrorKind::Refused);
 }
 
 async fn consent_result(answer: Option<bool>) -> Result<Vec<Val>, wasm_junction::CallError> {
