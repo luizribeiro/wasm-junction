@@ -36,7 +36,7 @@ async fn refuses_consent_then_continues_chatting() {
     }
     let mut settings = Settings::read().unwrap().unwrap();
     settings.private_data_hosts.clear();
-    let input = "Use read_note to read private/diary.md, then summarize it.\nn\nReply with one short greeting without tools.\ny\n\n";
+    let input = "Use read_note to read private/diary.md, then summarize it.\nn\nReply with one short greeting without tools.\n\n";
     let reached = Reached::default();
     let observer = reached.clone();
     let output = SharedOutput::default();
