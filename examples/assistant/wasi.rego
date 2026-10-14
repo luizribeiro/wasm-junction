@@ -8,97 +8,110 @@ package assistant
 default private_data_hosts := set()
 private_data_hosts := data.private_data_hosts
 
+request := normalize(input.event)
+history_requests := [normalize(event) | some event in input.history]
+
 default decision := {"verdict": "allow", "reasons": set(), "effect": "", "consent": set(), "remember": false}
 
-decision := {"verdict": "deny", "reasons": deny, "effect": effect(input.event), "consent": consent, "remember": remember(input.event)} if count(deny) > 0
-else := {"verdict": "ask", "reasons": pending_ask, "effect": effect(input.event), "consent": consent, "remember": remember(input.event)} if count(pending_ask) > 0
-else := {"verdict": "allow", "reasons": set(), "effect": effect(input.event), "consent": consent, "remember": remember(input.event)} if true
+decision := {"verdict": "deny", "reasons": deny, "effect": effect(request), "consent": consent, "remember": remember(request)} if count(deny) > 0
+else := {"verdict": "ask", "reasons": pending_ask, "effect": effect(request), "consent": consent, "remember": remember(request)} if count(pending_ask) > 0
+else := {"verdict": "allow", "reasons": set(), "effect": effect(request), "consent": consent, "remember": remember(request)} if true
 
-consent contains consent_key(input.event, reason) if some reason in ask
+consent contains consent_key(request, reason) if some reason in ask
 
 pending_ask contains reason if {
 	some reason in ask
-	key := consent_key(input.event, reason)
+	key := consent_key(request, reason)
 	not key in input.approved
 	not key in input.refused
 }
 
-remember(event) := true if {
-	event.caller == "agent"
-	sending(event) == data.model_host
+remember(item) := true if {
+	item.caller == "agent"
+	item.action == "http.request"
+	item.host == data.model_host
 } else := false
 
 turn_private contains path if {
-	some earlier in input.history
-	path := reading(earlier)
-	startswith(path, private_prefix)
+	some earlier in history_requests
+	reading(earlier)
+	path := earlier.path
+	starts_with_private(path)
 }
 
 turn_private contains path if {
-	some earlier in input.history
-	path := reading(earlier)
-	startswith(path, drafts_prefix)
+	some earlier in history_requests
+	reading(earlier)
+	path := earlier.path
+	starts_with_drafts(path)
 }
 
-turn_untrusted contains path if {
-	some earlier in input.history
-	path := reading(earlier)
-	startswith(path, drafts_prefix)
+turn_untrusted contains source if {
+	some earlier in history_requests
+	reading(earlier)
+	starts_with_drafts(earlier.path)
+	source := earlier.path
 }
 
 turn_untrusted contains host if {
-	some earlier in input.history
+	some earlier in history_requests
+	earlier.action == "http.request"
 	earlier.caller == "web-tools"
-	host := sending(earlier)
+	host := earlier.host
 }
 
 turn_untrusted contains "weather-tools" if {
-	some earlier in input.history
+	some earlier in history_requests
+	earlier.action == "http.request"
 	earlier.caller == "weather-tools"
-	sending(earlier)
 }
 
 turn_label := {"private": turn_private, "untrusted": turn_untrusted}
 
-open_at(event) := {"path": event.arguments[2], "flags": event.arguments[4]} if {
+normalize(event) := {"caller": event.caller, "action": "fs.write", "path": event.arguments[2]} if {
+	open_at(event)
+	mutating_open(event)
+} else := {"caller": event.caller, "action": "fs.read", "path": event.arguments[2]} if open_at(event)
+else := {"caller": event.caller, "action": "http.request", "host": event.arguments[3], "url": sprintf("%s://%s%s", [lower(event.arguments[2]), event.arguments[3], event.arguments[4]])} if http_send(event)
+else := {"caller": event.caller, "action": "tool.call", "tool": sprintf("%s.%s", [event.callee, event.function])} if startswith(event.interface, "example:assistant/")
+else := {"caller": event.caller, "action": "plumbing"} if plumbing(event)
+else := {"caller": event.caller, "action": "other", "call": call_name(event)}
+
+open_at(event) if {
 	event.interface == "wasi:filesystem/types@0.3.0"
 	event.function == "[method]descriptor.open-at"
 }
 
-http_send(event) := {"host": event.arguments[3]} if {
+mutating_open(event) if "write" in flag_set(event.arguments[4])
+mutating_open(event) if "create" in flag_set(event.arguments[3])
+mutating_open(event) if "truncate" in flag_set(event.arguments[3])
+
+http_send(event) if {
 	event.interface == "wasi:http/client@0.3.0"
 	event.function == "send"
 }
 
-request_url(event) := sprintf("%s://%s%s", [lower(event.arguments[2]), event.arguments[3], event.arguments[4]]) if http_send(event)
+plumbing(event) if false
 
-reading(event) := call.path if {
-	call := open_at(event)
-	"read" in split(trim(call.flags, "{}"), ", ")
+flag_set(flags) := {flag | some flag in split(trim(flags, "{}"), ", "); flag != ""}
+
+call_name(event) := sprintf("%s.%s", [event.interface, event.function])
+
+reading(item) if item.action in {"fs.read", "fs.write"}
+writing(item) if item.action == "fs.write"
+starts_with_private(path) if path == trim_suffix(private_prefix, "/")
+starts_with_private(path) if startswith(path, private_prefix)
+starts_with_drafts(path) if startswith(path, drafts_prefix)
+
+effect(item) := sprintf("write %s", [item.path]) if writing(item)
+else := sprintf("read %s", [item.path]) if reading(item)
+else := sprintf("make a request to %s", [item.host]) if {
+	item.action == "http.request"
+	item.caller == "agent"
+} else := sprintf("make a request to %s", [item.url]) if item.action == "http.request"
+else := sprintf("call %s", [item.tool]) if {
+	item.action == "tool.call"
+	item.caller != "host"
 }
-
-writing(event) := call.path if {
-	call := open_at(event)
-	"write" in split(trim(call.flags, "{}"), ", ")
-}
-
-sending(event) := call.host if {
-	call := http_send(event)
-}
-
-effect(event) := sprintf("read and write %s", [path]) if {
-	path := reading(event)
-	writing(event)
-} else := sprintf("read %s", [path]) if {
-	path := reading(event)
-} else := sprintf("write %s", [path]) if {
-	path := writing(event)
-} else := sprintf("make a request to %s", [host]) if {
-	event.caller == "agent"
-	host := sending(event)
-} else := sprintf("make a request to %s", [request_url(event)]) if {
-	sending(event)
-} else := sprintf("call %s.%s", [event.callee, event.function]) if {
-	event.caller != "host"
-	startswith(event.interface, "example:assistant/")
-} else := ""
+else := sprintf("call %s", [item.call]) if item.action == "other"
+else := ""

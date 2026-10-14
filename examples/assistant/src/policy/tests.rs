@@ -82,13 +82,25 @@ fn real_call_shapes_reach_the_expected_rules() {
 }
 
 #[test]
-fn matches_filesystem_flags_exactly() {
+fn every_open_is_a_read_and_mutating_flags_make_it_a_write() {
     let policy = load_policy(&[]);
     assert_eq!(
         policy
-            .decide(&open_at("drafts/draft.md", &["requested-write-sync"]))
+            .decide(&open_at_from("weather-tools", "research.md", &[]))
             .unwrap(),
-        Verdict::Allow(String::new())
+        Verdict::Deny(Why {
+            effect: "read research.md".into(),
+            reasons: vec!["weather-tools may not read notes".into()],
+        })
+    );
+    assert_eq!(
+        policy
+            .decide(&open_at_with("draft.md", &["truncate"], &[]))
+            .unwrap(),
+        Verdict::Deny(Why {
+            effect: "write draft.md".into(),
+            reasons: vec!["draft.md is outside drafts/".into()],
+        })
     );
 }
 
@@ -254,6 +266,24 @@ fn dropped_turn_drops_its_private_label() {
 }
 
 #[test]
+fn opening_the_private_directory_marks_the_turn_private() {
+    let policy = load_policy(&[]);
+    policy.begin_turn().unwrap();
+    assert!(matches!(
+        policy.decide(&open_at("private", &[])),
+        Ok(Verdict::Allow(_))
+    ));
+    policy.end_turn(true).unwrap();
+
+    policy.begin_turn().unwrap();
+    assert!(matches!(
+        policy.decide(&http_send("agent", "model.example")),
+        Ok(Verdict::Ask(Why { reasons, .. }))
+            if reasons == ["conversation includes private".to_owned()]
+    ));
+}
+
+#[test]
 fn kept_turn_carries_its_private_label() {
     let policy = private_conversation();
 
@@ -388,6 +418,20 @@ async fn stub_next(call: Call) -> Result<Vec<Val>, wasm_junction::CallError> {
 }
 
 fn filesystem_call(caller: &str, path: &str, flags: &[&str]) -> Call {
+    filesystem_call_with(caller, path, &[], flags)
+}
+
+fn open_at_with(path: &str, open_flags: &[&str], descriptor_flags: &[&str]) -> Event {
+    let call = filesystem_call_with("notes-tools", path, open_flags, descriptor_flags);
+    Event::from_call(&call, std::path::Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap()
+}
+
+fn filesystem_call_with(
+    caller: &str,
+    path: &str,
+    open_flags: &[&str],
+    descriptor_flags: &[&str],
+) -> Call {
     Call::new(
         Caller::Component(caller.into()),
         "wasi:filesystem/types@0.3.0",
@@ -397,8 +441,13 @@ fn filesystem_call(caller: &str, path: &str, flags: &[&str]) -> Call {
             Val::String("descriptor".into()),
             Val::Flags(Vec::new()),
             Val::String(path.into()),
-            Val::Flags(Vec::new()),
-            Val::Flags(flags.iter().map(|flag| (*flag).to_owned()).collect()),
+            Val::Flags(open_flags.iter().map(|flag| (*flag).to_owned()).collect()),
+            Val::Flags(
+                descriptor_flags
+                    .iter()
+                    .map(|flag| (*flag).to_owned())
+                    .collect(),
+            ),
             Val::String("/notes".into()),
         ],
     )
