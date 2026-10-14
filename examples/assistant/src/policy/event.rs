@@ -37,7 +37,12 @@ impl Event {
                 call.function.as_ref(),
                 "[method]descriptor.set-size" | "[method]descriptor.set-times"
             ) {
-                string_arg(call.args.last(), "filesystem preopen")?;
+                let position = from_end(call, 1)?;
+                let guest_path = string_arg(call.args.get(position), "filesystem guest path")?;
+                let argument = arguments
+                    .get_mut(position)
+                    .ok_or_else(|| "filesystem guest path is missing".to_owned())?;
+                *argument = crate::path::resolve(base, guest_path, ".")?;
             }
         }
         Ok(Self {

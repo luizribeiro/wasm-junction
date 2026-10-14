@@ -299,8 +299,12 @@ fn treats_metadata_changes_as_writes() {
     for (function, arguments, effect) in [
         (
             "[method]descriptor.set-size",
-            vec!["descriptor".into(), Val::U64(1), "/notes".into()],
-            "resize an open file",
+            vec![
+                "descriptor".into(),
+                Val::U64(1),
+                "/notes/private/diary.md".into(),
+            ],
+            "write private/diary.md",
         ),
         (
             "[method]descriptor.set-times",
@@ -308,9 +312,9 @@ fn treats_metadata_changes_as_writes() {
                 "descriptor".into(),
                 timestamp(),
                 timestamp(),
-                "/notes".into(),
+                "/notes/private/diary.md".into(),
             ],
-            "change timestamps on an open file",
+            "write private/diary.md",
         ),
         (
             "[method]descriptor.set-times-at",
@@ -334,10 +338,35 @@ fn treats_metadata_changes_as_writes() {
             })
         );
     }
+    for (function, arguments) in [
+        (
+            "[method]descriptor.set-size",
+            vec![
+                "descriptor".into(),
+                Val::U64(1),
+                "/notes/drafts/timing.md".into(),
+            ],
+        ),
+        (
+            "[method]descriptor.set-times",
+            vec![
+                "descriptor".into(),
+                timestamp(),
+                timestamp(),
+                "/notes/drafts/timing.md".into(),
+            ],
+        ),
+    ] {
+        let event = filesystem_event("notes-tools", function, arguments);
+        assert_eq!(
+            policy.decide(&event).unwrap(),
+            Verdict::Allow("write drafts/timing.md".into())
+        );
+    }
 }
 
 #[test]
-fn refuses_handle_writes_without_preopen_context() {
+fn refuses_handle_writes_without_guest_path_context() {
     for (function, arguments) in [
         (
             "[method]descriptor.set-size",
