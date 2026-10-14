@@ -78,7 +78,7 @@ impl PolicyMiddleware {
                 next(call).await
             }
             Verdict::Deny(why) => self.refuse(&why, "denied"),
-            Verdict::Ask(why) => {
+            Verdict::Ask(why, consent_keys) => {
                 let Some(consent) = &self.consent else {
                     return self.refuse(&why, "denied");
                 };
@@ -94,10 +94,12 @@ impl PolicyMiddleware {
                     .await
                     .map_err(|_| CallError::trap("consent prompt closed"))?;
                 if !allowed {
-                    self.policy.reject(&event).map_err(CallError::trap)?;
+                    self.policy.reject(&consent_keys).map_err(CallError::trap)?;
                     return self.refuse(&why, "denied");
                 }
-                self.policy.approve(&event).map_err(CallError::trap)?;
+                self.policy
+                    .approve(&event, &consent_keys)
+                    .map_err(CallError::trap)?;
                 next(call).await
             }
         }

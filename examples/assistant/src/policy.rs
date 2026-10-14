@@ -22,7 +22,7 @@ pub(crate) struct Event {
 #[derive(Debug, PartialEq)]
 pub(crate) enum Verdict {
     Allow(String),
-    Ask(Why),
+    Ask(Why, BTreeSet<String>),
     Deny(Why),
 }
 
@@ -106,38 +106,22 @@ impl Policy {
             consent: BTreeSet::new(),
             remember: false,
         });
-        let why = Why {
-            effect: decision.effect,
-            reasons: decision.reasons,
-        };
-        match decision.verdict.as_str() {
-            "allow" => {
-                state.turn.push(event.clone());
-                Ok(Verdict::Allow(why.effect))
-            }
-            "ask" => Ok(Verdict::Ask(why)),
-            "deny" => Ok(Verdict::Deny(why)),
-            verdict => Ok(Verdict::Deny(Why {
-                effect: "evaluate policy".into(),
-                reasons: vec![format!("policy returned unknown verdict {verdict}")],
-            })),
-        }
+        Ok(apply(&mut state, event, decision))
     }
 
-    pub(crate) fn approve(&self, event: &Event) -> Result<(), String> {
+    pub(crate) fn approve(&self, event: &Event, consent: &BTreeSet<String>) -> Result<(), String> {
         let mut state = self.inner.lock().map_err(|error| error.to_string())?;
         let decision = evaluate(&mut state, event)?;
         if decision.remember {
-            state.approved.extend(decision.consent);
+            state.approved.extend(consent.iter().cloned());
         }
         state.turn.push(event.clone());
         Ok(())
     }
 
-    pub(crate) fn reject(&self, event: &Event) -> Result<(), String> {
+    pub(crate) fn reject(&self, consent: &BTreeSet<String>) -> Result<(), String> {
         let mut state = self.inner.lock().map_err(|error| error.to_string())?;
-        let decision = evaluate(&mut state, event)?;
-        state.refused.extend(decision.consent);
+        state.refused.extend(consent.iter().cloned());
         Ok(())
     }
 
@@ -157,6 +141,25 @@ impl Policy {
         state.turn.clear();
         state.refused.clear();
         Ok(())
+    }
+}
+
+fn apply(state: &mut State, event: &Event, decision: Decision) -> Verdict {
+    let why = Why {
+        effect: decision.effect,
+        reasons: decision.reasons,
+    };
+    match decision.verdict.as_str() {
+        "allow" => {
+            state.turn.push(event.clone());
+            Verdict::Allow(why.effect)
+        }
+        "ask" => Verdict::Ask(why, decision.consent),
+        "deny" => Verdict::Deny(why),
+        verdict => Verdict::Deny(Why {
+            effect: "evaluate policy".into(),
+            reasons: vec![format!("policy returned unknown verdict {verdict}")],
+        }),
     }
 }
 

@@ -31,7 +31,6 @@ fn builds_generic_events_with_fixed_structured_text() {
     let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let policy = Policy::load(&directory.join("policy.rego"), "model.example", &[]).unwrap();
     assert!(matches!(policy.decide(&event), Ok(Verdict::Allow(_))));
-    policy.approve(&event).unwrap();
 }
 
 #[test]
@@ -251,21 +250,22 @@ fn private_data_hosts_cover_any_allowed_request() {
 
     let policy = load_policy(&[]);
     assert!(matches!(policy.decide(&private), Ok(Verdict::Allow(_))));
+    let verdict = policy.decide(&model).unwrap();
     assert_eq!(
-        policy.decide(&model).unwrap(),
-        Verdict::Ask(Why {
-            effect: "make a request to model.example".into(),
-            reasons: vec![reason.into()],
-        })
+        verdict,
+        ask("agent", "make a request to model.example", &[reason])
     );
-    policy.approve(&model).unwrap();
+    let Verdict::Ask(_, consent) = verdict else {
+        unreachable!()
+    };
+    policy.approve(&model, &consent).unwrap();
     assert_eq!(
         policy.decide(&model).unwrap(),
         Verdict::Allow("make a request to model.example".into())
     );
     assert!(matches!(
         policy.decide(&http_send("web-tools", "example.com")),
-        Ok(Verdict::Ask(_))
+        Ok(Verdict::Ask(..))
     ));
 
     let cleared = load_policy(&["model.example"]);
@@ -282,7 +282,7 @@ fn private_data_hosts_cover_any_allowed_request() {
     ));
     assert!(matches!(
         cleared.decide(&http_send("web-tools", "example.com")),
-        Ok(Verdict::Ask(_))
+        Ok(Verdict::Ask(..))
     ));
 }
 
@@ -298,17 +298,22 @@ fn write_approvals_are_not_remembered() {
     ));
     fetched.end_turn(true).unwrap();
     fetched.begin_turn().unwrap();
+    let verdict = fetched.decide(&write).unwrap();
     assert_eq!(
-        fetched.decide(&write).unwrap(),
-        Verdict::Ask(Why {
-            effect: "write drafts/summary.md".into(),
-            reasons: vec!["conversation includes content from news.example".into()],
-        })
+        verdict,
+        ask(
+            "notes-tools",
+            "write drafts/summary.md",
+            &["conversation includes content from news.example"],
+        )
     );
-    fetched.approve(&write).unwrap();
+    let Verdict::Ask(_, consent) = verdict else {
+        unreachable!()
+    };
+    fetched.approve(&write, &consent).unwrap();
     fetched.end_turn(true).unwrap();
     fetched.begin_turn().unwrap();
-    assert!(matches!(fetched.decide(&write), Ok(Verdict::Ask(_))));
+    assert!(matches!(fetched.decide(&write), Ok(Verdict::Ask(..))));
 }
 
 #[test]
@@ -316,13 +321,15 @@ fn refusal_is_forgotten_after_the_turn() {
     let policy = private_conversation();
     policy.begin_turn().unwrap();
     let fetch = http_send("web-tools", "example.com");
-    assert!(matches!(policy.decide(&fetch), Ok(Verdict::Ask(_))));
-    policy.reject(&fetch).unwrap();
+    let Verdict::Ask(_, consent) = policy.decide(&fetch).unwrap() else {
+        unreachable!()
+    };
+    policy.reject(&consent).unwrap();
     assert!(matches!(policy.decide(&fetch), Ok(Verdict::Deny(_))));
 
     policy.end_turn(true).unwrap();
     policy.begin_turn().unwrap();
-    assert!(matches!(policy.decide(&fetch), Ok(Verdict::Ask(_))));
+    assert!(matches!(policy.decide(&fetch), Ok(Verdict::Ask(..))));
 }
 
 #[test]
@@ -335,7 +342,7 @@ fn dropped_turn_drops_its_private_label() {
     ));
     assert!(matches!(
         policy.decide(&http_send("agent", "model.example")),
-        Ok(Verdict::Ask(_))
+        Ok(Verdict::Ask(..))
     ));
     policy.end_turn(false).unwrap();
 
@@ -361,7 +368,7 @@ fn opening_the_private_directory_marks_the_turn_private() {
     policy.begin_turn().unwrap();
     assert!(matches!(
         policy.decide(&http_send("agent", "model.example")),
-        Ok(Verdict::Ask(Why { reasons, .. }))
+        Ok(Verdict::Ask(Why { reasons, .. }, _))
             if reasons == ["conversation includes private".to_owned()]
     ));
 }
@@ -375,10 +382,11 @@ fn kept_turn_carries_its_private_label() {
     let fetch = Event::from_call(&call, std::path::Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap();
     assert_eq!(
         policy.decide(&fetch).unwrap(),
-        Verdict::Ask(Why {
-            effect: "make a request to https://example.com/search?q=private".into(),
-            reasons: vec!["conversation includes private/diary.md".into()],
-        })
+        ask(
+            "web-tools",
+            "make a request to https://example.com/search?q=private",
+            &["conversation includes private/diary.md"],
+        )
     );
 }
 
@@ -396,10 +404,11 @@ fn weather_output_makes_a_later_write_ask() {
         policy
             .decide(&open_at("drafts/weather.md", &["write"]))
             .unwrap(),
-        Verdict::Ask(Why {
-            effect: "write drafts/weather.md".into(),
-            reasons: vec!["conversation includes content from weather-tools".into()],
-        })
+        ask(
+            "notes-tools",
+            "write drafts/weather.md",
+            &["conversation includes content from weather-tools"],
+        )
     );
 }
 
@@ -415,11 +424,11 @@ fn reading_a_draft_marks_both_kinds_of_sensitive_content() {
     policy.begin_turn().unwrap();
     assert!(matches!(
         policy.decide(&http_send("agent", "model.example")),
-        Ok(Verdict::Ask(_))
+        Ok(Verdict::Ask(..))
     ));
     assert!(matches!(
         policy.decide(&open_at("drafts/other.md", &["write"])),
-        Ok(Verdict::Ask(_))
+        Ok(Verdict::Ask(..))
     ));
 }
 
@@ -458,9 +467,11 @@ fn private_conversation() -> Policy {
     policy
         .decide(&open_at("private/diary.md", &["read"]))
         .unwrap();
-    policy
-        .approve(&http_send("agent", "model.example"))
-        .unwrap();
+    let model = http_send("agent", "model.example");
+    let Verdict::Ask(_, consent) = policy.decide(&model).unwrap() else {
+        unreachable!()
+    };
+    policy.approve(&model, &consent).unwrap();
     policy.end_turn(true).unwrap();
     policy
 }
@@ -497,6 +508,19 @@ fn read_directory(caller: &str) -> Event {
         function: "[method]descriptor.read-directory".into(),
         arguments: vec!["<resource>".into(), "/notes".into()],
     }
+}
+
+fn ask(caller: &str, effect: &str, reasons: &[&str]) -> Verdict {
+    Verdict::Ask(
+        Why {
+            effect: effect.into(),
+            reasons: reasons.iter().map(|reason| (*reason).into()).collect(),
+        },
+        reasons
+            .iter()
+            .map(|reason| format!("{caller}|{effect}|{reason}"))
+            .collect(),
+    )
 }
 
 fn open_at_from(caller: &str, path: &str, flags: &[&str]) -> Event {
