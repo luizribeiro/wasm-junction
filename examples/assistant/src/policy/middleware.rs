@@ -44,6 +44,8 @@ impl PolicyMiddleware {
 
     fn routine(&self, event: &Event) -> bool {
         event.caller == "agent" && event.arguments.get(3) == Some(&self.model_host)
+            || event.interface == "wasi:cli/environment@0.3.0"
+                && event.function == "get-environment"
             || event.caller == "notes-tools"
                 && event.function == "[method]descriptor.read-directory"
             || event.caller == "notes-tools"

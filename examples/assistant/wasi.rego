@@ -52,6 +52,7 @@ normalize(event) := {"caller": event.caller, "action": "fs.write", "path": event
 } else := {"caller": event.caller, "action": "fs.read", "path": event.arguments[2]} if open_at(event)
 else := {"caller": event.caller, "action": "fs.list", "path": event.arguments[1]} if read_directory(event)
 else := {"caller": event.caller, "action": "http.request", "host": event.arguments[3], "url": sprintf("%s://%s%s", [lower(event.arguments[2]), event.arguments[3], event.arguments[4]])} if http_send(event)
+else := {"caller": event.caller, "action": "env.read"} if get_environment(event)
 else := {"caller": event.caller, "action": "tool.call", "tool": sprintf("%s.%s", [event.callee, event.function])} if startswith(event.interface, "example:assistant/")
 else := {"caller": event.caller, "action": "plumbing"} if plumbing(event)
 else := {"caller": event.caller, "action": "other", "call": call_name(event)}
@@ -76,10 +77,11 @@ http_send(event) if {
 	event.function == "send"
 }
 
+get_environment(event) if call_name(event) == "wasi:cli/environment@0.3.0.get-environment"
+
 plumbing(event) if call_name(event) in plumbing_calls
 
 plumbing_calls := {
-	"wasi:cli/environment@0.3.0.get-environment",
 	"wasi:clocks/monotonic-clock@0.3.0.get-resolution",
 	"wasi:clocks/monotonic-clock@0.3.0.now",
 	"wasi:clocks/monotonic-clock@0.3.0.wait-for",
@@ -130,6 +132,7 @@ else := sprintf("make a request to %s", [item.host]) if {
 	item.action == "http.request"
 	item.caller == "agent"
 } else := sprintf("make a request to %s", [item.url]) if item.action == "http.request"
+else := "read its environment" if item.action == "env.read"
 else := sprintf("call %s", [item.tool]) if {
 	item.action == "tool.call"
 	item.caller != "host"
@@ -141,6 +144,7 @@ default_reason(item) := sprintf("%s may not read %s", [item.caller, item.path]) 
 else := sprintf("%s may not write %s", [item.caller, item.path]) if item.action == "fs.write"
 else := sprintf("%s may not list %s", [item.caller, item.path]) if item.action == "fs.list"
 else := sprintf("%s may not send to %s", [item.caller, item.host]) if item.action == "http.request"
+else := sprintf("%s may not read its environment", [item.caller]) if item.action == "env.read"
 else := sprintf("%s may not call %s", [item.caller, item.tool]) if item.action == "tool.call"
 else := sprintf("%s is not allowed by the policy", [item.call]) if item.action == "other"
 else := sprintf("%s may not perform %s", [item.caller, item.action])

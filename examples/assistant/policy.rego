@@ -19,6 +19,15 @@ tool_calls := {
 		"weather-tools.get-weather",
 	},
 }
+environment := {
+	"agent": {
+		"OPENAI_SCHEME",
+		"OPENAI_AUTHORITY",
+		"OPENAI_PATH_PREFIX",
+		"OPENAI_API_KEY",
+		"OPENAI_MODEL",
+	},
+}
 
 default private_data_hosts := set()
 private_data_hosts := data.private_data_hosts
@@ -45,6 +54,10 @@ allow if {
 }
 
 allow if request.tool in tool_calls[request.caller]
+allow if {
+	request.action == "env.read"
+	request.caller in object.keys(environment)
+}
 allow if request.action == "plumbing"
 
 deny contains sprintf("%s is secret", [request.path]) if {

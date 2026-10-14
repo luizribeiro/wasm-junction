@@ -141,6 +141,22 @@ fn allows_only_declared_tool_calls() {
 }
 
 #[test]
+fn allows_only_declared_components_to_read_their_environment() {
+    let policy = load_policy(&[]);
+    assert!(matches!(
+        policy.decide(&environment_call("agent")),
+        Ok(Verdict::Allow(_))
+    ));
+    assert_eq!(
+        policy.decide(&environment_call("weather-tools")).unwrap(),
+        Verdict::Deny(Why {
+            effect: "read its environment".into(),
+            reasons: vec!["weather-tools may not read its environment".into()],
+        })
+    );
+}
+
+#[test]
 fn allows_only_notes_tools_to_list_the_notes_directory() {
     let policy = load_policy(&[]);
     assert_eq!(
@@ -217,6 +233,51 @@ async fn traces_a_denied_unknown_call_by_name() {
     assert_eq!(
         output.text(),
         "  ✗ call example:unknown/interface@1.0.0.surprise denied — example:unknown/interface@1.0.0.surprise is not allowed by the policy\n"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn traces_environment_reads_only_when_denied_or_verbose() {
+    let output = SharedOutput::default();
+    let console = Console::new(Cursor::new(Vec::<u8>::new()), output.clone());
+    let middleware =
+        PolicyMiddleware::new(load_policy(&[]), console, "model.example".into(), false);
+    assert!(
+        middleware
+            .enforce(environment_call_for("agent"), stub_next)
+            .await
+            .is_ok()
+    );
+    assert_eq!(output.text(), "");
+    assert_eq!(
+        middleware
+            .enforce(environment_call_for("weather-tools"), stub_next)
+            .await
+            .unwrap_err()
+            .kind(),
+        CallErrorKind::Refused
+    );
+    assert_eq!(
+        output.text(),
+        "  ✗ read its environment denied — weather-tools may not read its environment\n"
+    );
+
+    let verbose_output = SharedOutput::default();
+    let verbose = PolicyMiddleware::new(
+        load_policy(&[]),
+        Console::new(Cursor::new(Vec::<u8>::new()), verbose_output.clone()),
+        "model.example".into(),
+        true,
+    );
+    assert!(
+        verbose
+            .enforce(environment_call_for("agent"), stub_next)
+            .await
+            .is_ok()
+    );
+    assert_eq!(
+        verbose_output.text(),
+        "  · read its environment   allowed\n"
     );
 }
 
@@ -594,6 +655,21 @@ fn tool_call(source: &str, target: &str, function: &str) -> Event {
         function: function.into(),
         arguments: Vec::new(),
     }
+}
+
+fn environment_call(caller: &str) -> Event {
+    let call = environment_call_for(caller);
+    Event::from_call(&call, std::path::Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap()
+}
+
+fn environment_call_for(caller: &str) -> Call {
+    Call::new(
+        Caller::Component(caller.into()),
+        "wasi:cli/environment@0.3.0",
+        "wasi:cli/environment@0.3.0",
+        "get-environment",
+        Vec::new(),
+    )
 }
 
 fn read_directory(caller: &str) -> Event {
