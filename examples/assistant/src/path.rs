@@ -1,3 +1,8 @@
+use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
 pub(crate) fn resolve(base: &Path, root: &str, requested: &str) -> Result<String, String> {
@@ -35,18 +40,44 @@ fn lexical(path: &str) -> Result<PathBuf, String> {
 fn resolve_existing_ancestor(path: &Path) -> Result<PathBuf, String> {
     let mut ancestor = path;
     let mut missing = Vec::new();
-    while !ancestor.exists() {
-        let name = ancestor
-            .file_name()
-            .ok_or_else(|| format!("cannot resolve {}", path.display()))?;
-        missing.push(name.to_owned());
-        ancestor = ancestor
-            .parent()
-            .ok_or_else(|| format!("cannot resolve {}", path.display()))?;
+    loop {
+        match fs::symlink_metadata(ancestor) {
+            Ok(_) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let name = ancestor
+                    .file_name()
+                    .ok_or_else(|| format!("cannot resolve {}", path.display()))?;
+                missing.push(name.to_owned());
+                ancestor = ancestor
+                    .parent()
+                    .ok_or_else(|| format!("cannot resolve {}", path.display()))?;
+            }
+            Err(error) => return Err(format!("cannot resolve {}: {error}", path.display())),
+        }
     }
     let mut resolved = ancestor
         .canonicalize()
         .map_err(|error| format!("cannot resolve {}: {error}", path.display()))?;
+    let metadata = resolved
+        .metadata()
+        .map_err(|error| format!("cannot inspect {}: {error}", resolved.display()))?;
+    if metadata.is_file() {
+        #[cfg(unix)]
+        let links = metadata.nlink();
+        #[cfg(windows)]
+        let links = metadata
+            .number_of_links()
+            .map(u64::from)
+            .ok_or_else(|| "cannot inspect the file's hard links".to_owned())?;
+        #[cfg(not(any(unix, windows)))]
+        return Err("cannot inspect the file's hard links on this platform".into());
+        if links > 1 {
+            return Err(format!(
+                "{} has more than one hard link",
+                resolved.display()
+            ));
+        }
+    }
     for part in missing.into_iter().rev() {
         resolved.push(part);
     }
@@ -95,6 +126,23 @@ mod tests {
             "private/diary.md"
         );
         assert!(resolve(&base, "/notes", "outside-link").is_err());
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_hard_links_and_unresolvable_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let base = fixture();
+        fs::hard_link(
+            base.join("notes/private/diary.md"),
+            base.join("notes/diary-copy.md"),
+        )
+        .unwrap();
+        symlink("missing.md", base.join("notes/broken-link.md")).unwrap();
+        assert!(resolve(&base, "/notes", "diary-copy.md").is_err());
+        assert!(resolve(&base, "/notes", "broken-link.md").is_err());
         fs::remove_dir_all(base).unwrap();
     }
 }
