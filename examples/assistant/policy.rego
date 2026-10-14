@@ -53,6 +53,11 @@ deny contains sprintf("%s may not call %s", [request.caller, request.tool]) if {
 	not request.tool in tool_calls[request.caller]
 }
 
+deny contains sprintf("%s may not list %s", [request.caller, request.path]) if {
+	request.action == "fs.list"
+	request.caller != "notes-tools"
+}
+
 deny contains sprintf("%s is not allowed by the policy", [request.call]) if {
 	request.action == "other"
 }

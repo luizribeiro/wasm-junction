@@ -45,6 +45,8 @@ impl PolicyMiddleware {
     fn routine(&self, event: &Event) -> bool {
         event.caller == "agent" && event.arguments.get(3) == Some(&self.model_host)
             || event.caller == "notes-tools"
+                && event.function == "[method]descriptor.read-directory"
+            || event.caller == "notes-tools"
                 && event
                     .arguments
                     .get(2)

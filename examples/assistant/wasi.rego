@@ -27,6 +27,7 @@ normalize(event) := {"caller": event.caller, "action": "fs.write", "path": event
 	open_at(event)
 	mutating_open(event)
 } else := {"caller": event.caller, "action": "fs.read", "path": event.arguments[2]} if open_at(event)
+else := {"caller": event.caller, "action": "fs.list", "path": event.arguments[1]} if read_directory(event)
 else := {"caller": event.caller, "action": "http.request", "host": event.arguments[3], "url": sprintf("%s://%s%s", [lower(event.arguments[2]), event.arguments[3], event.arguments[4]])} if http_send(event)
 else := {"caller": event.caller, "action": "tool.call", "tool": sprintf("%s.%s", [event.callee, event.function])} if startswith(event.interface, "example:assistant/")
 else := {"caller": event.caller, "action": "plumbing"} if plumbing(event)
@@ -35,6 +36,11 @@ else := {"caller": event.caller, "action": "other", "call": call_name(event)}
 open_at(event) if {
 	event.interface == "wasi:filesystem/types@0.3.0"
 	event.function == "[method]descriptor.open-at"
+}
+
+read_directory(event) if {
+	event.interface == "wasi:filesystem/types@0.3.0"
+	event.function == "[method]descriptor.read-directory"
 }
 
 mutating_open(event) if "write" in flag_set(event.arguments[4])
@@ -93,6 +99,7 @@ writing(item) if item.action == "fs.write"
 
 effect(item) := sprintf("write %s", [item.path]) if writing(item)
 else := sprintf("read %s", [item.path]) if reading(item)
+else := sprintf("list %s", [item.path]) if item.action == "fs.list"
 else := sprintf("make a request to %s", [item.host]) if {
 	item.action == "http.request"
 	item.caller == "agent"

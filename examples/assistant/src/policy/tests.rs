@@ -120,6 +120,22 @@ fn allows_only_declared_tool_calls() {
 }
 
 #[test]
+fn allows_only_notes_tools_to_list_the_notes_directory() {
+    let policy = load_policy(&[]);
+    assert_eq!(
+        policy.decide(&read_directory("notes-tools")).unwrap(),
+        Verdict::Allow("list /notes".into())
+    );
+    assert_eq!(
+        policy.decide(&read_directory("weather-tools")).unwrap(),
+        Verdict::Deny(Why {
+            effect: "list /notes".into(),
+            reasons: vec!["weather-tools may not list /notes".into()],
+        })
+    );
+}
+
+#[test]
 fn denies_unlisted_calls_by_name() {
     let policy = load_policy(&[]);
     for (interface, function) in [
@@ -421,6 +437,16 @@ fn tool_call(source: &str, target: &str, function: &str) -> Event {
         interface: format!("example:assistant/{target}@0.1.0"),
         function: function.into(),
         arguments: Vec::new(),
+    }
+}
+
+fn read_directory(caller: &str) -> Event {
+    Event {
+        caller: caller.into(),
+        callee: "wasi:filesystem/types@0.3.0".into(),
+        interface: "wasi:filesystem/types@0.3.0".into(),
+        function: "[method]descriptor.read-directory".into(),
+        arguments: vec!["<resource>".into(), "/notes".into()],
     }
 }
 
