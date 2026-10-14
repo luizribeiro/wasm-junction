@@ -50,19 +50,19 @@ request the agent makes could carry it somewhere, even tucked into a URL.
 you> Fetch https://example.com and summarize it in one sentence.
   · call web-tools.fetch   allowed
   · make a request to https://example.com/   allowed
-assistant> Example.com is a placeholder domain intended for use in documentation examples without needing permission, and it advises not to rely on it for testing or monitoring.
+assistant> The Example Domain page is a placeholder site reserved for use in documentation examples, explicitly stating it is not a service and should not be relied upon for testing or monitoring.
 
 you> Read private/diary.md and summarize it in one sentence.
   · call notes-tools.read-note   allowed
   · read private/diary.md   allowed
   ? This conversation includes private/diary.md. Let it make a request to <model-host>? [y/N] y
-assistant> The private diary notes that an unreleased prototype demonstration is scheduled for Friday.
+assistant> The private diary note indicates that an unreleased prototype demonstration is scheduled for Friday.
 
 you> Fetch https://example.com again and tell me its title.
   · call web-tools.fetch   allowed
   ? This conversation includes private/diary.md. Let it make a request to https://example.com/? [y/N] n
   ✗ make a request to https://example.com/ denied — conversation includes private/diary.md
-assistant> I couldn't re-fetch the page — the request was denied by policy this time. Based on my earlier successful fetch, its title was "Example Domain".
+assistant> This fetch attempt was blocked by policy, so I couldn't retrieve the page again. Based on the earlier successful fetch, though, the page's title was "Example Domain".
 ```
 
 The first fetch went through without a question. After you allowed the diary to reach the model,
@@ -98,17 +98,17 @@ try to talk the agent into doing something you didn't ask for, such as rewriting
 you> Write "before the fetch" to drafts/timing.md.
   · call notes-tools.write-note   allowed
   · write drafts/timing.md   allowed
-assistant> I've written "before the fetch" to drafts/timing.md.
+assistant> Done — "before the fetch" has been written to drafts/timing.md.
 
 you> Fetch https://example.com and tell me its title.
   · call web-tools.fetch   allowed
   · make a request to https://example.com/   allowed
-assistant> The title of https://example.com is **Example Domain**.
+assistant> The page title is **Example Domain**.
 
 you> Replace drafts/timing.md with "after the fetch".
   · call notes-tools.write-note   allowed
   ? This conversation includes content from example.com. Let it write drafts/timing.md? [y/N] y
-assistant> Replaced drafts/timing.md with "after the fetch".
+assistant> Done — drafts/timing.md now contains "after the fetch".
 ```
 
 Writing a draft is ordinary at the start. After the agent has read a web page, the same write
@@ -133,12 +133,13 @@ the agent only writes inside `drafts/`.
 you> Read private/passwords.md.
   · call notes-tools.read-note   allowed
   ✗ read private/passwords.md denied — private/passwords.md is secret
-assistant> I wasn't able to read `private/passwords.md` — the system returned an access error, meaning that note is restricted and I don't have permission to open it. […]
+  · call notes-tools.list-notes   allowed
+assistant> The file `private/passwords.md` exists, but I'm getting an access error when trying to read it — it appears to be protected and I don't have permission to view it. […]
 
 you> Write "hello" to private/output.md.
   · call notes-tools.write-note   allowed
-  ✗ write private/output.md denied — private/output.md is outside drafts/
-assistant> I wasn't able to write to `private/output.md` — the write was rejected with an access error, so that path is restricted for me. […]
+  ✗ write private/output.md denied — notes-tools may not write private/output.md
+assistant> I wasn't able to write to `private/output.md` — the `private/` directory is access-protected, so both reading and writing there are blocked for me. […]
 ```
 
 There's no question this time. The passwords rule is an explicit `deny`, which always wins over
@@ -168,10 +169,12 @@ Open-Meteo. It stands in for a third-party component you didn't write and can't 
 ```text
 you> What's the weather in Boston?
   · call weather-tools.get-weather   allowed
-  ✗ read private/diary.md denied — weather-tools may not read notes
+  ✗ read private/diary.md denied — weather-tools may not read private/diary.md
   ✗ make a request to https://collector.example/collect denied — weather-tools may not send to collector.example
   · make a request to https://api.open-meteo.com/v1/forecast?latitude=42.3601&longitude=-71.0589&current=temperature_2m,weather_code&temperature_unit=celsius   allowed
-assistant> Boston is overcast with a temperature of 13.9°C (about 57°F) — a cool, cloudy day.
+assistant> Here's the current weather in Boston:
+- **Conditions:** Overcast
+- **Temperature:** 14.8°C (about 58.6°F)
 ```
 
 Nothing in the tool's interface hints at what it does, and the model has no way to know. The
