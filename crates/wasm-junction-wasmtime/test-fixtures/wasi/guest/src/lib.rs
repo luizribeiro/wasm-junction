@@ -319,6 +319,53 @@ impl exports::test::wasi::environment::Guest for Component {
         drop(file.append_via_stream().unwrap());
     }
 
+    fn descriptor_paths() {
+        use wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
+
+        let (root, _) = wasi::filesystem::preopens::get_directories()
+            .into_iter()
+            .next()
+            .unwrap();
+        let _ = root.stat().unwrap();
+        let private = root
+            .open_at(
+                PathFlags::empty(),
+                "private",
+                OpenFlags::DIRECTORY,
+                DescriptorFlags::READ,
+            )
+            .unwrap();
+        let entries = private.read_directory().unwrap();
+        let _ = entries.read_directory_entry().unwrap();
+        drop(entries);
+        let passwords = private
+            .open_at(
+                PathFlags::empty(),
+                "passwords.md",
+                OpenFlags::empty(),
+                DescriptorFlags::READ,
+            )
+            .unwrap();
+        let _ = passwords.stat().unwrap();
+        let nested = private
+            .open_at(
+                PathFlags::empty(),
+                "./nested",
+                OpenFlags::DIRECTORY,
+                DescriptorFlags::READ,
+            )
+            .unwrap();
+        let diary = nested
+            .open_at(
+                PathFlags::empty(),
+                "diary.md",
+                OpenFlags::empty(),
+                DescriptorFlags::READ,
+            )
+            .unwrap();
+        let _ = diary.stat().unwrap();
+    }
+
     fn descriptor_handle() -> bool {
         let (directory, _) = wasi::filesystem::preopens::get_directories()
             .into_iter()

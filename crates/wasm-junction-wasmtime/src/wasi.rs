@@ -34,8 +34,8 @@ pub(crate) struct WasiState {
     #[cfg(feature = "wasi-http")]
     pub(crate) http_hooks: HttpHooks,
     channels: HashSet<u32>,
-    descriptor_preopens: HashMap<u32, String>,
-    directory_stream_preopens: HashMap<u32, String>,
+    descriptor_guest_paths: HashMap<u32, String>,
+    directory_stream_guest_paths: HashMap<u32, String>,
     handle_contexts: HashMap<u32, Val>,
     socket_local_addresses: HashMap<u32, Val>,
 }
@@ -50,8 +50,8 @@ impl WasiState {
             #[cfg(feature = "wasi-http")]
             http_hooks: HttpHooks,
             channels: HashSet::new(),
-            descriptor_preopens: HashMap::new(),
-            directory_stream_preopens: HashMap::new(),
+            descriptor_guest_paths: HashMap::new(),
+            directory_stream_guest_paths: HashMap::new(),
             handle_contexts: HashMap::new(),
             socket_local_addresses: HashMap::new(),
         }
@@ -65,28 +65,30 @@ impl WasiState {
         self.channels.remove(&id)
     }
 
-    pub(crate) fn set_descriptor_preopen(&mut self, id: u32, guest_path: String) {
-        self.descriptor_preopens.insert(id, guest_path);
+    pub(crate) fn set_descriptor_guest_path(&mut self, id: u32, guest_path: String) {
+        self.descriptor_guest_paths.insert(id, guest_path);
     }
 
-    pub(crate) fn descriptor_preopen(&self, id: u32) -> Option<&str> {
-        self.descriptor_preopens.get(&id).map(String::as_str)
+    pub(crate) fn descriptor_guest_path(&self, id: u32) -> Option<&str> {
+        self.descriptor_guest_paths.get(&id).map(String::as_str)
     }
 
-    pub(crate) fn remove_descriptor_preopen(&mut self, id: u32) {
-        self.descriptor_preopens.remove(&id);
+    pub(crate) fn remove_descriptor_guest_path(&mut self, id: u32) {
+        self.descriptor_guest_paths.remove(&id);
     }
 
-    pub(crate) fn set_directory_stream_preopen(&mut self, id: u32, guest_path: String) {
-        self.directory_stream_preopens.insert(id, guest_path);
+    pub(crate) fn set_directory_stream_guest_path(&mut self, id: u32, guest_path: String) {
+        self.directory_stream_guest_paths.insert(id, guest_path);
     }
 
-    pub(crate) fn directory_stream_preopen(&self, id: u32) -> Option<&str> {
-        self.directory_stream_preopens.get(&id).map(String::as_str)
+    pub(crate) fn directory_stream_guest_path(&self, id: u32) -> Option<&str> {
+        self.directory_stream_guest_paths
+            .get(&id)
+            .map(String::as_str)
     }
 
-    pub(crate) fn remove_directory_stream_preopen(&mut self, id: u32) {
-        self.directory_stream_preopens.remove(&id);
+    pub(crate) fn remove_directory_stream_guest_path(&mut self, id: u32) {
+        self.directory_stream_guest_paths.remove(&id);
     }
 
     pub(crate) fn set_handle_context(&mut self, id: u32, context: Val) {

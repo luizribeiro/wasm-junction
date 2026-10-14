@@ -61,6 +61,8 @@ impl Middleware for ObserveFilesystem {
                 "[method]descriptor.open-at"
                     | "[method]descriptor.stat"
                     | "[method]descriptor.link-at"
+                    | "[method]descriptor.read-directory"
+                    | "[method]directory-entry-stream.read-directory-entry"
             )
         {
             self.seen
@@ -182,7 +184,7 @@ fn middleware_refusal_becomes_permission_denied() {
 }
 
 #[test]
-fn descriptor_calls_carry_preopen_roots_in_descriptor_order() {
+fn descriptor_calls_carry_guest_paths_in_descriptor_order() {
     let directory = TestDirectory::new("filesystem-context");
     let peer = TestDirectory::new("filesystem-context-peer");
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -210,10 +212,14 @@ fn descriptor_calls_carry_preopen_roots_in_descriptor_order() {
         .unwrap();
 
     let seen = seen.lock().unwrap();
-    for function in ["[method]descriptor.open-at", "[method]descriptor.stat"] {
-        let (_, args) = seen.iter().find(|(name, _)| name == function).unwrap();
-        assert_eq!(args.last(), Some(&Val::from("/data")));
-    }
+    let (_, args) = seen
+        .iter()
+        .find(|(name, _)| name == "[method]descriptor.open-at")
+        .unwrap();
+    assert_eq!(args.last(), Some(&Val::from("/data")));
+    assert!(seen.iter().any(|(name, args)| {
+        name == "[method]descriptor.stat" && args.last() == Some(&Val::from("/data"))
+    }));
     let (_, args) = seen
         .iter()
         .find(|(name, _)| name == "[method]descriptor.link-at")
@@ -222,6 +228,61 @@ fn descriptor_calls_carry_preopen_roots_in_descriptor_order() {
         args[args.len() - 2..],
         [Val::from("/data"), Val::from("/peer")]
     );
+}
+
+#[test]
+fn derived_descriptors_carry_their_lexical_guest_paths() {
+    let directory = TestDirectory::new("filesystem-derived-paths");
+    std::fs::create_dir_all(directory.0.join("private/nested")).unwrap();
+    std::fs::write(directory.0.join("private/passwords.md"), "secret").unwrap();
+    std::fs::write(directory.0.join("private/nested/diary.md"), "private").unwrap();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (app, runtime) = observed_app(false, seen.clone());
+    app.configure(
+        "files",
+        WasiSettings::new().preopen(&directory.0, "/data", Access::ReadOnly),
+    )
+    .unwrap();
+
+    runtime
+        .block_on(app.call("files", EXPORT, "descriptor-paths", Vec::new()))
+        .unwrap();
+
+    let seen = seen.lock().unwrap();
+    let open_context = |path: &str| {
+        seen.iter()
+            .find(|(function, args)| {
+                function == "[method]descriptor.open-at" && args.get(2) == Some(&Val::from(path))
+            })
+            .and_then(|(_, args)| args.last())
+    };
+    assert_eq!(open_context("private"), Some(&Val::from("/data")));
+    assert_eq!(
+        open_context("passwords.md"),
+        Some(&Val::from("/data/private"))
+    );
+    assert_eq!(open_context("./nested"), Some(&Val::from("/data/private")));
+    assert_eq!(
+        open_context("diary.md"),
+        Some(&Val::from("/data/private/nested"))
+    );
+    for function in [
+        "[method]descriptor.read-directory",
+        "[method]directory-entry-stream.read-directory-entry",
+    ] {
+        assert!(seen.iter().any(|(name, args)| {
+            name == function && args.last() == Some(&Val::from("/data/private"))
+        }));
+    }
+    for path in [
+        "/data",
+        "/data/private/passwords.md",
+        "/data/private/nested/diary.md",
+    ] {
+        assert!(seen.iter().any(|(function, args)| {
+            function == "[method]descriptor.stat" && args.last() == Some(&Val::from(path))
+        }));
+    }
 }
 
 type ChannelEvents = Arc<Mutex<Vec<(bool, InvocationId, u64, ChannelDirection)>>>;

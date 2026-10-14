@@ -268,10 +268,11 @@ async fn open_at(
     open_flags: OpenFlags,
     descriptor_flags: DescriptorFlags,
 ) -> FsResult<Resource<types::Descriptor>> {
-    let preopen = store
-        .descriptor_preopen(descriptor.rep())
+    let parent_path = store
+        .descriptor_guest_path(descriptor.rep())
         .ok_or(ErrorCode::Access)?
         .to_owned();
+    let guest_path = gate::join_guest_path(&parent_path, &path).ok_or(ErrorCode::Access)?;
     let opened = HostDescriptor::open_at(
         &mut views::filesystem(store),
         descriptor,
@@ -281,7 +282,7 @@ async fn open_at(
         descriptor_flags,
     )
     .await?;
-    store.set_descriptor_preopen(opened.rep(), preopen);
+    store.set_descriptor_guest_path(opened.rep(), guest_path);
     Ok(opened)
 }
 
@@ -289,12 +290,12 @@ async fn read_directory(
     store: &mut StoreData,
     descriptor: Resource<types::Descriptor>,
 ) -> FsResult<Resource<types::DirectoryEntryStream>> {
-    let preopen = store
-        .descriptor_preopen(descriptor.rep())
+    let guest_path = store
+        .descriptor_guest_path(descriptor.rep())
         .ok_or(ErrorCode::Access)?
         .to_owned();
     let stream = HostDescriptor::read_directory(&mut views::filesystem(store), descriptor).await?;
-    store.set_directory_stream_preopen(stream.rep(), preopen);
+    store.set_directory_stream_guest_path(stream.rep(), guest_path);
     Ok(stream)
 }
 
@@ -391,10 +392,10 @@ macro_rules! filesystem_drop {
                         id,
                         invocation,
                     );
-                    let preopen = store
+                    let guest_path = store
                         .data()
                         .$get(id)
-                        .ok_or_else(|| wasmtime::Error::msg("filesystem handle has no preopen"))?
+                        .ok_or_else(|| wasmtime::Error::msg("filesystem handle has no guest path"))?
                         .to_owned();
                     store.data().imports.emit(EngineEvent::ResourceDrop {
                         invocation,
@@ -410,7 +411,7 @@ macro_rules! filesystem_drop {
                             validate_owned::<$ty>(&resource, store.data_mut())?;
                             if store.data().$get(resource.id()) != Some(context.as_str()) {
                                 return Err(CallError::refused(
-                                    "filesystem handle preopen context does not match",
+                                    "filesystem handle guest path context does not match",
                                 ));
                             }
                             $method(
@@ -425,7 +426,7 @@ macro_rules! filesystem_drop {
                         &mut store,
                         INTERFACE,
                         $drop_name,
-                        vec![Val::Resource(resource), Val::String(preopen)],
+                        vec![Val::Resource(resource), Val::String(guest_path)],
                         real,
                     )
                     .await;
@@ -444,8 +445,8 @@ fn add_drops(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         DESCRIPTOR,
         "[drop]descriptor",
         types::Descriptor,
-        descriptor_preopen,
-        remove_descriptor_preopen,
+        descriptor_guest_path,
+        remove_descriptor_guest_path,
         HostDescriptor::drop
     );
     filesystem_drop!(
@@ -453,8 +454,8 @@ fn add_drops(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         DIRECTORY_ENTRY_STREAM,
         "[drop]directory-entry-stream",
         types::DirectoryEntryStream,
-        directory_stream_preopen,
-        remove_directory_stream_preopen,
+        directory_stream_guest_path,
+        remove_directory_stream_guest_path,
         HostDirectoryEntryStream::drop
     );
     Ok(())
@@ -522,7 +523,7 @@ fn add_preopens(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         for (descriptor, guest_path) in &directories {
                             store
                                 .data_mut()
-                                .set_descriptor_preopen(descriptor.rep(), guest_path.clone());
+                                .set_descriptor_guest_path(descriptor.rep(), guest_path.clone());
                         }
                         let invocation = store
                             .data()

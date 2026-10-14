@@ -27,6 +27,7 @@ interface environment {
   stat-preopen: func() -> result<_, string>;
   link-preopens: func();
   filesystem-channels: func();
+  descriptor-paths: func();
   descriptor-handle: func() -> bool;
   directory-stream-handle: func() -> bool;
   filesystem-differential: func() -> string;
