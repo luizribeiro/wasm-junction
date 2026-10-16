@@ -5,7 +5,7 @@
 use std::{
     env::{var_os, vars_os},
     fs, io,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Command,
 };
 const TARGET: &str = "wasm32-unknown-unknown";
@@ -33,7 +33,7 @@ fn build_target(
     componentize: bool,
 ) -> io::Result<()> {
     let output = PathBuf::from(var_os("OUT_DIR").ok_or(io::ErrorKind::NotFound)?);
-    let target_dir = output.join("guest-target");
+    let target_dir = guest_target_dir(&output, Path::new(manifest));
     let mut cargo = Command::new(var_os("CARGO").unwrap_or_else(|| "cargo".into()));
     cargo.args(["build", "--release", "--locked", "--target", target]);
     cargo
@@ -65,4 +65,65 @@ fn build_target(
         .success()
         .then_some(())
         .ok_or(io::ErrorKind::Other.into())
+}
+
+/// Every feature combination and check/build of a host gets its own `OUT_DIR`, but the guest
+/// build doesn't depend on any of them, so guests share one directory per manifest under the
+/// host's target directory, which Cargo marks with `CACHEDIR.TAG`.
+fn guest_target_dir(out_dir: &Path, manifest: &Path) -> PathBuf {
+    let Some(target) = out_dir
+        .ancestors()
+        .find(|dir| dir.join("CACHEDIR.TAG").is_file())
+    else {
+        return out_dir.join("guest-target");
+    };
+    let manifest = fs::canonicalize(manifest).unwrap_or_else(|_| manifest.to_path_buf());
+    let name: String = manifest
+        .to_string_lossy()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    target.join("guests").join(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn guests_share_a_directory_under_the_target_dir() {
+        let target = std::env::temp_dir().join(format!("guest-build-{}", std::process::id()));
+        let out_p3 = target.join("debug/build/host-1111/out");
+        let out_http = target.join("debug/build/host-2222/out");
+        fs::create_dir_all(&out_p3).unwrap();
+        fs::create_dir_all(&out_http).unwrap();
+        fs::write(target.join("CACHEDIR.TAG"), "").unwrap();
+        let manifest = Path::new("tests/fixtures/guest/Cargo.toml");
+
+        let shared = guest_target_dir(&out_p3, manifest);
+
+        assert_eq!(shared, guest_target_dir(&out_http, manifest));
+        assert!(shared.starts_with(target.join("guests")));
+        assert_ne!(
+            shared,
+            guest_target_dir(&out_p3, Path::new("other/Cargo.toml"))
+        );
+        fs::remove_dir_all(&target).unwrap();
+    }
+
+    #[test]
+    fn without_a_target_dir_the_guest_builds_in_out_dir() {
+        let out = Path::new("/nonexistent/build/host/out");
+
+        assert_eq!(
+            guest_target_dir(out, Path::new("guest/Cargo.toml")),
+            out.join("guest-target")
+        );
+    }
 }
