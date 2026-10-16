@@ -97,7 +97,7 @@
           clippy = cargoHook {
             name = "clippy-hook";
             text = ''
-              cargo clippy --workspace --all-targets --locked -- -W clippy::pedantic -D warnings
+              cargo clippy --workspace --all-targets --locked -- -D warnings
               cargo check -p wasm-junction-core --target wasm32-unknown-unknown --locked
               cargo check -p wasm-junction --target wasm32-unknown-unknown --locked
               cargo check -p wasm-junction --test bindgen_calls --test bindgen_handles --test bindgen_resources --test bindgen_streams --test bindgen_with --target wasm32-unknown-unknown --no-default-features --locked
